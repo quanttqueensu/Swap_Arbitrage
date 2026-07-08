@@ -1,0 +1,12 @@
+.venv/
+venv/
+nenv/
+__pycache__/
+*.py[cod]
+
+.idea/
+
+data/*.csv
+data/cache/
+agents/*/logs/
+agents/*/state/*.json
