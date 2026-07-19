@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from backtest import BacktestConfig, add_backtest_pnl, first_active_range
 from data_io import clean_existing_derived_csvs, without_dv01_columns
 from raw_price_data import (
     build_cme_swap_data,
@@ -203,6 +204,45 @@ class RiskMasterTests(unittest.TestCase):
         self.assertEqual(output.loc[0, "swap_futures_contracts_rounded_2y"], 150)
         self.assertFalse(any("dv01" in column.lower() for column in output))
         self.assertEqual(output.loc[0, "risk_allowed"], 1)
+
+
+class BacktestMasterTests(unittest.TestCase):
+    def test_active_range_uses_rounded_swap_contracts(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": pd.to_datetime(
+                    ["2024-01-02", "2024-01-03", "2024-01-04"]
+                ),
+                "swap_futures_contracts_rounded_2y": [0, 2, 0],
+                "swap_futures_contracts_rounded_5y": [0, 0, -1],
+            }
+        )
+
+        self.assertEqual(
+            first_active_range(source),
+            (pd.Timestamp("2024-01-03"), pd.Timestamp("2024-01-04")),
+        )
+
+    def test_pnl_uses_contract_quantities_and_returns_no_dv01_columns(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": pd.to_datetime(
+                    ["2024-01-02", "2024-01-03", "2024-01-04"]
+                ),
+                "dgs2": [1.00, 1.01, 1.00],
+                "eris_swap_2y_return": [0.0, 0.01, -0.02],
+                "swap_futures_contracts_rounded_2y": [1, 1, 0],
+                "treasury_futures_contracts_rounded_2y": [-1, -1, 0],
+                "swap_dv01_per_contract_2y": [19.0, 19.0, 19.0],
+                "treasury_future_symbol_2y": ["ZT", "ZT", "ZT"],
+            }
+        )
+
+        output = add_backtest_pnl(source, BacktestConfig())
+
+        self.assertAlmostEqual(output.loc[1, "gross_daily_pnl"], 1038.0)
+        self.assertAlmostEqual(output.loc[2, "gross_daily_pnl"], -2038.0)
+        self.assertFalse(any("dv01" in column.lower() for column in output))
 
 
 if __name__ == "__main__":

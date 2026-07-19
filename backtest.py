@@ -11,10 +11,18 @@ from config import (
     DATA_DIR,
     MATURITIES,
     RISK_DATA_FILE,
+    SWAP_DV01_YEARS,
     SWAP_RETURN_COLUMNS,
     TREASURY_COLUMNS,
+    TREASURY_FUTURES_DV01_PER_CONTRACT,
 )
-from risk_data import build_risk_data
+from data_io import save_derived_csv, without_dv01_columns
+from risk_data import (
+    build_risk_data,
+    dv01_per_1mm,
+    load_cme_swap_data,
+    merge_cme_dv01,
+)
 from signal_data import clean_maturity
 
 AUTO_DATE = "auto"
@@ -52,12 +60,14 @@ def clean_backtest_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_signal_frame(refresh_signals: bool = False) -> pd.DataFrame:
     if refresh_signals:
-        return clean_backtest_frame(build_risk_data(refresh_signals=True, save=False))
+        risk = build_risk_data(refresh_signals=True, save=False)
+        return clean_backtest_frame(merge_cme_dv01(risk, load_cme_swap_data()))
 
     if not RISK_DATA_FILE.exists():
         raise FileNotFoundError(f"Missing {RISK_DATA_FILE}. Run `python risk_data.py` first.")
 
-    return clean_backtest_frame(pd.read_csv(RISK_DATA_FILE))
+    risk = pd.read_csv(RISK_DATA_FILE)
+    return clean_backtest_frame(merge_cme_dv01(risk, load_cme_swap_data()))
 
 
 def add_maturity_pnl(df: pd.DataFrame, maturity: str, config: BacktestConfig) -> pd.DataFrame:
@@ -67,12 +77,10 @@ def add_maturity_pnl(df: pd.DataFrame, maturity: str, config: BacktestConfig) ->
     swap_return_col = SWAP_RETURN_COLUMNS.get(maturity)
     treasury_col = TREASURY_COLUMNS.get(maturity)
     position_col = f"proxy_position_{m}"
-    target_dv01_col = f"target_dv01_{m}"
-    swap_notional_col = f"swap_notional_{m}"
-    treasury_dv01_col = f"signed_treasury_dv01_{m}"
+    swap_dv01_col = f"swap_dv01_per_contract_{m}"
+    swap_contracts_col = f"swap_futures_contracts_rounded_{m}"
     treasury_contracts_col = f"treasury_futures_contracts_rounded_{m}"
     prior_position_col = f"prior_position_{m}"
-    prior_target_col = f"prior_target_dv01_{m}"
     swap_pnl_col = f"swap_pnl_{m}"
     treasury_pnl_col = f"treasury_pnl_{m}"
     gross_pnl_col = f"gross_pnl_{m}"
@@ -84,12 +92,14 @@ def add_maturity_pnl(df: pd.DataFrame, maturity: str, config: BacktestConfig) ->
         or not treasury_col
         or swap_return_col not in output.columns
         or treasury_col not in output.columns
-        or swap_notional_col not in output.columns
-        or treasury_dv01_col not in output.columns
+        or swap_dv01_col not in output.columns
+        or swap_contracts_col not in output.columns
+        or treasury_contracts_col not in output.columns
+        or maturity not in SWAP_DV01_YEARS
+        or maturity not in TREASURY_FUTURES_DV01_PER_CONTRACT
     )
 
     output[prior_position_col] = output[position_col].shift(1).fillna(0.0) if position_col in output.columns else 0.0
-    output[prior_target_col] = output[target_dv01_col].shift(1).fillna(0.0) if target_dv01_col in output.columns else 0.0
 
     if missing:
         output[f"swap_turnover_{m}"] = 0.0
@@ -101,16 +111,26 @@ def add_maturity_pnl(df: pd.DataFrame, maturity: str, config: BacktestConfig) ->
         output[net_pnl_col] = 0.0
         return output
 
-    prior_swap_notional = output[swap_notional_col].shift(1).fillna(0.0)
-    prior_treasury_dv01 = output[treasury_dv01_col].shift(1).fillna(0.0)
+    swap_notional = (
+        output[swap_contracts_col]
+        * output[swap_dv01_col]
+        / dv01_per_1mm(SWAP_DV01_YEARS[maturity])
+        * 1_000_000
+    ).fillna(0.0)
+    treasury_risk = (
+        output[treasury_contracts_col]
+        * TREASURY_FUTURES_DV01_PER_CONTRACT[maturity]
+    ).fillna(0.0)
+    prior_swap_notional = swap_notional.shift(1).fillna(0.0)
+    prior_treasury_risk = treasury_risk.shift(1).fillna(0.0)
     swap_return = output[swap_return_col].fillna(0.0)
     treasury_change_bps = output[treasury_col].diff().fillna(0.0) * 100.0
 
     # ponytail: proxy PnL; replace with contract marks/specs once those histories exist.
     output[swap_pnl_col] = prior_swap_notional * swap_return
-    output[treasury_pnl_col] = -prior_treasury_dv01 * treasury_change_bps
+    output[treasury_pnl_col] = -prior_treasury_risk * treasury_change_bps
     output[gross_pnl_col] = output[swap_pnl_col] + output[treasury_pnl_col]
-    output[f"swap_turnover_{m}"] = output[swap_notional_col].diff().abs().fillna(output[swap_notional_col].abs())
+    output[f"swap_turnover_{m}"] = swap_notional.diff().abs().fillna(swap_notional.abs())
 
     if treasury_contracts_col in output.columns:
         output[f"treasury_contract_turnover_{m}"] = (
@@ -144,7 +164,7 @@ def add_backtest_pnl(df: pd.DataFrame, config: BacktestConfig) -> pd.DataFrame:
     output["daily_return"] = output["daily_pnl"] / output["equity"].shift(1).fillna(config.initial_equity)
     output["drawdown"] = output["equity"] - output["equity"].cummax()
     output["drawdown_pct"] = output["drawdown"] / output["equity"].cummax()
-    return output
+    return without_dv01_columns(output)
 
 
 def resolve_window(df: pd.DataFrame, start: str, end: str) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -164,9 +184,21 @@ def filter_dates(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd
     return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
 
 
+def active_swap_rows(df: pd.DataFrame) -> pd.Series:
+    columns = [
+        column
+        for column in df
+        if column.startswith("swap_futures_contracts_rounded_")
+    ]
+
+    if not columns:
+        return pd.Series(False, index=df.index)
+
+    return df[columns].abs().gt(0).any(axis=1)
+
+
 def first_active_range(df: pd.DataFrame) -> tuple[pd.Timestamp, pd.Timestamp] | None:
-    gross_dv01 = df.get("gross_dv01_after_cap", pd.Series(0.0, index=df.index)).fillna(0.0)
-    active = gross_dv01 > 0
+    active = active_swap_rows(df)
 
     if not active.any():
         return None
@@ -178,9 +210,7 @@ def first_active_range(df: pd.DataFrame) -> tuple[pd.Timestamp, pd.Timestamp] | 
 def summarize(df: pd.DataFrame, config: BacktestConfig) -> dict[str, float | int | str | None]:
     returns = df["daily_return"].fillna(0.0)
     daily_pnl = df["daily_pnl"].fillna(0.0)
-    gross_dv01 = df.get("gross_dv01_after_cap", pd.Series(0.0, index=df.index)).fillna(0.0)
-    gross_swap_dv01 = df.get("gross_swap_dv01_after_rounding", gross_dv01).fillna(0.0)
-    net_dv01 = df.get("net_rate_dv01", pd.Series(0.0, index=df.index)).fillna(0.0)
+    active = active_swap_rows(df)
     risk_allowed = df.get("risk_allowed", pd.Series(1, index=df.index)).fillna(1)
     vol = returns.std(ddof=0) * math.sqrt(252)
     downside = returns.where(returns < 0, 0.0).std(ddof=0) * math.sqrt(252)
@@ -192,7 +222,7 @@ def summarize(df: pd.DataFrame, config: BacktestConfig) -> dict[str, float | int
         "initial_equity": round(float(config.initial_equity), 2),
         "label": config.label or "default",
         "rows": int(len(df)),
-        "active_days": int((gross_dv01 > 0).sum()),
+        "active_days": int(active.sum()),
         "risk_blocked_days": int((risk_allowed == 0).sum()),
         "pnl_days": int((daily_pnl != 0).sum()),
         "win_days": int((daily_pnl > 0).sum()),
@@ -206,9 +236,6 @@ def summarize(df: pd.DataFrame, config: BacktestConfig) -> dict[str, float | int
         "ending_equity": round(float(df["equity"].iloc[-1]), 2),
         "max_drawdown": round(float(df["drawdown"].min()), 2),
         "max_drawdown_pct": round(float(df["drawdown_pct"].min()) * 100.0, 4),
-        "max_gross_dv01": round(float(gross_dv01.max()), 2),
-        "max_actual_swap_dv01": round(float(gross_swap_dv01.max()), 2),
-        "max_abs_net_dv01": round(float(net_dv01.abs().max()), 2),
         "best_day": round(float(daily_pnl.max()), 2),
         "worst_day": round(float(daily_pnl.min()), 2),
         "sharpe": None if vol == 0 else round(float(returns.mean() * 252 / vol), 2),
@@ -268,11 +295,11 @@ def run_backtest(
 
     DATA_DIR.mkdir(exist_ok=True)
     path = output_path(start_ts, end_ts, config)
-    backtest.to_csv(path, index=False)
+    backtest = save_derived_csv(backtest, path)
 
     print_summary(summarize(backtest, config), path)
 
-    if backtest.get("gross_dv01_after_cap", pd.Series(0.0, index=backtest.index)).fillna(0.0).eq(0).all():
+    if not active_swap_rows(backtest).any():
         active_range = first_active_range(full_backtest)
 
         if active_range is not None:
@@ -288,16 +315,18 @@ def self_check() -> None:
                 "date": ["2022-01-03", "2022-01-04", "2022-01-05"],
                 "dgs2": [1.00, 1.01, 1.00],
                 "eris_swap_2y_return": [0.0, 0.01, -0.02],
-                "swap_notional_2y": [1_000.0, 1_000.0, 0.0],
-                "signed_treasury_dv01_2y": [10.0, 10.0, 0.0],
+                "swap_futures_contracts_rounded_2y": [1, 1, 0],
+                "treasury_futures_contracts_rounded_2y": [-1, -1, 0],
+                "swap_dv01_per_contract_2y": [19.0, 19.0, 19.0],
                 "treasury_future_symbol_2y": ["ZT", "ZT", "ZT"],
             }
         )
     )
 
     checked = add_backtest_pnl(df, BacktestConfig())
-    assert np.isclose(checked.loc[1, "gross_daily_pnl"], 0.0)
-    assert np.isclose(checked.loc[2, "gross_daily_pnl"], -10.0)
+    assert np.isclose(checked.loc[1, "gross_daily_pnl"], 1038.0)
+    assert np.isclose(checked.loc[2, "gross_daily_pnl"], -2038.0)
+    assert not any("dv01" in column.lower() for column in checked)
     assert checked.loc[0, "treasury_future_symbol_2y"] == "ZT"
     print("[OK] self-check passed")
 
