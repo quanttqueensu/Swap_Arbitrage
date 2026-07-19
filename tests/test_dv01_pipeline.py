@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -12,6 +13,7 @@ from raw_price_data import (
     extract_eris_swap_row,
     strategy_swap_prices,
 )
+from risk_data import build_risk_data, load_cme_swap_data, merge_cme_dv01
 
 
 def sample_selected_swaps() -> pd.DataFrame:
@@ -134,6 +136,73 @@ class CmeMasterTests(unittest.TestCase):
                 "eris_swap_5y_return",
             ],
         )
+
+
+class RiskMasterTests(unittest.TestCase):
+    def test_loader_rejects_duplicate_date_ticker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cme_swap_data.csv"
+            pd.DataFrame(
+                {
+                    "date": ["2024-01-02", "2024-01-02"],
+                    "ticker": ["YITH24", "YITH24"],
+                    "price": [99.0, 99.1],
+                    "dv01": [19.0, 19.1],
+                }
+            ).to_csv(path, index=False)
+
+            with self.assertRaisesRegex(RuntimeError, "duplicate date/ticker"):
+                load_cme_swap_data(path)
+
+    def test_exact_date_merge_does_not_forward_fill(self) -> None:
+        signals = pd.DataFrame(
+            {"date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])}
+        )
+        master = pd.DataFrame(
+            {
+                "date": pd.to_datetime(
+                    ["2024-01-02", "2024-01-02", "2024-01-04", "2024-01-04"]
+                ),
+                "ticker": ["YITH24", "YIWH24", "YITM24", "YIWM24"],
+                "price": [99.0, 98.0, 99.1, 98.1],
+                "dv01": [19.0, 46.0, 20.0, 47.0],
+            }
+        )
+
+        output = merge_cme_dv01(signals, master)
+
+        self.assertEqual(output.loc[0, "swap_dv01_per_contract_2y"], 19.0)
+        self.assertTrue(pd.isna(output.loc[1, "swap_dv01_per_contract_2y"]))
+        self.assertEqual(output.loc[2, "swap_dv01_per_contract_2y"], 20.0)
+        self.assertEqual(output.loc[0, "swap_dv01_per_contract_5y"], 46.0)
+
+    def test_build_risk_uses_master_and_returns_no_dv01_columns(self) -> None:
+        signals = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "proxy_position_2y": [1],
+                "eris_swap_2y_price_residual_vs_treasury": [1.0],
+                "eris_swap_2y_price_residual_z": [2.0],
+            }
+        )
+        master = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "ticker": ["YITH24"],
+                "price": [99.0],
+                "dv01": [20.0],
+            }
+        )
+
+        with (
+            patch("risk_data.load_signal_or_build", return_value=signals),
+            patch("risk_data.load_cme_swap_data", return_value=master),
+        ):
+            output = build_risk_data(save=False)
+
+        self.assertEqual(output.loc[0, "swap_futures_contracts_rounded_2y"], 150)
+        self.assertFalse(any("dv01" in column.lower() for column in output))
+        self.assertEqual(output.loc[0, "risk_allowed"], 1)
 
 
 if __name__ == "__main__":

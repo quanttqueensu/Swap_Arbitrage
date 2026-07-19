@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from config import (
+    CME_SWAP_DATA_FILE,
     DATA_DIR,
     DV01_VOL_LOOKBACK,
     MATURITIES,
+    ERIS_SOFR_SWAP_FUTURES,
     MAX_DV01_SCALE,
     MAX_GROSS_DV01,
     MAX_NET_DV01,
@@ -17,19 +20,19 @@ from config import (
     MIN_DV01_SCALE,
     MIN_TARGET_DV01_TO_TRADE,
     POSITION_SIZE_BY_MATURITY,
-    REQUIRE_ACTUAL_SWAP_DV01,
     RISK_DATA_FILE,
     SIGNAL_DATA_FILE,
     SWAP_COLUMNS,
-    SWAP_DV01_COLUMNS,
     SWAP_DV01_YEARS,
     TREASURY_DV01_YEARS,
     TREASURY_FUTURES,
     TREASURY_FUTURES_DV01_PER_CONTRACT,
 )
+from data_io import save_derived_csv, without_dv01_columns
 from signal_data import build_signal_data, clean_maturity, clean_signal_frame
 
 DV01_VOL_MIN_PERIODS = max(20, DV01_VOL_LOOKBACK // 3)
+MASTER_COLUMNS = ["date", "ticker", "price", "dv01"]
 
 
 def dv01_per_1mm(duration_years: float) -> float:
@@ -112,10 +115,6 @@ def add_risk_budget_for_maturity(df: pd.DataFrame, maturity: str) -> pd.DataFram
     return output
 
 
-def fallback_swap_dv01_per_contract(maturity: str) -> float:
-    return SWAP_DV01_YEARS.get(maturity, np.nan) * 10.0
-
-
 def add_contract_sizing_for_maturity(df: pd.DataFrame, maturity: str) -> pd.DataFrame:
     output = df.copy()
     m = clean_maturity(maturity)
@@ -126,27 +125,21 @@ def add_contract_sizing_for_maturity(df: pd.DataFrame, maturity: str) -> pd.Data
         return output
 
     swap_dv01_col = f"swap_dv01_per_contract_{m}"
-    swap_dv01_source_col = f"uses_actual_swap_dv01_{m}"
     reason_col = f"risk_block_reason_{m}"
-    raw_dv01_col = SWAP_DV01_COLUMNS.get(maturity)
     output[reason_col] = ""
-    output[swap_dv01_col] = np.nan
-    output[swap_dv01_source_col] = 0
 
-    if raw_dv01_col and raw_dv01_col in output.columns:
-        swap_dv01 = pd.to_numeric(output[raw_dv01_col], errors="coerce")
-        swap_dv01 = swap_dv01.where(swap_dv01 > 0).ffill()
-        output[swap_dv01_col] = swap_dv01
-        output[swap_dv01_source_col] = swap_dv01.notna().astype(int)
-    elif not REQUIRE_ACTUAL_SWAP_DV01:
-        output[swap_dv01_col] = fallback_swap_dv01_per_contract(maturity)
+    if swap_dv01_col not in output.columns:
+        output[swap_dv01_col] = np.nan
+
+    swap_dv01 = pd.to_numeric(output[swap_dv01_col], errors="coerce")
+    output[swap_dv01_col] = swap_dv01.where(swap_dv01 > 0)
 
     active = pd.to_numeric(output[target_col], errors="coerce").fillna(0.0) > 0
     missing_swap_dv01 = active & ~pd.to_numeric(output[swap_dv01_col], errors="coerce").gt(0)
     output.loc[missing_swap_dv01, reason_col] = "missing_actual_swap_dv01"
 
     tradable_target = output[target_col].where(~missing_swap_dv01, 0.0)
-    swap_dv01 = pd.to_numeric(output[swap_dv01_col], errors="coerce")
+    swap_dv01 = output[swap_dv01_col]
     swap_float_col = f"swap_futures_contracts_float_{m}"
     swap_rounded_col = f"swap_futures_contracts_rounded_{m}"
     swap_cap_hit_col = f"swap_contract_cap_hit_{m}"
@@ -311,6 +304,56 @@ def build_risk_columns(signals: pd.DataFrame) -> pd.DataFrame:
     return add_portfolio_risk_flags(add_net_dv01(output))
 
 
+def load_cme_swap_data(path: Path = CME_SWAP_DATA_FILE) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing {path}. Run `python raw_price_data.py --eris` first."
+        )
+
+    output = pd.read_csv(path)
+
+    if output.columns.tolist() != MASTER_COLUMNS:
+        raise RuntimeError(f"CME swap data must have columns {MASTER_COLUMNS}.")
+
+    output["date"] = pd.to_datetime(output["date"], errors="coerce").dt.normalize()
+    output["ticker"] = output["ticker"].astype("string").str.strip()
+    output["price"] = pd.to_numeric(output["price"], errors="coerce")
+    output["dv01"] = pd.to_numeric(output["dv01"], errors="coerce")
+
+    if (
+        output[MASTER_COLUMNS].isna().any().any()
+        or output["ticker"].eq("").any()
+        or (output["dv01"] <= 0).any()
+    ):
+        raise RuntimeError("CME swap data contains missing or invalid values.")
+
+    if output.duplicated(["date", "ticker"]).any():
+        raise RuntimeError("CME swap data contains duplicate date/ticker rows.")
+
+    return output.sort_values(["date", "ticker"]).reset_index(drop=True)
+
+
+def merge_cme_dv01(signals: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
+    output = signals.copy()
+
+    for maturity, root in ERIS_SOFR_SWAP_FUTURES.items():
+        maturity_rows = master[master["ticker"].str.startswith(root)]
+
+        if maturity_rows["date"].duplicated().any():
+            raise RuntimeError(
+                f"Multiple {maturity} CME contracts selected on one date."
+            )
+
+        column = f"swap_dv01_per_contract_{clean_maturity(maturity)}"
+        output = output.merge(
+            maturity_rows[["date", "dv01"]].rename(columns={"dv01": column}),
+            on="date",
+            how="left",
+        )
+
+    return output
+
+
 def load_signal_or_build(
     refresh_signals: bool = False,
     refresh_raw: bool = False,
@@ -341,18 +384,17 @@ def build_risk_data(
         pull_interest_rates=pull_interest_rates,
         pull_eris=pull_eris,
     )
-    output = build_risk_columns(signals)
+    output = build_risk_columns(merge_cme_dv01(signals, load_cme_swap_data()))
+    output = without_dv01_columns(output)
 
     if save:
-        DATA_DIR.mkdir(exist_ok=True)
-        output.to_csv(RISK_DATA_FILE, index=False)
+        save_derived_csv(output, RISK_DATA_FILE)
         print(f"[SAVED] {RISK_DATA_FILE}")
 
     print(
         "[RISK] "
         f"position_size_dv01={POSITION_SIZE_BY_MATURITY}, "
-        f"max_gross_dv01={MAX_GROSS_DV01}, max_net_dv01={MAX_NET_DV01}, "
-        f"require_actual_swap_dv01={REQUIRE_ACTUAL_SWAP_DV01}"
+        f"max_gross_dv01={MAX_GROSS_DV01}, max_net_dv01={MAX_NET_DV01}"
     )
     print(f"[RISK DATA] rows={len(output):,} range={output['date'].min().date()} to {output['date'].max().date()}")
     return output
@@ -366,7 +408,7 @@ def self_check() -> None:
             "proxy_position_2y": [0, 1, 1],
             "eris_swap_2y_price_residual_vs_treasury": [0.0, 1.0, 2.0],
             "eris_swap_2y_price_residual_z": [0.0, 2.0, 2.0],
-            "eris_swap_2y_dv01": [np.nan, 19.0, 20.0],
+            "swap_dv01_per_contract_2y": [np.nan, 19.0, 20.0],
         }
     )
 
@@ -378,11 +420,10 @@ def self_check() -> None:
     assert np.isclose(checked.loc[1, f"signed_swap_dv01_{m}"], expected_contracts * 19.0)
     assert checked.loc[1, "risk_allowed"] == 1
 
-    if REQUIRE_ACTUAL_SWAP_DV01:
-        missing = df.drop(columns=["eris_swap_2y_dv01"])
-        blocked = build_risk_columns(missing)
-        assert "missing_actual_swap_dv01" in blocked.loc[1, "risk_block_reason"]
-        assert blocked.loc[1, f"swap_futures_contracts_rounded_{m}"] == 0
+    missing = df.drop(columns=["swap_dv01_per_contract_2y"])
+    blocked = build_risk_columns(missing)
+    assert "missing_actual_swap_dv01" in blocked.loc[1, "risk_block_reason"]
+    assert blocked.loc[1, f"swap_futures_contracts_rounded_{m}"] == 0
 
     print("[OK] self-check passed")
 

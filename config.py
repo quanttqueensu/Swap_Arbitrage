@@ -179,8 +179,6 @@ POSITION_SIZE_BY_MATURITY = {
     "30Y": 1_500,
 }
 
-REQUIRE_ACTUAL_SWAP_DV01 = True
-
 # Small targets create noisy one-lot churn after rounding.
 MIN_TARGET_DV01_TO_TRADE = 100.0
 
