@@ -40,10 +40,20 @@ from config import (
     SWAP_TICKER_COLUMNS,
     TIMEOUT,
     TREASURY_COLUMN_MAP,
+    TREASURY_FUTURES,
+    TREASURY_FUTURES_DATA_FILE,
+    TREASURY_FUTURES_DV01_METHOD,
+    TREASURY_FUTURES_FACE_VALUE,
+    TREASURY_FUTURES_FILE,
+    TREASURY_FUTURES_HEDGE_RATIOS,
+    TREASURY_FUTURES_PRICE_COLUMNS,
+    TREASURY_FUTURES_RETURN_COLUMNS,
+    TREASURY_FUTURES_SOURCE_SYMBOLS,
     TREASURY_PULL_SLEEP_SECONDS,
     TREASURY_XML_BASE_URL,
     TREASURY_XML_DATASET,
     USER_AGENT,
+    YAHOO_CHART_BASE_URL,
 )
 from data_io import clean_existing_derived_csvs, save_derived_csv, without_dv01_columns
 
@@ -549,7 +559,11 @@ def build_cme_swap_data(eris: pd.DataFrame) -> pd.DataFrame:
     output["dv01"] = pd.to_numeric(output["dv01"], errors="coerce")
     output = output.dropna(subset=["date", "ticker", "price", "dv01"])
     output["ticker"] = output["ticker"].astype("str")
-    output = output[(output["ticker"] != "") & (output["dv01"] > 0)]
+    output = output[
+        (output["ticker"] != "")
+        & (output["price"] > 0)
+        & (output["dv01"] > 0)
+    ]
 
     if output.duplicated(["date", "ticker"]).any():
         raise RuntimeError("Duplicate date/ticker rows in CME swap master data.")
@@ -559,8 +573,220 @@ def build_cme_swap_data(eris: pd.DataFrame) -> pd.DataFrame:
 
 def strategy_swap_prices(eris: pd.DataFrame) -> pd.DataFrame:
     output = without_dv01_columns(eris)
+
+    for maturity in MATURITIES:
+        ticker_col = SWAP_TICKER_COLUMNS.get(maturity)
+        price_col = SWAP_COLUMNS.get(maturity)
+        return_col = SWAP_RETURN_COLUMNS.get(maturity)
+
+        if not ticker_col or ticker_col not in eris or not price_col or price_col not in output:
+            continue
+
+        ticker = eris[ticker_col].astype("string").str.strip()
+        price = pd.to_numeric(output[price_col], errors="coerce")
+        roll = ticker.notna() & ticker.shift().notna() & ticker.ne(ticker.shift())
+        roll_adjustment = (price.shift() - price).where(roll, 0.0).fillna(0.0).cumsum()
+        output[price_col] = price + roll_adjustment
+
+        if return_col and return_col in output:
+            output.loc[roll, return_col] = 0.0
+
     ticker_columns = [column for column in output if column.endswith("_ticker")]
     return output.drop(columns=ticker_columns)
+
+
+def parse_yahoo_chart(text: str, ticker: str) -> pd.DataFrame:
+    payload = json.loads(text)
+    chart = payload.get("chart", {})
+    results = chart.get("result") or []
+
+    if not results:
+        raise RuntimeError(f"No public Treasury futures data returned for {ticker}.")
+
+    result = results[0]
+    timestamps = result.get("timestamp") or []
+    quotes = result.get("indicators", {}).get("quote") or []
+    closes = quotes[0].get("close", []) if quotes else []
+    output = pd.DataFrame({"timestamp": timestamps, "price": closes})
+    output["date"] = pd.to_datetime(output["timestamp"], unit="s", utc=True).dt.tz_localize(None).dt.normalize()
+    output["ticker"] = ticker
+    output["price"] = pd.to_numeric(output["price"], errors="coerce")
+    output = output.dropna(subset=["date", "price"])
+    return output[["date", "ticker", "price"]].sort_values("date").reset_index(drop=True)
+
+
+def get_public_treasury_futures_prices(
+    start_date: str,
+    end_date: str | None = None,
+) -> pd.DataFrame:
+    start = pd.to_datetime(start_date).normalize()
+    end = pd.to_datetime(end_date).normalize() if end_date else pd.Timestamp.today().normalize()
+    period1 = int(start.tz_localize("UTC").timestamp())
+    period2 = int((end + pd.Timedelta(days=1)).tz_localize("UTC").timestamp())
+    frames = []
+
+    for ticker in TREASURY_FUTURES_SOURCE_SYMBOLS.values():
+        params = urlencode(
+            {
+                "period1": period1,
+                "period2": period2,
+                "interval": "1d",
+                "events": "history",
+            }
+        )
+        url = f"{YAHOO_CHART_BASE_URL}/{ticker}?{params}"
+        safe_ticker = ticker.replace("=", "_")
+        text = fetch_text(
+            url,
+            CACHE_DIR / f"yahoo_{safe_ticker}_{start.date()}_{end.date()}.json",
+            accept="application/json,*/*",
+        )
+        frames.append(parse_yahoo_chart(text, ticker))
+
+    output = pd.concat(frames, ignore_index=True).sort_values(["date", "ticker"]).reset_index(drop=True)
+    print(
+        "[WARN] Treasury futures research prices use public continuous closes; "
+        f"DV01 method={TREASURY_FUTURES_DV01_METHOD}. Production settlement/CTD "
+        "data requires CME DataMine or another licensed source."
+    )
+    return output
+
+
+def build_treasury_futures_data(
+    prices: pd.DataFrame,
+    cme_swap_data: pd.DataFrame,
+) -> pd.DataFrame:
+    frames = []
+
+    for maturity, treasury_ticker in TREASURY_FUTURES_SOURCE_SYMBOLS.items():
+        swap_root = ERIS_SOFR_SWAP_FUTURES[maturity]
+        ratio = TREASURY_FUTURES_HEDGE_RATIOS[maturity]
+        treasury_rows = prices[prices["ticker"].eq(treasury_ticker)][["date", "ticker", "price"]]
+        swap_rows = cme_swap_data[cme_swap_data["ticker"].str.startswith(swap_root)][["date", "dv01"]]
+        paired = treasury_rows.merge(swap_rows, on="date", how="inner")
+        paired["dv01"] = pd.to_numeric(paired["dv01"], errors="coerce") * ratio
+        frames.append(paired)
+
+    if not frames:
+        raise RuntimeError("No paired Treasury futures prices and CME swap DV01 data available.")
+
+    output = pd.concat(frames, ignore_index=True)
+    output["date"] = pd.to_datetime(output["date"], errors="coerce").dt.normalize()
+    output["ticker"] = output["ticker"].astype("string").str.strip()
+    output["price"] = pd.to_numeric(output["price"], errors="coerce")
+    output["dv01"] = pd.to_numeric(output["dv01"], errors="coerce")
+    output = output.dropna(subset=["date", "ticker", "price", "dv01"])
+    output = output[(output["ticker"] != "") & (output["price"] > 0) & (output["dv01"] > 0)]
+
+    if output.duplicated(["date", "ticker"]).any():
+        raise RuntimeError("Duplicate date/ticker rows in Treasury futures master data.")
+
+    return output[["date", "ticker", "price", "dv01"]].sort_values(["date", "ticker"]).reset_index(drop=True)
+
+
+def build_ctd_treasury_futures_data(source: pd.DataFrame) -> pd.DataFrame:
+    required = [
+        "date",
+        "ticker",
+        "price",
+        "ctd_cash_dv01_per_100k",
+        "conversion_factor",
+    ]
+
+    if not set(required).issubset(source.columns):
+        raise RuntimeError(f"CTD Treasury futures input requires columns {required}.")
+
+    output = source[required].copy()
+    output["date"] = pd.to_datetime(output["date"], errors="coerce").dt.normalize()
+    output["ticker"] = output["ticker"].astype("string").str.strip()
+
+    for column in ["price", "ctd_cash_dv01_per_100k", "conversion_factor"]:
+        output[column] = pd.to_numeric(output[column], errors="coerce")
+
+    face_multiplier = pd.Series(index=output.index, dtype="float64")
+
+    for maturity, root in TREASURY_FUTURES.items():
+        face_multiplier.loc[output["ticker"].str.startswith(root, na=False)] = (
+            TREASURY_FUTURES_FACE_VALUE[maturity] / 100_000.0
+        )
+
+    invalid = (
+        output[required].isna().any(axis=1)
+        | output["ticker"].eq("")
+        | output["price"].le(0)
+        | output["ctd_cash_dv01_per_100k"].le(0)
+        | output["conversion_factor"].le(0)
+        | face_multiplier.isna()
+    )
+
+    if invalid.any():
+        raise RuntimeError("CTD Treasury futures input contains missing or invalid values.")
+
+    missing_roots = [
+        root
+        for root in TREASURY_FUTURES.values()
+        if not output["ticker"].str.startswith(root).any()
+    ]
+
+    if missing_roots:
+        required_roots = " and ".join(TREASURY_FUTURES.values())
+        raise RuntimeError(f"CTD Treasury futures input requires {required_roots} contracts.")
+
+    for maturity, root in TREASURY_FUTURES.items():
+        root_rows = output[output["ticker"].str.startswith(root)]
+
+        if root_rows["date"].duplicated().any():
+            raise RuntimeError(f"Multiple {maturity} Treasury futures contracts on one date.")
+
+    output["dv01"] = (
+        output["ctd_cash_dv01_per_100k"]
+        * face_multiplier
+        / output["conversion_factor"]
+    )
+    output = output[["date", "ticker", "price", "dv01"]]
+
+    if output.duplicated(["date", "ticker"]).any():
+        raise RuntimeError("CTD Treasury futures input contains duplicate date/ticker rows.")
+
+    return output.sort_values(["date", "ticker"]).reset_index(drop=True)
+
+
+def strategy_treasury_futures_prices(master: pd.DataFrame) -> pd.DataFrame:
+    output = None
+
+    for maturity, root in TREASURY_FUTURES.items():
+        price_col = TREASURY_FUTURES_PRICE_COLUMNS[maturity]
+        return_col = TREASURY_FUTURES_RETURN_COLUMNS[maturity]
+        selected = master[master["ticker"].str.startswith(root)][["date", "ticker", "price"]]
+
+        if selected["date"].duplicated().any():
+            raise RuntimeError(f"Multiple {maturity} Treasury futures contracts on one date.")
+
+        selected = selected.sort_values("date").reset_index(drop=True)
+        price = pd.to_numeric(selected["price"], errors="coerce")
+        ticker = selected["ticker"].astype("string").str.strip()
+        roll = ticker.notna() & ticker.shift().notna() & ticker.ne(ticker.shift())
+        adjustment = (price.shift() - price).where(roll, 0.0).fillna(0.0).cumsum()
+        rows = selected[["date"]].copy()
+        rows[price_col] = price + adjustment
+        rows[return_col] = rows[price_col].pct_change()
+        rows.loc[roll, return_col] = 0.0
+        output = rows if output is None else output.merge(rows, on="date", how="outer")
+
+    if output is None:
+        raise RuntimeError("No Treasury futures strategy prices available.")
+
+    preferred = ["date"]
+
+    for maturity in TREASURY_FUTURES:
+        preferred.extend(
+            [
+                TREASURY_FUTURES_PRICE_COLUMNS[maturity],
+                TREASURY_FUTURES_RETURN_COLUMNS[maturity],
+            ]
+        )
+
+    return clean_price_frame(output)[preferred]
 
 
 def merge_price_data(*frames: pd.DataFrame | None) -> pd.DataFrame:
@@ -579,42 +805,80 @@ def merge_price_data(*frames: pd.DataFrame | None) -> pd.DataFrame:
 
 def build_raw_price_data(
     refresh_interest_rates: bool = False,
-    refresh_treasury: bool = False,
     refresh_eris: bool = False,
+    refresh_treasury_futures: bool = False,
+    treasury_futures_ctd_file: Path | None = None,
     start_date: str = START_DATE,
     end_date: str | None = END_DATE,
     save: bool = True,
 ) -> pd.DataFrame:
     ensure_directories()
-    refresh_interest_rates = refresh_interest_rates or refresh_treasury
+    refresh_treasury_futures = (
+        refresh_treasury_futures or refresh_eris or treasury_futures_ctd_file is not None
+    )
 
     if refresh_interest_rates or not RATES_FILE.exists():
         rates = build_rates_dataset(start_date=start_date, end_date=end_date)
         save_derived_csv(rates, RATES_FILE)
         print(f"[SAVED] {RATES_FILE}")
+        rates = load_csv(RATES_FILE)
     else:
         rates = load_csv(RATES_FILE)
 
     eris = None
+    cme_swap_master = None
 
     if refresh_eris:
         selected = get_eris_public_swap_data(start_date=start_date, end_date=end_date)
-        master = build_cme_swap_data(selected)
-        master.to_csv(CME_SWAP_DATA_FILE, index=False, date_format="%Y-%m-%d")
+        cme_swap_master = build_cme_swap_data(selected)
+        cme_swap_master.to_csv(CME_SWAP_DATA_FILE, index=False, date_format="%Y-%m-%d")
         print(f"[SAVED] {CME_SWAP_DATA_FILE}")
         eris = strategy_swap_prices(selected)
         save_derived_csv(eris, SWAP_RATES_FILE)
         print(f"[SAVED] {SWAP_RATES_FILE}")
+        eris = load_csv(SWAP_RATES_FILE)
 
     elif SWAP_RATES_FILE.exists():
         eris = load_csv(SWAP_RATES_FILE)
 
-    raw = merge_price_data(rates, eris)
+    treasury_futures = None
+
+    if refresh_treasury_futures:
+        if treasury_futures_ctd_file is not None:
+            treasury_master = build_ctd_treasury_futures_data(
+                pd.read_csv(treasury_futures_ctd_file)
+            )
+            print(f"[OK] Licensed CTD Treasury futures input: {treasury_futures_ctd_file}")
+        else:
+            if cme_swap_master is None:
+                if not CME_SWAP_DATA_FILE.exists():
+                    raise FileNotFoundError(
+                        f"Missing {CME_SWAP_DATA_FILE}. Run `python raw_price_data.py --eris` first."
+                    )
+                cme_swap_master = pd.read_csv(CME_SWAP_DATA_FILE)
+                cme_swap_master["date"] = pd.to_datetime(cme_swap_master["date"], errors="coerce")
+
+            treasury_prices = get_public_treasury_futures_prices(start_date, end_date)
+            treasury_master = build_treasury_futures_data(treasury_prices, cme_swap_master)
+        treasury_master.to_csv(TREASURY_FUTURES_DATA_FILE, index=False, date_format="%Y-%m-%d")
+        print(f"[SAVED] {TREASURY_FUTURES_DATA_FILE}")
+        treasury_futures = strategy_treasury_futures_prices(treasury_master)
+        save_derived_csv(treasury_futures, TREASURY_FUTURES_FILE)
+        print(f"[SAVED] {TREASURY_FUTURES_FILE}")
+        treasury_futures = load_csv(TREASURY_FUTURES_FILE)
+
+    elif TREASURY_FUTURES_FILE.exists():
+        treasury_futures = load_csv(TREASURY_FUTURES_FILE)
+
+    raw = merge_price_data(rates, eris, treasury_futures)
 
     if save:
         raw = save_derived_csv(raw, RAW_PRICE_DATA_FILE)
         print(f"[SAVED] {RAW_PRICE_DATA_FILE}")
-        cleaned = clean_existing_derived_csvs(DATA_DIR, CME_SWAP_DATA_FILE)
+        cleaned = clean_existing_derived_csvs(
+            DATA_DIR,
+            [CME_SWAP_DATA_FILE, TREASURY_FUTURES_DATA_FILE],
+        )
 
         for path in cleaned:
             print(f"[CLEANED DV01] {path}")
@@ -661,6 +925,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Refresh public Eris swap settlement and DV01 data.",
     )
+    parser.add_argument(
+        "--treasury-futures",
+        dest="treasury_futures",
+        action="store_true",
+        help="Refresh continuous ZT/ZF research prices and the Treasury futures master.",
+    )
+    parser.add_argument(
+        "--treasury-futures-ctd-file",
+        type=Path,
+        help=(
+            "Build the Treasury master from a normalized licensed CTD CSV with "
+            "date,ticker,price,ctd_cash_dv01_per_100k,conversion_factor."
+        ),
+    )
     parser.add_argument("--start", default=START_DATE)
     parser.add_argument("--end", default=END_DATE)
     parser.add_argument("--self-check", action="store_true")
@@ -677,6 +955,8 @@ def main() -> None:
     build_raw_price_data(
         refresh_interest_rates=args.interest_rates,
         refresh_eris=args.eris,
+        refresh_treasury_futures=args.treasury_futures,
+        treasury_futures_ctd_file=args.treasury_futures_ctd_file,
         start_date=args.start,
         end_date=args.end,
     )

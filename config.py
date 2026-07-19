@@ -11,6 +11,8 @@ CACHE_DIR = DATA_DIR / "cache"
 RATES_FILE = DATA_DIR / "treasury_rates.csv"
 SWAP_RATES_FILE = DATA_DIR / "swap_rates.csv"
 CME_SWAP_DATA_FILE = DATA_DIR / "cme_swap_data.csv"
+TREASURY_FUTURES_FILE = DATA_DIR / "treasury_futures.csv"
+TREASURY_FUTURES_DATA_FILE = DATA_DIR / "treasury_futures_data.csv"
 RAW_PRICE_DATA_FILE = DATA_DIR / "raw_price_data.csv"
 SIGNAL_DATA_FILE = DATA_DIR / "signal_data.csv"
 RISK_DATA_FILE = DATA_DIR / "risk_data.csv"
@@ -41,7 +43,7 @@ TREASURY_PULL_SLEEP_SECONDS = 0.75
 # Model universe
 # ============================================================
 
-MATURITIES = ["2Y", "5Y", "10Y", "30Y"]
+MATURITIES = ["2Y", "5Y"]
 
 
 # ============================================================
@@ -89,14 +91,6 @@ INTEREST_RATE_COLUMNS = [
     "sofr",
     "effr",
 ]
-
-TREASURY_COLUMNS = {
-    "2Y": "dgs2",
-    "5Y": "dgs5",
-    "10Y": "dgs10",
-    "30Y": "dgs30",
-}
-
 
 # ============================================================
 # NY Fed funding-rate settings
@@ -159,9 +153,49 @@ IBKR_EXCHANGES_TO_TRY = ["CBOT", "ECBOT"]
 TREASURY_FUTURES = {
     "2Y": "ZT",
     "5Y": "ZF",
-    "10Y": "ZN",
-    "30Y": "ZB",
 }
+
+# Unattended research source. These are continuous front-month vendor symbols,
+# not executable contract-month identifiers.
+YAHOO_CHART_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
+TREASURY_FUTURES_SOURCE_SYMBOLS = {
+    "2Y": "ZT=F",
+    "5Y": "ZF=F",
+}
+
+TREASURY_FUTURES_PRICE_COLUMNS = {
+    "2Y": "treasury_futures_2y_price",
+    "5Y": "treasury_futures_5y_price",
+}
+
+TREASURY_FUTURES_RETURN_COLUMNS = {
+    "2Y": "treasury_futures_2y_return",
+    "5Y": "treasury_futures_5y_return",
+}
+
+# CME's permanently fixed Eris/Treasury spread ratios: swap contracts per one
+# Treasury contract (YIT:ZT = 2:1, YIW:ZF = 1:1).
+TREASURY_FUTURES_HEDGE_RATIOS = {
+    "2Y": 2.0,
+    "5Y": 1.0,
+}
+
+# The public master expresses Treasury risk in paired Eris-DV01 units using
+# CME's fixed spread ratios. It is a research proxy, not CTD-derived DV01.
+TREASURY_FUTURES_DV01_METHOD = "cme_fixed_ics_ratio_proxy"
+
+# Dollar P&L from a one-point futures price move.
+TREASURY_FUTURES_DOLLARS_PER_POINT = {
+    "2Y": 2_000.0,
+    "5Y": 1_000.0,
+}
+
+TREASURY_FUTURES_FACE_VALUE = {
+    "2Y": 200_000.0,
+    "5Y": 100_000.0,
+}
+
+ERIS_DOLLARS_PER_POINT = 1_000.0
 
 # ============================================================
 # DV01 / risk sizing settings
@@ -175,8 +209,6 @@ POSITION_SIZE_DV01 = 3_000
 POSITION_SIZE_BY_MATURITY = {
     "2Y": POSITION_SIZE_DV01,
     "5Y": POSITION_SIZE_DV01,
-    "10Y": 2_500,
-    "30Y": 1_500,
 }
 
 # Small targets create noisy one-lot churn after rounding.
@@ -189,39 +221,23 @@ MAX_NET_DV01 = 250.0
 MAX_SWAP_FUTURES_CONTRACTS = {
     "2Y": 0,
     "5Y": 0,
-    "10Y": 0,
-    "30Y": 0,
 }
 
 MAX_TREASURY_FUTURES_CONTRACTS = {
     "2Y": 0,
     "5Y": 0,
-    "10Y": 0,
-    "30Y": 0,
 }
 
-# Approximate DV01 years for $1mm notional. These are now only for fallback
-# notional estimates and public Eris contract selection, not main swap sizing.
+# Approximate DV01 years for $1mm notional conversion and public Eris contract
+# selection. Actual master DV01 drives swap contract sizing.
 SWAP_DV01_YEARS = {
     "2Y": 1.9,
     "5Y": 4.6,
-    "10Y": 8.5,
-    "30Y": 19.0,
 }
 
 TREASURY_DV01_YEARS = {
     "2Y": 1.9,
     "5Y": 4.5,
-    "10Y": 8.0,
-    "30Y": 18.0,
-}
-
-# Approximate Treasury futures DV01 per contract.
-TREASURY_FUTURES_DV01_PER_CONTRACT = {
-    "2Y": 38.0,     # ZT
-    "5Y": 58.0,     # ZF
-    "10Y": 85.0,    # ZN
-    "30Y": 180.0,   # ZB
 }
 
 DV01_VOL_LOOKBACK = 63
@@ -242,5 +258,3 @@ ROLLING_WINDOW = 252
 # ============================================================
 
 IBKR_HOST = "127.0.0.1"
-IBKR_PORT = 7497
-IBKR_CLIENT_ID = 20

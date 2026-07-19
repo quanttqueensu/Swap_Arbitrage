@@ -11,7 +11,7 @@ from config import (
     ROLLING_WINDOW,
     SIGNAL_DATA_FILE,
     SWAP_COLUMNS,
-    TREASURY_COLUMNS,
+    TREASURY_FUTURES_PRICE_COLUMNS,
     Z_ENTRY,
     Z_EXIT,
 )
@@ -113,7 +113,7 @@ def add_funding_spread_proxy(df: pd.DataFrame) -> pd.DataFrame:
 def add_proxy_signal(df: pd.DataFrame, maturity: str) -> tuple[pd.DataFrame, bool]:
     output = df.copy()
     maturity_key = clean_maturity(maturity)
-    treasury_col = TREASURY_COLUMNS.get(maturity)
+    treasury_col = TREASURY_FUTURES_PRICE_COLUMNS.get(maturity)
     proxy_col = SWAP_COLUMNS.get(maturity)
 
     if not proxy_col or proxy_col not in output.columns:
@@ -175,6 +175,21 @@ def add_best_maturity_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_signal_columns(raw: pd.DataFrame) -> pd.DataFrame:
     output = clean_price_frame(raw)
+    traded_price_columns = [
+        column
+        for maturity in MATURITIES
+        for column in (
+            SWAP_COLUMNS.get(maturity),
+            TREASURY_FUTURES_PRICE_COLUMNS.get(maturity),
+        )
+        if column
+    ]
+    missing = [column for column in traded_price_columns if column not in output]
+
+    if missing:
+        raise RuntimeError(f"Missing traded price columns: {missing}")
+
+    output = output.dropna(subset=traded_price_columns).reset_index(drop=True)
     output = add_funding_spread_proxy(output)
     loaded = []
 

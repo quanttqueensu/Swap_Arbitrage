@@ -65,7 +65,7 @@ runs.
 Set the paper account once in PowerShell:
 
 ```powershell
-$env:AGENT0_IBKR_ACCOUNT = "DUQ346848"
+$env:AGENT0_IBKR_ACCOUNT = "YOUR_PAPER_ACCOUNT"
 ```
 
 With Trader Workstation or IB Gateway connected, queue next week's orders:

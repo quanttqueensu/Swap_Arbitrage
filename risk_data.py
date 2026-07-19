@@ -23,9 +23,9 @@ from config import (
     SIGNAL_DATA_FILE,
     SWAP_COLUMNS,
     SWAP_DV01_YEARS,
+    TREASURY_FUTURES_DATA_FILE,
     TREASURY_DV01_YEARS,
     TREASURY_FUTURES,
-    TREASURY_FUTURES_DV01_PER_CONTRACT,
 )
 from data_io import save_derived_csv, without_dv01_columns
 from signal_data import build_signal_data, clean_maturity, clean_signal_frame
@@ -124,20 +124,28 @@ def add_contract_sizing_for_maturity(df: pd.DataFrame, maturity: str) -> pd.Data
         return output
 
     swap_dv01_col = f"swap_dv01_per_contract_{m}"
+    treasury_dv01_col = f"treasury_dv01_per_contract_{m}"
     reason_col = f"risk_block_reason_{m}"
     output[reason_col] = ""
 
     if swap_dv01_col not in output.columns:
         output[swap_dv01_col] = np.nan
 
+    if treasury_dv01_col not in output.columns:
+        output[treasury_dv01_col] = np.nan
+
     swap_dv01 = pd.to_numeric(output[swap_dv01_col], errors="coerce")
     output[swap_dv01_col] = swap_dv01.where(swap_dv01 > 0)
+    treasury_dv01 = pd.to_numeric(output[treasury_dv01_col], errors="coerce")
+    output[treasury_dv01_col] = treasury_dv01.where(treasury_dv01 > 0)
 
     active = pd.to_numeric(output[target_col], errors="coerce").fillna(0.0) > 0
     missing_swap_dv01 = active & ~pd.to_numeric(output[swap_dv01_col], errors="coerce").gt(0)
+    missing_treasury_dv01 = active & ~pd.to_numeric(output[treasury_dv01_col], errors="coerce").gt(0)
     output.loc[missing_swap_dv01, reason_col] = "missing_actual_swap_dv01"
+    output.loc[missing_treasury_dv01, reason_col] = "missing_treasury_dv01_proxy"
 
-    tradable_target = output[target_col].where(~missing_swap_dv01, 0.0)
+    tradable_target = output[target_col].where(~(missing_swap_dv01 | missing_treasury_dv01), 0.0)
     swap_dv01 = output[swap_dv01_col]
     swap_float_col = f"swap_futures_contracts_float_{m}"
     swap_rounded_col = f"swap_futures_contracts_rounded_{m}"
@@ -166,7 +174,7 @@ def add_contract_sizing_for_maturity(df: pd.DataFrame, maturity: str) -> pd.Data
     )
     output[f"swap_notional_{m}"] = output[swap_rounded_col] * output[contract_notional_col].fillna(0.0)
 
-    futures_dv01 = TREASURY_FUTURES_DV01_PER_CONTRACT.get(maturity, np.nan)
+    futures_dv01 = output[treasury_dv01_col]
     float_col = f"treasury_futures_contracts_float_{m}"
     rounded_col = f"treasury_futures_contracts_rounded_{m}"
     treasury_cap_hit_col = f"treasury_contract_cap_hit_{m}"
@@ -174,8 +182,6 @@ def add_contract_sizing_for_maturity(df: pd.DataFrame, maturity: str) -> pd.Data
     output[f"treasury_future_symbol_{m}"] = TREASURY_FUTURES.get(maturity, "")
     output[float_col] = (
         -output[signed_swap_col] / futures_dv01
-        if futures_dv01 and not pd.isna(futures_dv01)
-        else 0.0
     )
 
     treasury_cap = MAX_TREASURY_FUTURES_CONTRACTS.get(maturity, 0)
@@ -186,7 +192,7 @@ def add_contract_sizing_for_maturity(df: pd.DataFrame, maturity: str) -> pd.Data
         output[float_col] = pd.Series(output[float_col], index=output.index).clip(-treasury_cap, treasury_cap)
 
     output[rounded_col] = pd.Series(output[float_col], index=output.index).round().fillna(0).astype(int)
-    output[signed_treasury_col] = output[rounded_col] * (0.0 if pd.isna(futures_dv01) else futures_dv01)
+    output[signed_treasury_col] = output[rounded_col] * futures_dv01.fillna(0.0)
 
     if maturity in TREASURY_DV01_YEARS:
         output[f"treasury_notional_{m}"] = (
@@ -303,16 +309,14 @@ def build_risk_columns(signals: pd.DataFrame) -> pd.DataFrame:
     return add_portfolio_risk_flags(add_net_dv01(output))
 
 
-def load_cme_swap_data(path: Path = CME_SWAP_DATA_FILE) -> pd.DataFrame:
+def load_market_master(path: Path, label: str, pull_hint: str) -> pd.DataFrame:
     if not path.exists():
-        raise FileNotFoundError(
-            f"Missing {path}. Run `python raw_price_data.py --eris` first."
-        )
+        raise FileNotFoundError(f"Missing {path}. Run `{pull_hint}` first.")
 
     output = pd.read_csv(path)
 
     if output.columns.tolist() != MASTER_COLUMNS:
-        raise RuntimeError(f"CME swap data must have columns {MASTER_COLUMNS}.")
+        raise RuntimeError(f"{label} data must have columns {MASTER_COLUMNS}.")
 
     output["date"] = pd.to_datetime(output["date"], errors="coerce").dt.normalize()
     output["ticker"] = output["ticker"].astype("string").str.strip()
@@ -322,17 +326,46 @@ def load_cme_swap_data(path: Path = CME_SWAP_DATA_FILE) -> pd.DataFrame:
     if (
         output[MASTER_COLUMNS].isna().any().any()
         or output["ticker"].eq("").any()
+        or (output["price"] <= 0).any()
         or (output["dv01"] <= 0).any()
     ):
-        raise RuntimeError("CME swap data contains missing or invalid values.")
+        raise RuntimeError(f"{label} data contains missing or invalid values.")
 
     if output.duplicated(["date", "ticker"]).any():
-        raise RuntimeError("CME swap data contains duplicate date/ticker rows.")
+        raise RuntimeError(f"{label} data contains duplicate date/ticker rows.")
 
     return output.sort_values(["date", "ticker"]).reset_index(drop=True)
 
 
-def merge_cme_dv01(signals: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
+def load_cme_swap_data(path: Path = CME_SWAP_DATA_FILE) -> pd.DataFrame:
+    return load_market_master(
+        path,
+        "CME swap",
+        "python raw_price_data.py --eris",
+    )
+
+
+def load_treasury_futures_data(path: Path = TREASURY_FUTURES_DATA_FILE) -> pd.DataFrame:
+    output = load_market_master(
+        path,
+        "Treasury futures",
+        "python raw_price_data.py --treasury-futures",
+    )
+
+    if output["ticker"].str.contains("=F", regex=False).any():
+        print(
+            "[WARN] Treasury prices/DV01 are continuous-root research proxies; "
+            "roll P&L and CTD risk are not production validated."
+        )
+
+    return output
+
+
+def merge_cme_dv01(
+    signals: pd.DataFrame,
+    master: pd.DataFrame,
+    include_tickers: bool = False,
+) -> pd.DataFrame:
     output = signals.copy()
     master = master.copy()
     output["date"] = pd.to_datetime(output["date"], errors="coerce").dt.normalize()
@@ -347,8 +380,53 @@ def merge_cme_dv01(signals: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
             )
 
         column = f"swap_dv01_per_contract_{clean_maturity(maturity)}"
+        selected_columns = ["date", "dv01"]
+        renamed_columns = {"dv01": column}
+
+        if include_tickers:
+            selected_columns.append("ticker")
+            selected_columns.append("price")
+            renamed_columns["ticker"] = f"swap_ticker_{clean_maturity(maturity)}"
+            renamed_columns["price"] = f"swap_price_{clean_maturity(maturity)}"
+
         output = output.merge(
-            maturity_rows[["date", "dv01"]].rename(columns={"dv01": column}),
+            maturity_rows[selected_columns].rename(columns=renamed_columns),
+            on="date",
+            how="left",
+        )
+
+    return output
+
+
+def merge_treasury_futures_data(
+    signals: pd.DataFrame,
+    master: pd.DataFrame,
+    include_market_data: bool = False,
+) -> pd.DataFrame:
+    output = signals.copy()
+    master = master.copy()
+    output["date"] = pd.to_datetime(output["date"], errors="coerce").dt.normalize()
+    master["date"] = pd.to_datetime(master["date"], errors="coerce").dt.normalize()
+
+    for maturity, root in TREASURY_FUTURES.items():
+        maturity_rows = master[master["ticker"].str.startswith(root)]
+
+        if maturity_rows["date"].duplicated().any():
+            raise RuntimeError(
+                f"Multiple {maturity} Treasury futures rows selected on one date."
+            )
+
+        m = clean_maturity(maturity)
+        selected_columns = ["date", "dv01"]
+        renamed_columns = {"dv01": f"treasury_dv01_per_contract_{m}"}
+
+        if include_market_data:
+            selected_columns.extend(["ticker", "price"])
+            renamed_columns["ticker"] = f"treasury_ticker_{m}"
+            renamed_columns["price"] = f"treasury_price_{m}"
+
+        output = output.merge(
+            maturity_rows[selected_columns].rename(columns=renamed_columns),
             on="date",
             how="left",
         )
@@ -386,7 +464,9 @@ def build_risk_data(
         pull_interest_rates=pull_interest_rates,
         pull_eris=pull_eris,
     )
-    output = build_risk_columns(merge_cme_dv01(signals, load_cme_swap_data()))
+    output = merge_cme_dv01(signals, load_cme_swap_data())
+    output = merge_treasury_futures_data(output, load_treasury_futures_data())
+    output = build_risk_columns(output)
     output = without_dv01_columns(output)
 
     if save:
@@ -411,6 +491,7 @@ def self_check() -> None:
             "eris_swap_2y_price_residual_vs_treasury": [0.0, 1.0, 2.0],
             "eris_swap_2y_price_residual_z": [0.0, 2.0, 2.0],
             "swap_dv01_per_contract_2y": [np.nan, 19.0, 20.0],
+            "treasury_dv01_per_contract_2y": [np.nan, 38.0, 40.0],
         }
     )
 

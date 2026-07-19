@@ -19,12 +19,14 @@ def save_derived_csv(df: pd.DataFrame, path: Path) -> pd.DataFrame:
 
 def clean_existing_derived_csvs(
     data_dir: Path,
-    master_path: Path,
+    master_paths: Path | list[Path],
 ) -> list[Path]:
     cleaned = []
+    protected = [master_paths] if isinstance(master_paths, Path) else master_paths
+    protected_paths = {path.resolve() for path in protected}
 
     for path in sorted(data_dir.glob("*.csv")):
-        if path.resolve() == master_path.resolve():
+        if path.resolve() in protected_paths:
             continue
 
         columns = pd.read_csv(path, nrows=0).columns

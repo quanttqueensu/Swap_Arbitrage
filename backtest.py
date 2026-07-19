@@ -9,19 +9,20 @@ import pandas as pd
 
 from config import (
     DATA_DIR,
+    ERIS_DOLLARS_PER_POINT,
     MATURITIES,
     RISK_DATA_FILE,
     SWAP_DV01_YEARS,
-    SWAP_RETURN_COLUMNS,
-    TREASURY_COLUMNS,
-    TREASURY_FUTURES_DV01_PER_CONTRACT,
+    TREASURY_FUTURES_DOLLARS_PER_POINT,
 )
 from data_io import save_derived_csv, without_dv01_columns
 from risk_data import (
     build_risk_data,
     dv01_per_1mm,
     load_cme_swap_data,
+    load_treasury_futures_data,
     merge_cme_dv01,
+    merge_treasury_futures_data,
 )
 from signal_data import clean_maturity
 
@@ -51,6 +52,8 @@ def clean_backtest_frame(df: pd.DataFrame) -> pd.DataFrame:
     text_cols = ["date", "best_proxy_maturity"]
     text_cols.extend(col for col in output.columns if col.startswith("treasury_future_symbol_"))
     text_cols.extend(col for col in output.columns if col.startswith("risk_block_reason"))
+    text_cols.extend(col for col in output.columns if col.startswith("swap_ticker_"))
+    text_cols.extend(col for col in output.columns if col.startswith("treasury_ticker_"))
 
     for column in output.columns.difference(text_cols):
         output[column] = pd.to_numeric(output[column], errors="coerce")
@@ -61,25 +64,33 @@ def clean_backtest_frame(df: pd.DataFrame) -> pd.DataFrame:
 def load_signal_frame(refresh_signals: bool = False) -> pd.DataFrame:
     if refresh_signals:
         risk = build_risk_data(refresh_signals=True, save=False)
-        return clean_backtest_frame(merge_cme_dv01(risk, load_cme_swap_data()))
+    else:
+        if not RISK_DATA_FILE.exists():
+            raise FileNotFoundError(f"Missing {RISK_DATA_FILE}. Run `python risk_data.py` first.")
+        risk = pd.read_csv(RISK_DATA_FILE)
 
-    if not RISK_DATA_FILE.exists():
-        raise FileNotFoundError(f"Missing {RISK_DATA_FILE}. Run `python risk_data.py` first.")
-
-    risk = pd.read_csv(RISK_DATA_FILE)
-    return clean_backtest_frame(merge_cme_dv01(risk, load_cme_swap_data()))
+    output = merge_cme_dv01(risk, load_cme_swap_data(), include_tickers=True)
+    output = merge_treasury_futures_data(
+        output,
+        load_treasury_futures_data(),
+        include_market_data=True,
+    )
+    return clean_backtest_frame(output)
 
 
 def add_maturity_pnl(df: pd.DataFrame, maturity: str, config: BacktestConfig) -> pd.DataFrame:
     output = df.copy()
     m = clean_maturity(maturity)
 
-    swap_return_col = SWAP_RETURN_COLUMNS.get(maturity)
-    treasury_col = TREASURY_COLUMNS.get(maturity)
     position_col = f"proxy_position_{m}"
     swap_dv01_col = f"swap_dv01_per_contract_{m}"
+    treasury_dv01_col = f"treasury_dv01_per_contract_{m}"
     swap_contracts_col = f"swap_futures_contracts_rounded_{m}"
     treasury_contracts_col = f"treasury_futures_contracts_rounded_{m}"
+    swap_ticker_col = f"swap_ticker_{m}"
+    treasury_ticker_col = f"treasury_ticker_{m}"
+    swap_price_col = f"swap_price_{m}"
+    treasury_price_col = f"treasury_price_{m}"
     prior_position_col = f"prior_position_{m}"
     swap_pnl_col = f"swap_pnl_{m}"
     treasury_pnl_col = f"treasury_pnl_{m}"
@@ -88,18 +99,49 @@ def add_maturity_pnl(df: pd.DataFrame, maturity: str, config: BacktestConfig) ->
     net_pnl_col = f"net_pnl_{m}"
 
     missing = (
-        not swap_return_col
-        or not treasury_col
-        or swap_return_col not in output.columns
-        or treasury_col not in output.columns
-        or swap_dv01_col not in output.columns
+        swap_dv01_col not in output.columns
+        or treasury_dv01_col not in output.columns
         or swap_contracts_col not in output.columns
         or treasury_contracts_col not in output.columns
+        or swap_price_col not in output.columns
+        or treasury_price_col not in output.columns
         or maturity not in SWAP_DV01_YEARS
-        or maturity not in TREASURY_FUTURES_DV01_PER_CONTRACT
+        or maturity not in TREASURY_FUTURES_DOLLARS_PER_POINT
     )
 
     output[prior_position_col] = output[position_col].shift(1).fillna(0.0) if position_col in output.columns else 0.0
+
+    required_market_fields = [
+        (swap_contracts_col, swap_dv01_col, swap_price_col, swap_ticker_col, "swap"),
+        (
+            treasury_contracts_col,
+            treasury_dv01_col,
+            treasury_price_col,
+            treasury_ticker_col,
+            "Treasury",
+        ),
+    ]
+
+    for contracts_col, dv01_col, price_col, ticker_col, label in required_market_fields:
+        if contracts_col not in output:
+            continue
+
+        contracts = pd.to_numeric(output[contracts_col], errors="coerce").fillna(0.0)
+        active_contracts = contracts.ne(0) | contracts.shift(1).fillna(0.0).ne(0)
+
+        if not active_contracts.any():
+            continue
+
+        dv01 = pd.to_numeric(output.get(dv01_col), errors="coerce") if dv01_col in output else pd.Series(np.nan, index=output.index)
+        price = pd.to_numeric(output.get(price_col), errors="coerce") if price_col in output else pd.Series(np.nan, index=output.index)
+        ticker = output.get(ticker_col, pd.Series(pd.NA, index=output.index)).astype("string").str.strip()
+        invalid = active_contracts & (~dv01.gt(0) | ~price.gt(0) | ticker.isna() | ticker.eq(""))
+
+        if invalid.any():
+            dates = output.loc[invalid, "date"].dt.date.astype(str).tolist()
+            raise RuntimeError(
+                f"Nonzero {maturity} {label} contracts require positive master price/DV01 and ticker: {dates}"
+            )
 
     if missing:
         output[f"swap_turnover_{m}"] = 0.0
@@ -117,27 +159,45 @@ def add_maturity_pnl(df: pd.DataFrame, maturity: str, config: BacktestConfig) ->
         / dv01_per_1mm(SWAP_DV01_YEARS[maturity])
         * 1_000_000
     ).fillna(0.0)
-    treasury_risk = (
-        output[treasury_contracts_col]
-        * TREASURY_FUTURES_DV01_PER_CONTRACT[maturity]
-    ).fillna(0.0)
-    prior_swap_notional = swap_notional.shift(1).fillna(0.0)
-    prior_treasury_risk = treasury_risk.shift(1).fillna(0.0)
-    swap_return = output[swap_return_col].fillna(0.0)
-    treasury_change_bps = output[treasury_col].diff().fillna(0.0) * 100.0
+    swap_contracts = pd.to_numeric(output[swap_contracts_col], errors="coerce").fillna(0.0)
+    treasury_contracts = pd.to_numeric(output[treasury_contracts_col], errors="coerce").fillna(0.0)
+    swap_change = pd.to_numeric(output[swap_price_col], errors="coerce").diff().fillna(0.0)
+    treasury_change = pd.to_numeric(output[treasury_price_col], errors="coerce").diff().fillna(0.0)
+    swap_roll = pd.Series(False, index=output.index)
+    treasury_roll = pd.Series(False, index=output.index)
 
-    # ponytail: proxy PnL; replace with contract marks/specs once those histories exist.
-    output[swap_pnl_col] = prior_swap_notional * swap_return
-    output[treasury_pnl_col] = -prior_treasury_risk * treasury_change_bps
+    if swap_ticker_col in output:
+        ticker = output[swap_ticker_col].astype("string").str.strip()
+        swap_roll = ticker.notna() & ticker.shift().notna() & ticker.ne(ticker.shift())
+        swap_change = swap_change.mask(swap_roll, 0.0)
+
+    if treasury_ticker_col in output:
+        ticker = output[treasury_ticker_col].astype("string").str.strip()
+        treasury_roll = ticker.notna() & ticker.shift().notna() & ticker.ne(ticker.shift())
+        treasury_change = treasury_change.mask(treasury_roll, 0.0)
+
+    output[swap_pnl_col] = swap_contracts.shift(1).fillna(0.0) * ERIS_DOLLARS_PER_POINT * swap_change
+    output[treasury_pnl_col] = (
+        treasury_contracts.shift(1).fillna(0.0)
+        * TREASURY_FUTURES_DOLLARS_PER_POINT[maturity]
+        * treasury_change
+    )
     output[gross_pnl_col] = output[swap_pnl_col] + output[treasury_pnl_col]
-    output[f"swap_turnover_{m}"] = swap_notional.diff().abs().fillna(swap_notional.abs())
+    prior_swap_notional_for_turnover = swap_notional.shift(1).fillna(0.0)
+    output[f"swap_turnover_{m}"] = (swap_notional - prior_swap_notional_for_turnover).abs()
 
-    if treasury_contracts_col in output.columns:
-        output[f"treasury_contract_turnover_{m}"] = (
-            output[treasury_contracts_col].diff().abs().fillna(output[treasury_contracts_col].abs())
-        )
-    else:
-        output[f"treasury_contract_turnover_{m}"] = 0.0
+    if swap_roll.any():
+        output.loc[swap_roll, f"swap_turnover_{m}"] = (
+            swap_notional.abs() + prior_swap_notional_for_turnover.abs()
+        ).loc[swap_roll]
+
+    prior_treasury_contracts = treasury_contracts.shift(1).fillna(0.0)
+    output[f"treasury_contract_turnover_{m}"] = (treasury_contracts - prior_treasury_contracts).abs()
+
+    if treasury_roll.any():
+        output.loc[treasury_roll, f"treasury_contract_turnover_{m}"] = (
+            treasury_contracts.abs() + prior_treasury_contracts.abs()
+        ).loc[treasury_roll]
 
     output[cost_col] = (
         output[f"swap_turnover_{m}"] * config.swap_cost_bps / 10_000.0
@@ -160,11 +220,24 @@ def add_backtest_pnl(df: pd.DataFrame, config: BacktestConfig) -> pd.DataFrame:
     output["gross_daily_pnl"] = output[gross_cols].sum(axis=1) if gross_cols else 0.0
     output["transaction_costs"] = output[cost_cols].sum(axis=1) if cost_cols else 0.0
     output["daily_pnl"] = output[net_cols].sum(axis=1) if net_cols else 0.0
+    output = add_equity_curve(output, config)
+    output = without_dv01_columns(output)
+    ticker_columns = [
+        column
+        for column in output
+        if column.startswith("swap_ticker_") or column.startswith("treasury_ticker_")
+    ]
+    return output.drop(columns=ticker_columns)
+
+
+def add_equity_curve(df: pd.DataFrame, config: BacktestConfig) -> pd.DataFrame:
+    output = df.copy()
     output["equity"] = config.initial_equity + output["daily_pnl"].cumsum()
     output["daily_return"] = output["daily_pnl"] / output["equity"].shift(1).fillna(config.initial_equity)
-    output["drawdown"] = output["equity"] - output["equity"].cummax()
-    output["drawdown_pct"] = output["drawdown"] / output["equity"].cummax()
-    return without_dv01_columns(output)
+    peak = output["equity"].cummax().clip(lower=config.initial_equity)
+    output["drawdown"] = output["equity"] - peak
+    output["drawdown_pct"] = output["drawdown"] / peak
+    return output
 
 
 def resolve_window(df: pd.DataFrame, start: str, end: str) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -293,6 +366,8 @@ def run_backtest(
     if backtest.empty:
         raise RuntimeError(f"No rows found from {start} to {end}.")
 
+    backtest = add_equity_curve(backtest, config)
+
     DATA_DIR.mkdir(exist_ok=True)
     path = output_path(start_ts, end_ts, config)
     backtest = save_derived_csv(backtest, path)
@@ -313,19 +388,22 @@ def self_check() -> None:
         pd.DataFrame(
             {
                 "date": ["2022-01-03", "2022-01-04", "2022-01-05"],
-                "dgs2": [1.00, 1.01, 1.00],
-                "eris_swap_2y_return": [0.0, 0.01, -0.02],
+                "swap_price_2y": [100.0, 100.1, 99.9],
+                "treasury_price_2y": [102.0, 101.99, 102.0],
                 "swap_futures_contracts_rounded_2y": [1, 1, 0],
                 "treasury_futures_contracts_rounded_2y": [-1, -1, 0],
                 "swap_dv01_per_contract_2y": [19.0, 19.0, 19.0],
+                "treasury_dv01_per_contract_2y": [38.0, 38.0, 38.0],
+                "swap_ticker_2y": ["YITH24", "YITH24", "YITH24"],
+                "treasury_ticker_2y": ["ZT=F", "ZT=F", "ZT=F"],
                 "treasury_future_symbol_2y": ["ZT", "ZT", "ZT"],
             }
         )
     )
 
     checked = add_backtest_pnl(df, BacktestConfig())
-    assert np.isclose(checked.loc[1, "gross_daily_pnl"], 1038.0)
-    assert np.isclose(checked.loc[2, "gross_daily_pnl"], -2038.0)
+    assert np.isclose(checked.loc[1, "gross_daily_pnl"], 120.0)
+    assert np.isclose(checked.loc[2, "gross_daily_pnl"], -220.0)
     assert not any("dv01" in column.lower() for column in checked)
     assert checked.loc[0, "treasury_future_symbol_2y"] == "ZT"
     print("[OK] self-check passed")

@@ -7,14 +7,25 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from backtest import BacktestConfig, add_backtest_pnl, first_active_range
+from backtest import BacktestConfig, add_backtest_pnl, first_active_range, run_backtest
 from data_io import clean_existing_derived_csvs, without_dv01_columns
 from raw_price_data import (
     build_cme_swap_data,
+    build_ctd_treasury_futures_data,
+    build_treasury_futures_data,
     extract_eris_swap_row,
+    parse_yahoo_chart,
     strategy_swap_prices,
+    strategy_treasury_futures_prices,
 )
-from risk_data import build_risk_data, load_cme_swap_data, merge_cme_dv01
+from risk_data import (
+    build_risk_data,
+    load_cme_swap_data,
+    load_treasury_futures_data,
+    merge_cme_dv01,
+    merge_treasury_futures_data,
+)
+from signal_data import build_signal_columns
 
 
 def sample_selected_swaps() -> pd.DataFrame:
@@ -29,6 +40,18 @@ def sample_selected_swaps() -> pd.DataFrame:
             "eris_swap_5y_price": [98.1, 98.2],
             "eris_swap_5y_return": [0.0, 0.001],
             "eris_swap_5y_dv01": [46.0, 46.1],
+        }
+    )
+
+
+def sample_treasury_prices() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                ["2024-01-02", "2024-01-02", "2024-01-03", "2024-01-03"]
+            ),
+            "ticker": ["ZT=F", "ZF=F", "ZT=F", "ZF=F"],
+            "price": [102.0, 108.0, 102.1, 108.2],
         }
     )
 
@@ -52,6 +75,7 @@ class DerivedCsvTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory)
             master_path = data_dir / "cme_swap_data.csv"
+            treasury_master_path = data_dir / "treasury_futures_data.csv"
             other_path = data_dir / "risk_data.csv"
             pd.DataFrame(
                 {
@@ -64,12 +88,21 @@ class DerivedCsvTests(unittest.TestCase):
             pd.DataFrame(
                 {
                     "date": ["2024-01-02"],
+                    "ticker": ["ZT=F"],
+                    "price": [102.0],
+                    "dv01": [38.0],
+                }
+            ).to_csv(treasury_master_path, index=False)
+            pd.DataFrame(
+                {
+                    "date": ["2024-01-02"],
                     "target_dv01_2y": [100.0],
                     "contracts": [5],
                 }
             ).to_csv(other_path, index=False)
 
-            cleaned = clean_existing_derived_csvs(data_dir, master_path)
+            master_paths = [master_path, treasury_master_path]
+            cleaned = clean_existing_derived_csvs(data_dir, master_paths)
 
             self.assertEqual(cleaned, [other_path])
             self.assertEqual(
@@ -77,9 +110,37 @@ class DerivedCsvTests(unittest.TestCase):
                 ["date", "ticker", "price", "dv01"],
             )
             self.assertEqual(
+                pd.read_csv(treasury_master_path).columns.tolist(),
+                ["date", "ticker", "price", "dv01"],
+            )
+            self.assertEqual(
                 pd.read_csv(other_path).columns.tolist(),
                 ["date", "contracts"],
             )
+            self.assertEqual(
+                clean_existing_derived_csvs(data_dir, master_paths),
+                [],
+            )
+
+
+class SignalCalendarTests(unittest.TestCase):
+    def test_signal_calendar_requires_marks_for_all_traded_legs(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
+                "eris_swap_2y_price": [100.0, 100.1, 100.2],
+                "eris_swap_5y_price": [101.0, 101.1, 101.2],
+                "treasury_futures_2y_price": [102.0, 102.1, 102.2],
+                "treasury_futures_5y_price": [108.0, float("nan"), 108.2],
+            }
+        )
+
+        output = build_signal_columns(source)
+
+        self.assertEqual(
+            output["date"].tolist(),
+            [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-04")],
+        )
 
 
 class CmeMasterTests(unittest.TestCase):
@@ -105,6 +166,38 @@ class CmeMasterTests(unittest.TestCase):
         self.assertEqual(output["eris_swap_2y_ticker"], "YITH24")
         self.assertEqual(output["eris_swap_2y_price"], 99.1)
         self.assertEqual(output["eris_swap_2y_dv01"], 19.0)
+
+    def test_active_contract_extraction_rolls_shared_state(self) -> None:
+        active_contracts: dict[str, str] = {}
+        first_day = pd.DataFrame(
+            {
+                "Symbol": ["YITH24", "YITM24"],
+                "ExchangeSymbol (EX005)": ["YIT", "YIT"],
+                "FinalSettlementPrice": [99.1, 98.0],
+                "EvaluationDate": ["01/02/2024", "01/02/2024"],
+                "LastTradeDate": ["03/18/2024", "06/17/2024"],
+                "FloatingIndex": ["SOFR", "SOFR"],
+                "DV01": [19.0, 20.5],
+            }
+        )
+        second_day = first_day.copy()
+        second_day["EvaluationDate"] = "01/03/2024"
+        second_day["DV01"] = [10.0, 19.2]
+
+        first = extract_eris_swap_row(
+            first_day,
+            pd.Timestamp("2024-01-02"),
+            active_contracts=active_contracts,
+        )
+        second = extract_eris_swap_row(
+            second_day,
+            pd.Timestamp("2024-01-03"),
+            active_contracts=active_contracts,
+        )
+
+        self.assertEqual(first["eris_swap_2y_ticker"], "YITH24")
+        self.assertEqual(second["eris_swap_2y_ticker"], "YITM24")
+        self.assertEqual(active_contracts["2Y"], "YITM24")
 
     def test_builds_sorted_four_column_master(self) -> None:
         output = build_cme_swap_data(sample_selected_swaps())
@@ -137,7 +230,132 @@ class CmeMasterTests(unittest.TestCase):
                 "eris_swap_5y_return",
             ],
         )
+        self.assertEqual(output["eris_swap_2y_price"].tolist(), [99.1, 99.1])
+        self.assertEqual(output["eris_swap_2y_return"].tolist(), [0.0, 0.0])
 
+
+class TreasuryMasterTests(unittest.TestCase):
+    def test_parses_yahoo_chart_into_long_price_rows(self) -> None:
+        text = """{
+          "chart": {"result": [{
+            "timestamp": [1704196800, 1704283200],
+            "indicators": {"quote": [{"close": [102.25, null]}]}
+          }], "error": null}
+        }"""
+
+        output = parse_yahoo_chart(text, "ZT=F")
+
+        self.assertEqual(output.columns.tolist(), ["date", "ticker", "price"])
+        self.assertEqual(output["ticker"].tolist(), ["ZT=F"])
+        self.assertEqual(output["price"].tolist(), [102.25])
+
+    def test_builds_treasury_master_from_cme_hedge_ratios(self) -> None:
+        output = build_treasury_futures_data(
+            sample_treasury_prices(),
+            build_cme_swap_data(sample_selected_swaps()),
+        )
+
+        self.assertEqual(output.columns.tolist(), ["date", "ticker", "price", "dv01"])
+        self.assertEqual(output["dv01"].tolist(), [46.0, 38.0, 46.1, 38.2])
+        self.assertFalse(output.duplicated(["date", "ticker"]).any())
+
+    def test_strategy_treasury_prices_are_wide_and_have_no_dv01(self) -> None:
+        master = build_treasury_futures_data(
+            sample_treasury_prices(),
+            build_cme_swap_data(sample_selected_swaps()),
+        )
+
+        output = strategy_treasury_futures_prices(master)
+
+        self.assertEqual(
+            output.columns.tolist(),
+            [
+                "date",
+                "treasury_futures_2y_price",
+                "treasury_futures_2y_return",
+                "treasury_futures_5y_price",
+                "treasury_futures_5y_return",
+            ],
+        )
+        self.assertFalse(any("dv01" in column.lower() for column in output))
+        self.assertFalse(any(column.endswith("ticker") for column in output))
+
+    def test_builds_contract_treasury_master_from_ctd_inputs(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": ["2024-01-02", "2024-01-02"],
+                "ticker": ["ZTH24", "ZFH24"],
+                "price": [102.0, 108.0],
+                "ctd_cash_dv01_per_100k": [20.0, 40.0],
+                "conversion_factor": [0.8, 0.8],
+            }
+        )
+
+        output = build_ctd_treasury_futures_data(source)
+
+        self.assertEqual(output.columns.tolist(), ["date", "ticker", "price", "dv01"])
+        self.assertEqual(output["ticker"].tolist(), ["ZFH24", "ZTH24"])
+        self.assertEqual(output["dv01"].tolist(), [50.0, 50.0])
+
+    def test_ctd_master_rejects_nonpositive_conversion_factor(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": ["2024-01-02"],
+                "ticker": ["ZTH24"],
+                "price": [102.0],
+                "ctd_cash_dv01_per_100k": [20.0],
+                "conversion_factor": [0.0],
+            }
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "CTD Treasury futures input"):
+            build_ctd_treasury_futures_data(source)
+
+    def test_ctd_master_requires_both_strategy_roots(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": ["2024-01-02"],
+                "ticker": ["ZTH24"],
+                "price": [102.0],
+                "ctd_cash_dv01_per_100k": [20.0],
+                "conversion_factor": [0.8],
+            }
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "requires ZT and ZF"):
+            build_ctd_treasury_futures_data(source)
+
+    def test_ctd_master_rejects_overlapping_same_root_contracts(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": ["2024-01-02", "2024-01-02", "2024-01-02"],
+                "ticker": ["ZTH24", "ZTM24", "ZFH24"],
+                "price": [102.0, 101.9, 108.0],
+                "ctd_cash_dv01_per_100k": [20.0, 20.1, 40.0],
+                "conversion_factor": [0.8, 0.81, 0.8],
+            }
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Multiple 2Y"):
+            build_ctd_treasury_futures_data(source)
+
+    def test_full_ticker_treasury_roll_is_back_adjusted(self) -> None:
+        master = pd.DataFrame(
+            {
+                "date": pd.to_datetime(
+                    ["2024-03-28", "2024-03-28", "2024-03-29", "2024-03-29"]
+                ),
+                "ticker": ["ZFH24", "ZTH24", "ZFM24", "ZTM24"],
+                "price": [108.0, 102.0, 106.0, 101.0],
+                "dv01": [50.0, 50.0, 50.0, 50.0],
+            }
+        )
+
+        output = strategy_treasury_futures_prices(master)
+
+        self.assertEqual(output["treasury_futures_2y_price"].tolist(), [102.0, 102.0])
+        self.assertEqual(output["treasury_futures_2y_return"].iloc[1], 0.0)
+        self.assertEqual(output["treasury_futures_5y_price"].tolist(), [108.0, 108.0])
 
 class RiskMasterTests(unittest.TestCase):
     def test_loader_rejects_duplicate_date_ticker(self) -> None:
@@ -153,6 +371,21 @@ class RiskMasterTests(unittest.TestCase):
             ).to_csv(path, index=False)
 
             with self.assertRaisesRegex(RuntimeError, "duplicate date/ticker"):
+                load_cme_swap_data(path)
+
+    def test_loader_rejects_nonpositive_price(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cme_swap_data.csv"
+            pd.DataFrame(
+                {
+                    "date": ["2024-01-02"],
+                    "ticker": ["YITH24"],
+                    "price": [0.0],
+                    "dv01": [19.0],
+                }
+            ).to_csv(path, index=False)
+
+            with self.assertRaisesRegex(RuntimeError, "missing or invalid"):
                 load_cme_swap_data(path)
 
     def test_exact_date_merge_does_not_forward_fill(self) -> None:
@@ -177,6 +410,30 @@ class RiskMasterTests(unittest.TestCase):
         self.assertEqual(output.loc[2, "swap_dv01_per_contract_2y"], 20.0)
         self.assertEqual(output.loc[0, "swap_dv01_per_contract_5y"], 46.0)
 
+    def test_treasury_loader_and_exact_date_merge(self) -> None:
+        master = pd.DataFrame(
+            {
+                "date": ["2024-01-02", "2024-01-04"],
+                "ticker": ["ZT=F", "ZT=F"],
+                "price": [102.0, 102.1],
+                "dv01": [38.0, 38.1],
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "treasury_futures_data.csv"
+            master.to_csv(path, index=False)
+            loaded = load_treasury_futures_data(path)
+
+        signals = pd.DataFrame(
+            {"date": ["2024-01-02", "2024-01-03", "2024-01-04"]}
+        )
+        output = merge_treasury_futures_data(signals, loaded)
+
+        self.assertEqual(output.loc[0, "treasury_dv01_per_contract_2y"], 38.0)
+        self.assertTrue(pd.isna(output.loc[1, "treasury_dv01_per_contract_2y"]))
+        self.assertEqual(output.loc[2, "treasury_dv01_per_contract_2y"], 38.1)
+
     def test_build_risk_uses_master_and_returns_no_dv01_columns(self) -> None:
         signals = pd.DataFrame(
             {
@@ -194,16 +451,97 @@ class RiskMasterTests(unittest.TestCase):
                 "dv01": [20.0],
             }
         )
+        treasury_master = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "ticker": ["ZT=F"],
+                "price": [102.0],
+                "dv01": [40.0],
+            }
+        )
 
         with (
             patch("risk_data.load_signal_or_build", return_value=signals),
             patch("risk_data.load_cme_swap_data", return_value=master),
+            patch("risk_data.load_treasury_futures_data", return_value=treasury_master),
         ):
             output = build_risk_data(save=False)
 
         self.assertEqual(output.loc[0, "swap_futures_contracts_rounded_2y"], 150)
+        self.assertEqual(output.loc[0, "treasury_futures_contracts_rounded_2y"], -75)
         self.assertFalse(any("dv01" in column.lower() for column in output))
         self.assertEqual(output.loc[0, "risk_allowed"], 1)
+
+    def test_active_risk_is_blocked_for_missing_or_nonpositive_dv01(self) -> None:
+        signals = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+                "proxy_position_2y": [1, 1],
+                "eris_swap_2y_price_residual_vs_treasury": [1.0, 1.0],
+                "eris_swap_2y_price_residual_z": [2.0, 2.0],
+            }
+        )
+        master = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "ticker": ["YITH24"],
+                "price": [99.0],
+                "dv01": [0.0],
+            }
+        )
+        treasury_master = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+                "ticker": ["ZT=F", "ZT=F"],
+                "price": [102.0, 102.1],
+                "dv01": [38.0, 38.0],
+            }
+        )
+
+        with (
+            patch("risk_data.load_signal_or_build", return_value=signals),
+            patch("risk_data.load_cme_swap_data", return_value=master),
+            patch("risk_data.load_treasury_futures_data", return_value=treasury_master),
+        ):
+            output = build_risk_data(save=False)
+
+        self.assertEqual(output["swap_futures_contracts_rounded_2y"].tolist(), [0, 0])
+        self.assertEqual(output["risk_allowed"].tolist(), [0, 0])
+        self.assertTrue(
+            output["risk_block_reason"].str.contains("missing_actual_swap_dv01").all()
+        )
+
+    def test_missing_treasury_dv01_blocks_both_legs(self) -> None:
+        signals = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "proxy_position_2y": [1],
+                "eris_swap_2y_price_residual_vs_treasury": [1.0],
+                "eris_swap_2y_price_residual_z": [2.0],
+            }
+        )
+        swap_master = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "ticker": ["YITH24"],
+                "price": [99.0],
+                "dv01": [19.0],
+            }
+        )
+        treasury_master = pd.DataFrame(
+            columns=["date", "ticker", "price", "dv01"]
+        )
+
+        with (
+            patch("risk_data.load_signal_or_build", return_value=signals),
+            patch("risk_data.load_cme_swap_data", return_value=swap_master),
+            patch("risk_data.load_treasury_futures_data", return_value=treasury_master),
+        ):
+            output = build_risk_data(save=False)
+
+        self.assertEqual(output.loc[0, "swap_futures_contracts_rounded_2y"], 0)
+        self.assertEqual(output.loc[0, "treasury_futures_contracts_rounded_2y"], 0)
+        self.assertIn("missing_treasury_dv01_proxy", output.loc[0, "risk_block_reason"])
 
 
 class BacktestMasterTests(unittest.TestCase):
@@ -229,20 +567,115 @@ class BacktestMasterTests(unittest.TestCase):
                 "date": pd.to_datetime(
                     ["2024-01-02", "2024-01-03", "2024-01-04"]
                 ),
-                "dgs2": [1.00, 1.01, 1.00],
-                "eris_swap_2y_return": [0.0, 0.01, -0.02],
+                "swap_price_2y": [100.0, 100.1, 99.9],
+                "treasury_price_2y": [102.0, 101.99, 102.0],
                 "swap_futures_contracts_rounded_2y": [1, 1, 0],
                 "treasury_futures_contracts_rounded_2y": [-1, -1, 0],
                 "swap_dv01_per_contract_2y": [19.0, 19.0, 19.0],
-                "treasury_future_symbol_2y": ["ZT", "ZT", "ZT"],
+                "treasury_dv01_per_contract_2y": [38.0, 38.0, 38.0],
+                "swap_ticker_2y": ["YITH24", "YITH24", "YITH24"],
+                "treasury_ticker_2y": ["ZT=F", "ZT=F", "ZT=F"],
             }
         )
 
         output = add_backtest_pnl(source, BacktestConfig())
 
-        self.assertAlmostEqual(output.loc[1, "gross_daily_pnl"], 1038.0)
-        self.assertAlmostEqual(output.loc[2, "gross_daily_pnl"], -2038.0)
+        self.assertAlmostEqual(output.loc[1, "gross_daily_pnl"], 120.0)
+        self.assertAlmostEqual(output.loc[2, "gross_daily_pnl"], -220.0)
         self.assertFalse(any("dv01" in column.lower() for column in output))
+
+    def test_nonzero_contracts_require_positive_master_dv01(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "swap_price_2y": [100.0],
+                "treasury_price_2y": [102.0],
+                "swap_futures_contracts_rounded_2y": [1],
+                "treasury_futures_contracts_rounded_2y": [-1],
+                "swap_dv01_per_contract_2y": [float("nan")],
+                "treasury_dv01_per_contract_2y": [38.0],
+                "swap_ticker_2y": ["YITH24"],
+                "treasury_ticker_2y": ["ZT=F"],
+            }
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "positive master price/DV01"):
+            add_backtest_pnl(source, BacktestConfig())
+
+    def test_prior_exposure_requires_current_market_mark(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+                "swap_price_2y": [100.0, float("nan")],
+                "treasury_price_2y": [102.0, 102.1],
+                "swap_futures_contracts_rounded_2y": [1, 0],
+                "treasury_futures_contracts_rounded_2y": [-1, 0],
+                "swap_dv01_per_contract_2y": [19.0, float("nan")],
+                "treasury_dv01_per_contract_2y": [38.0, 38.0],
+                "swap_ticker_2y": ["YITH24", pd.NA],
+                "treasury_ticker_2y": ["ZT=F", "ZT=F"],
+            }
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "positive master price/DV01"):
+            add_backtest_pnl(source, BacktestConfig())
+
+    def test_contract_roll_uses_zero_return_and_close_open_turnover(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": pd.to_datetime(
+                    ["2024-01-02", "2024-01-03", "2024-01-04"]
+                ),
+                "swap_price_2y": [100.0, 100.1, 125.0],
+                "treasury_price_2y": [102.0, 102.0, 102.0],
+                "swap_futures_contracts_rounded_2y": [1, 1, 1],
+                "treasury_futures_contracts_rounded_2y": [0, 0, 0],
+                "swap_dv01_per_contract_2y": [19.0, 19.0, 19.0],
+                "treasury_dv01_per_contract_2y": [38.0, 38.0, 38.0],
+                "swap_ticker_2y": ["YITH24", "YITH24", "YITM24"],
+                "treasury_ticker_2y": ["ZT=F", "ZT=F", "ZT=F"],
+            }
+        )
+
+        output = add_backtest_pnl(source, BacktestConfig(swap_cost_bps=1.0))
+
+        self.assertEqual(output.loc[2, "swap_pnl_2y"], 0.0)
+        self.assertAlmostEqual(output.loc[2, "swap_turnover_2y"], 200_000.0)
+        self.assertAlmostEqual(output.loc[2, "transaction_cost_2y"], 20.0)
+        self.assertFalse(any(column.startswith("swap_ticker_") for column in output))
+
+    def test_filtered_backtest_rebases_equity_to_requested_window(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": pd.to_datetime(
+                    ["2024-01-02", "2024-01-03", "2024-01-04"]
+                ),
+                "swap_price_2y": [100.0, 100.1, 99.9],
+                "treasury_price_2y": [102.0, 101.99, 102.0],
+                "swap_futures_contracts_rounded_2y": [1, 1, 0],
+                "treasury_futures_contracts_rounded_2y": [-1, -1, 0],
+                "swap_dv01_per_contract_2y": [19.0, 19.0, 19.0],
+                "treasury_dv01_per_contract_2y": [38.0, 38.0, 38.0],
+                "swap_ticker_2y": ["YITH24", "YITH24", "YITH24"],
+                "treasury_ticker_2y": ["ZT=F", "ZT=F", "ZT=F"],
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch("backtest.load_signal_frame", return_value=source),
+                patch("backtest.DATA_DIR", Path(directory)),
+            ):
+                output = run_backtest(start="2024-01-03", end="2024-01-04")
+
+        self.assertAlmostEqual(
+            output.iloc[-1]["equity"],
+            1_000_000.0 + output["daily_pnl"].sum(),
+        )
+        self.assertAlmostEqual(
+            output.iloc[0]["daily_return"],
+            output.iloc[0]["daily_pnl"] / 1_000_000.0,
+        )
 
 
 if __name__ == "__main__":
