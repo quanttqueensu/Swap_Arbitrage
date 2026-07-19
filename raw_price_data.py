@@ -6,7 +6,6 @@ import json
 import random
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -18,24 +17,12 @@ import pandas as pd
 from config import (
     BACKOFF_CAP_SECONDS,
     CACHE_DIR,
+    CME_SWAP_DATA_FILE,
     DATA_DIR,
     END_DATE,
     ERIS_PUBLIC_BASE_URL,
     ERIS_PUBLIC_START_DATE,
     ERIS_SOFR_SWAP_FUTURES,
-    IBKR_BAR_SIZE,
-    IBKR_CLIENT_ID,
-    IBKR_DURATION,
-    IBKR_EXCHANGES_TO_TRY,
-    IBKR_HOST,
-    IBKR_MARKET_DATA_FILE,
-    IBKR_PORT,
-    IBKR_SWAP_COLUMNS,
-    IBKR_SWAP_RETURN_COLUMNS,
-    IBKR_TREASURY_COLUMNS,
-    IBKR_TREASURY_RETURN_COLUMNS,
-    IBKR_USE_RTH,
-    IBKR_WHAT_TO_SHOW,
     INTEREST_RATE_COLUMNS,
     MATURITIES,
     NYFED_BASE_URL,
@@ -50,14 +37,15 @@ from config import (
     SWAP_DV01_YEARS,
     SWAP_RATES_FILE,
     SWAP_RETURN_COLUMNS,
+    SWAP_TICKER_COLUMNS,
     TIMEOUT,
-    TREASURY_FUTURES,
     TREASURY_COLUMN_MAP,
     TREASURY_PULL_SLEEP_SECONDS,
     TREASURY_XML_BASE_URL,
     TREASURY_XML_DATASET,
     USER_AGENT,
 )
+from data_io import clean_existing_derived_csvs, save_derived_csv, without_dv01_columns
 
 
 def ensure_directories() -> None:
@@ -76,7 +64,8 @@ def clean_price_frame(df: pd.DataFrame) -> pd.DataFrame:
     output = output.drop_duplicates(subset=["date"])
     output = output.sort_values("date").reset_index(drop=True)
 
-    numeric_cols = output.columns.difference(["date"])
+    text_cols = ["date", *[column for column in output if column.endswith("_ticker")]]
+    numeric_cols = output.columns.difference(text_cols)
     output[numeric_cols] = output[numeric_cols].apply(pd.to_numeric, errors="coerce")
 
     return output
@@ -394,6 +383,7 @@ def extract_eris_swap_row(
     for maturity, symbol in ERIS_SOFR_SWAP_FUTURES.items():
         price_col = SWAP_COLUMNS[maturity]
         dv01_col = SWAP_DV01_COLUMNS.get(maturity)
+        ticker_col = SWAP_TICKER_COLUMNS.get(maturity)
         candidates = frame[frame["ExchangeSymbol (EX005)"].eq(symbol)].copy()
         candidates = candidates[candidates["LastTradeDate"] >= row_date]
 
@@ -450,6 +440,9 @@ def extract_eris_swap_row(
 
         row[price_col] = price
 
+        if ticker_col and "Symbol" in selected.index and pd.notna(selected["Symbol"]):
+            row[ticker_col] = str(selected["Symbol"]).strip()
+
         if dv01_col and "DV01" in selected.index:
             dv01 = pd.to_numeric(selected["DV01"], errors="coerce")
 
@@ -504,6 +497,7 @@ def get_eris_public_swap_data(start_date: str, end_date: str | None = None) -> p
         preferred_order.extend(
             col
             for col in [
+                SWAP_TICKER_COLUMNS.get(maturity),
                 SWAP_COLUMNS.get(maturity),
                 SWAP_RETURN_COLUMNS.get(maturity),
                 SWAP_DV01_COLUMNS.get(maturity),
@@ -519,209 +513,54 @@ def get_eris_public_swap_data(start_date: str, end_date: str | None = None) -> p
     return output[preferred_order]
 
 
-def ibkr_tools():
-    try:
-        from ib_insync import IB, Future, util
-    except ImportError as exc:
-        raise ImportError("Missing dependency: ib_insync. Install it with: pip install ib_insync") from exc
-
-    return IB, Future, util
-
-
-def connect_ibkr():
-    IB, _, _ = ibkr_tools()
-    ib = IB()
-
-    print(f"[CONNECT] IBKR {IBKR_HOST}:{IBKR_PORT}, clientId={IBKR_CLIENT_ID}")
-    ib.connect(host=IBKR_HOST, port=IBKR_PORT, clientId=IBKR_CLIENT_ID, timeout=20)
-
-    if not ib.isConnected():
-        raise RuntimeError("IBKR connection failed.")
-
-    print("[OK] Connected to IBKR")
-    return ib
-
-
-def parse_contract_month(value: str) -> pd.Timestamp | None:
-    if not value:
-        return None
-
-    for fmt in ["%Y%m%d", "%Y%m"]:
-        try:
-            return pd.to_datetime(datetime.strptime(str(value).strip(), fmt))
-        except ValueError:
-            pass
-
-    return None
-
-
-def pick_front_contract(details) -> object | None:
-    today = pd.Timestamp.today().normalize()
-    candidates = []
-
-    for item in details:
-        expiry = parse_contract_month(getattr(item.contract, "lastTradeDateOrContractMonth", ""))
-
-        if expiry is not None and expiry >= today:
-            candidates.append((expiry, item.contract))
-
-    return None if not candidates else sorted(candidates, key=lambda x: x[0])[0][1]
-
-
-def resolve_front_future(ib, symbol: str, exchanges_to_try: list[str]) -> object | None:
-    _, Future, _ = ibkr_tools()
-
-    for exchange in exchanges_to_try:
-        print(f"[RESOLVE] Trying {symbol} on {exchange}")
-
-        try:
-            details = ib.reqContractDetails(Future(symbol=symbol, exchange=exchange, currency="USD"))
-
-            if not details:
-                print(f"[WARN] No contract details for {symbol} on {exchange}")
-                continue
-
-            front = pick_front_contract(details)
-
-            if front is None:
-                print(f"[WARN] Found details for {symbol} on {exchange}, but no live contract.")
-                continue
-
-            qualified = ib.qualifyContracts(front)
-
-            if qualified:
-                selected = qualified[0]
-                print(
-                    "[OK] Resolved "
-                    f"{symbol}: localSymbol={selected.localSymbol}, "
-                    f"expiry={selected.lastTradeDateOrContractMonth}, "
-                    f"exchange={selected.exchange}"
-                )
-                return selected
-
-        except Exception as error:
-            print(f"[WARN] Resolve failed for {symbol} on {exchange}: {error}")
-
-        time.sleep(0.25)
-
-    return None
-
-
-def request_daily_bars(ib, contract, symbol: str) -> pd.DataFrame:
-    _, _, util = ibkr_tools()
-    print(f"[PULL] Historical daily bars for {symbol} / {contract.localSymbol}")
-
-    bars = ib.reqHistoricalData(
-        contract,
-        endDateTime="",
-        durationStr=IBKR_DURATION,
-        barSizeSetting=IBKR_BAR_SIZE,
-        whatToShow=IBKR_WHAT_TO_SHOW,
-        useRTH=IBKR_USE_RTH,
-        formatDate=1,
-        keepUpToDate=False,
-    )
-
-    if not bars:
-        raise RuntimeError(f"No historical bars returned for {symbol} / {contract.localSymbol}")
-
-    df = util.df(bars)
-
-    if df.empty:
-        raise RuntimeError(f"IBKR returned empty dataframe for {symbol} / {contract.localSymbol}")
-
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.tz_localize(None)
-    return clean_price_frame(df[["date", "close"]])
-
-
-def get_one_ibkr_future_series(
-    ib,
-    symbol: str,
-    output_col: str,
-    return_col: str,
-    label: str,
-) -> pd.DataFrame:
-    contract = resolve_front_future(ib=ib, symbol=symbol, exchanges_to_try=IBKR_EXCHANGES_TO_TRY)
-
-    if contract is None:
-        raise RuntimeError(f"Could not resolve IBKR contract for {label} / {symbol}")
-
-    df = request_daily_bars(ib=ib, contract=contract, symbol=symbol).rename(columns={"close": output_col})
-    df[return_col] = df[output_col].pct_change()
-    print(f"[OK] {label} {symbol}: {len(df):,} rows from {df['date'].min().date()} to {df['date'].max().date()}")
-    return df
-
-
-def get_ibkr_traded_futures_data(ib) -> pd.DataFrame:
+def build_cme_swap_data(eris: pd.DataFrame) -> pd.DataFrame:
     frames = []
-    failures = {}
 
     for maturity in MATURITIES:
-        if maturity in ERIS_SOFR_SWAP_FUTURES and maturity in IBKR_SWAP_COLUMNS:
-            symbol = ERIS_SOFR_SWAP_FUTURES[maturity]
+        ticker_col = SWAP_TICKER_COLUMNS.get(maturity)
+        price_col = SWAP_COLUMNS.get(maturity)
+        dv01_col = SWAP_DV01_COLUMNS.get(maturity)
 
-            try:
-                frames.append(
-                    get_one_ibkr_future_series(
-                        ib=ib,
-                        symbol=symbol,
-                        output_col=IBKR_SWAP_COLUMNS[maturity],
-                        return_col=IBKR_SWAP_RETURN_COLUMNS[maturity],
-                        label=f"IBKR Eris {maturity}",
-                    )
-                )
-            except Exception as error:
-                failures[f"swap_{maturity}"] = str(error)
-                print(f"[ERROR] Could not load IBKR {maturity} swap future: {error}")
+        if not ticker_col or not price_col or not dv01_col:
+            continue
 
-            time.sleep(1.0)
+        columns = {"date", ticker_col, price_col, dv01_col}
 
-        if maturity in TREASURY_FUTURES and maturity in IBKR_TREASURY_COLUMNS:
-            symbol = TREASURY_FUTURES[maturity]
+        if not columns.issubset(eris.columns):
+            continue
 
-            try:
-                frames.append(
-                    get_one_ibkr_future_series(
-                        ib=ib,
-                        symbol=symbol,
-                        output_col=IBKR_TREASURY_COLUMNS[maturity],
-                        return_col=IBKR_TREASURY_RETURN_COLUMNS[maturity],
-                        label=f"IBKR Treasury {maturity}",
-                    )
-                )
-            except Exception as error:
-                failures[f"treasury_{maturity}"] = str(error)
-                print(f"[ERROR] Could not load IBKR {maturity} Treasury future: {error}")
-
-            time.sleep(1.0)
-
-    if not frames:
-        for instrument, error in failures.items():
-            print(f"{instrument}: {error}")
-
-        raise RuntimeError("No IBKR traded futures data loaded.")
-
-    merged = frames[0]
-
-    for frame in frames[1:]:
-        merged = pd.merge(merged, frame, on="date", how="outer")
-
-    preferred_order = ["date"]
-
-    for maturity in MATURITIES:
-        preferred_order.extend(
-            col
-            for col in [
-                IBKR_SWAP_COLUMNS.get(maturity),
-                IBKR_SWAP_RETURN_COLUMNS.get(maturity),
-                IBKR_TREASURY_COLUMNS.get(maturity),
-                IBKR_TREASURY_RETURN_COLUMNS.get(maturity),
-            ]
-            if col in merged.columns
+        frames.append(
+            eris[["date", ticker_col, price_col, dv01_col]].rename(
+                columns={
+                    ticker_col: "ticker",
+                    price_col: "price",
+                    dv01_col: "dv01",
+                }
+            )
         )
 
-    output = clean_price_frame(merged)
-    return output[preferred_order]
+    if not frames:
+        raise RuntimeError("No selected CME swap rows available for the master file.")
+
+    output = pd.concat(frames, ignore_index=True)
+    output["date"] = pd.to_datetime(output["date"], errors="coerce").dt.normalize()
+    output["ticker"] = output["ticker"].astype("string").str.strip()
+    output["price"] = pd.to_numeric(output["price"], errors="coerce")
+    output["dv01"] = pd.to_numeric(output["dv01"], errors="coerce")
+    output = output.dropna(subset=["date", "ticker", "price", "dv01"])
+    output["ticker"] = output["ticker"].astype("str")
+    output = output[(output["ticker"] != "") & (output["dv01"] > 0)]
+
+    if output.duplicated(["date", "ticker"]).any():
+        raise RuntimeError("Duplicate date/ticker rows in CME swap master data.")
+
+    return output.sort_values(["date", "ticker"]).reset_index(drop=True)
+
+
+def strategy_swap_prices(eris: pd.DataFrame) -> pd.DataFrame:
+    output = without_dv01_columns(eris)
+    ticker_columns = [column for column in output if column.endswith("_ticker")]
+    return output.drop(columns=ticker_columns)
 
 
 def merge_price_data(*frames: pd.DataFrame | None) -> pd.DataFrame:
@@ -742,19 +581,16 @@ def build_raw_price_data(
     refresh_interest_rates: bool = False,
     refresh_treasury: bool = False,
     refresh_eris: bool = False,
-    refresh_swaps: bool = False,
-    refresh_ibkr: bool = False,
     start_date: str = START_DATE,
     end_date: str | None = END_DATE,
     save: bool = True,
 ) -> pd.DataFrame:
     ensure_directories()
     refresh_interest_rates = refresh_interest_rates or refresh_treasury
-    refresh_eris = refresh_eris or refresh_swaps
 
     if refresh_interest_rates or not RATES_FILE.exists():
         rates = build_rates_dataset(start_date=start_date, end_date=end_date)
-        rates.to_csv(RATES_FILE, index=False)
+        save_derived_csv(rates, RATES_FILE)
         print(f"[SAVED] {RATES_FILE}")
     else:
         rates = load_csv(RATES_FILE)
@@ -762,35 +598,26 @@ def build_raw_price_data(
     eris = None
 
     if refresh_eris:
-        eris = get_eris_public_swap_data(start_date=start_date, end_date=end_date)
-        eris.to_csv(SWAP_RATES_FILE, index=False)
+        selected = get_eris_public_swap_data(start_date=start_date, end_date=end_date)
+        master = build_cme_swap_data(selected)
+        master.to_csv(CME_SWAP_DATA_FILE, index=False, date_format="%Y-%m-%d")
+        print(f"[SAVED] {CME_SWAP_DATA_FILE}")
+        eris = strategy_swap_prices(selected)
+        save_derived_csv(eris, SWAP_RATES_FILE)
         print(f"[SAVED] {SWAP_RATES_FILE}")
 
     elif SWAP_RATES_FILE.exists():
         eris = load_csv(SWAP_RATES_FILE)
 
-    ibkr = None
-
-    if refresh_ibkr:
-        live = connect_ibkr()
-
-        try:
-            ibkr = get_ibkr_traded_futures_data(live)
-        finally:
-            live.disconnect()
-            print("[DISCONNECT] IBKR")
-
-        ibkr.to_csv(IBKR_MARKET_DATA_FILE, index=False)
-        print(f"[SAVED] {IBKR_MARKET_DATA_FILE}")
-
-    elif IBKR_MARKET_DATA_FILE.exists():
-        ibkr = load_csv(IBKR_MARKET_DATA_FILE)
-
-    raw = merge_price_data(rates, eris, ibkr)
+    raw = merge_price_data(rates, eris)
 
     if save:
-        raw.to_csv(RAW_PRICE_DATA_FILE, index=False)
+        raw = save_derived_csv(raw, RAW_PRICE_DATA_FILE)
         print(f"[SAVED] {RAW_PRICE_DATA_FILE}")
+        cleaned = clean_existing_derived_csvs(DATA_DIR, CME_SWAP_DATA_FILE)
+
+        for path in cleaned:
+            print(f"[CLEANED DV01] {path}")
 
     print(f"[RAW PRICE DATA] rows={len(raw):,} range={raw['date'].min().date()} to {raw['date'].max().date()}")
     return raw
@@ -798,13 +625,21 @@ def build_raw_price_data(
 
 def self_check() -> None:
     rates = pd.DataFrame({"date": ["2024-01-02"], "dgs2": [4.1], "sofr": [5.3]})
-    eris = pd.DataFrame({"date": ["2024-01-02"], "eris_swap_2y_price": [100.0], "eris_swap_2y_dv01": [19.0]})
-    ibkr = pd.DataFrame({"date": ["2024-01-02"], "ibkr_treasury_2y_price": [102.0]})
-    merged = merge_price_data(rates, eris, ibkr)
+    selected = pd.DataFrame(
+        {
+            "date": ["2024-01-02"],
+            "eris_swap_2y_ticker": ["YITH24"],
+            "eris_swap_2y_price": [100.0],
+            "eris_swap_2y_dv01": [19.0],
+        }
+    )
+    master = build_cme_swap_data(selected)
+    merged = merge_price_data(rates, strategy_swap_prices(selected))
 
     assert merged.loc[0, "dgs2"] == 4.1
-    assert merged.loc[0, "eris_swap_2y_dv01"] == 19.0
-    assert merged.loc[0, "ibkr_treasury_2y_price"] == 102.0
+    assert "eris_swap_2y_dv01" not in merged
+    assert master.loc[0, "ticker"] == "YITH24"
+    assert master.loc[0, "dv01"] == 19.0
     print("[OK] self-check passed")
 
 
@@ -826,7 +661,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Refresh public Eris swap settlement and DV01 data.",
     )
-    parser.add_argument("--ibkr", action="store_true", help="Refresh IBKR bars for the traded futures universe.")
     parser.add_argument("--start", default=START_DATE)
     parser.add_argument("--end", default=END_DATE)
     parser.add_argument("--self-check", action="store_true")
@@ -843,7 +677,6 @@ def main() -> None:
     build_raw_price_data(
         refresh_interest_rates=args.interest_rates,
         refresh_eris=args.eris,
-        refresh_ibkr=args.ibkr,
         start_date=args.start,
         end_date=args.end,
     )

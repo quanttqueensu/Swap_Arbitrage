@@ -193,13 +193,11 @@ def load_raw_or_build(
     refresh_raw: bool = False,
     pull_interest_rates: bool = False,
     pull_eris: bool = False,
-    pull_ibkr: bool = False,
 ) -> pd.DataFrame:
-    if refresh_raw or pull_interest_rates or pull_eris or pull_ibkr or not RAW_PRICE_DATA_FILE.exists():
+    if refresh_raw or pull_interest_rates or pull_eris or not RAW_PRICE_DATA_FILE.exists():
         return build_raw_price_data(
             refresh_interest_rates=pull_interest_rates,
             refresh_eris=pull_eris,
-            refresh_ibkr=pull_ibkr,
         )
 
     return load_csv(RAW_PRICE_DATA_FILE)
@@ -209,14 +207,12 @@ def build_signal_data(
     refresh_raw: bool = False,
     pull_interest_rates: bool = False,
     pull_eris: bool = False,
-    pull_ibkr: bool = False,
     save: bool = True,
 ) -> pd.DataFrame:
     raw = load_raw_or_build(
         refresh_raw=refresh_raw,
         pull_interest_rates=pull_interest_rates,
         pull_eris=pull_eris,
-        pull_ibkr=pull_ibkr,
     )
     output = build_signal_columns(raw)
 
@@ -255,7 +251,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Refresh public Eris settlement data before building signals.",
     )
-    parser.add_argument("--ibkr", action="store_true", help="Refresh IBKR traded futures bars before building signals.")
     parser.add_argument("--self-check", action="store_true")
     return parser.parse_args()
 
@@ -271,7 +266,6 @@ def main() -> None:
         refresh_raw=args.refresh_raw,
         pull_interest_rates=args.interest_rates,
         pull_eris=args.eris,
-        pull_ibkr=args.ibkr,
     )
 
 

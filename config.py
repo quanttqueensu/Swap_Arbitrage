@@ -10,14 +10,10 @@ CACHE_DIR = DATA_DIR / "cache"
 
 RATES_FILE = DATA_DIR / "treasury_rates.csv"
 SWAP_RATES_FILE = DATA_DIR / "swap_rates.csv"
-IBKR_MARKET_DATA_FILE = DATA_DIR / "ibkr_market_data.csv"
+CME_SWAP_DATA_FILE = DATA_DIR / "cme_swap_data.csv"
 RAW_PRICE_DATA_FILE = DATA_DIR / "raw_price_data.csv"
 SIGNAL_DATA_FILE = DATA_DIR / "signal_data.csv"
 RISK_DATA_FILE = DATA_DIR / "risk_data.csv"
-
-# Legacy names kept as aliases so older agent/config code reads the consolidated files.
-RATES_WITH_SWAPS_FILE = RAW_PRICE_DATA_FILE
-SIGNALS_FILE = SIGNAL_DATA_FILE
 
 
 # ============================================================
@@ -142,6 +138,11 @@ SWAP_COLUMNS = {
     "5Y": "eris_swap_5y_price",
 }
 
+SWAP_TICKER_COLUMNS = {
+    "2Y": "eris_swap_2y_ticker",
+    "5Y": "eris_swap_5y_ticker",
+}
+
 SWAP_RETURN_COLUMNS = {
     "2Y": "eris_swap_2y_return",
     "5Y": "eris_swap_5y_return",
@@ -152,22 +153,7 @@ SWAP_DV01_COLUMNS = {
     "5Y": "eris_swap_5y_dv01",
 }
 
-IBKR_SWAP_COLUMNS = {
-    "2Y": "ibkr_eris_swap_2y_price",
-    "5Y": "ibkr_eris_swap_5y_price",
-}
-
-IBKR_SWAP_RETURN_COLUMNS = {
-    "2Y": "ibkr_eris_swap_2y_return",
-    "5Y": "ibkr_eris_swap_5y_return",
-}
-
 IBKR_EXCHANGES_TO_TRY = ["CBOT", "ECBOT"]
-
-IBKR_DURATION = "1 Y"
-IBKR_BAR_SIZE = "1 day"
-IBKR_WHAT_TO_SHOW = "TRADES"
-IBKR_USE_RTH = False
 
 
 TREASURY_FUTURES = {
@@ -175,20 +161,6 @@ TREASURY_FUTURES = {
     "5Y": "ZF",
     "10Y": "ZN",
     "30Y": "ZB",
-}
-
-IBKR_TREASURY_COLUMNS = {
-    "2Y": "ibkr_treasury_2y_price",
-    "5Y": "ibkr_treasury_5y_price",
-    "10Y": "ibkr_treasury_10y_price",
-    "30Y": "ibkr_treasury_30y_price",
-}
-
-IBKR_TREASURY_RETURN_COLUMNS = {
-    "2Y": "ibkr_treasury_2y_return",
-    "5Y": "ibkr_treasury_5y_return",
-    "10Y": "ibkr_treasury_10y_return",
-    "30Y": "ibkr_treasury_30y_return",
 }
 
 # ============================================================
@@ -207,10 +179,6 @@ POSITION_SIZE_BY_MATURITY = {
     "30Y": 1_500,
 }
 
-# Legacy alias for older agent/config code.
-MAX_DV01_PER_MATURITY = POSITION_SIZE_BY_MATURITY
-
-# Main swap-future sizing uses SWAP_DV01_COLUMNS from raw market data.
 REQUIRE_ACTUAL_SWAP_DV01 = True
 
 # Small targets create noisy one-lot churn after rounding.
