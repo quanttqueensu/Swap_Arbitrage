@@ -8,7 +8,6 @@ import pandas as pd
 
 from config import (
     CME_SWAP_DATA_FILE,
-    DATA_DIR,
     DV01_VOL_LOOKBACK,
     MATURITIES,
     ERIS_SOFR_SWAP_FUTURES,
@@ -335,6 +334,9 @@ def load_cme_swap_data(path: Path = CME_SWAP_DATA_FILE) -> pd.DataFrame:
 
 def merge_cme_dv01(signals: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
     output = signals.copy()
+    master = master.copy()
+    output["date"] = pd.to_datetime(output["date"], errors="coerce").dt.normalize()
+    master["date"] = pd.to_datetime(master["date"], errors="coerce").dt.normalize()
 
     for maturity, root in ERIS_SOFR_SWAP_FUTURES.items():
         maturity_rows = master[master["ticker"].str.startswith(root)]

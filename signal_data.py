@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 
 from config import (
-    DATA_DIR,
     MATURITIES,
     RAW_PRICE_DATA_FILE,
     ROLLING_WINDOW,
@@ -16,6 +15,7 @@ from config import (
     Z_ENTRY,
     Z_EXIT,
 )
+from data_io import save_derived_csv
 from raw_price_data import build_raw_price_data, clean_price_frame, load_csv
 
 MIN_PERIODS = max(20, int(ROLLING_WINDOW * 0.25))
@@ -217,8 +217,7 @@ def build_signal_data(
     output = build_signal_columns(raw)
 
     if save:
-        DATA_DIR.mkdir(exist_ok=True)
-        output.to_csv(SIGNAL_DATA_FILE, index=False)
+        output = save_derived_csv(output, SIGNAL_DATA_FILE)
         print(f"[SAVED] {SIGNAL_DATA_FILE}")
 
     print(f"[SIGNAL DATA] rows={len(output):,} range={output['date'].min().date()} to {output['date'].max().date()}")

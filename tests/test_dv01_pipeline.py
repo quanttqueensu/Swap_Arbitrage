@@ -157,7 +157,7 @@ class RiskMasterTests(unittest.TestCase):
 
     def test_exact_date_merge_does_not_forward_fill(self) -> None:
         signals = pd.DataFrame(
-            {"date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])}
+            {"date": ["2024-01-02", "2024-01-03", "2024-01-04"]}
         )
         master = pd.DataFrame(
             {
