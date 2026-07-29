@@ -14,20 +14,72 @@ from zoneinfo import ZoneInfo
 
 import ib_insync
 
-from agents.agent_0 import broker, config, run
-from agents.agent_0.contracts import allowed_instruments
-from agents.agent_0.models import AgentInstrument, QueuedOrder, SizingCap
-from agents.agent_0.orders import build_order, load_orders, roll_tracking, save_orders
-from agents.agent_0.random_policy import RandomPolicy, next_weekdays
+# ib_insync/eventkit creates an asyncio self-pipe during its first import.
+# Complete only that documented local initialization before installing the
+# module-lifetime guard. Agent 0 production imports happen below, after the
+# guard proves it is active, and the guard stays active through every test.
+_IB_MARKET_ORDER_CLASS = ib_insync.MarketOrder
+
+
+def _blocked_network(*args, **kwargs):
+    raise AssertionError("real network access is forbidden in Agent 0 tests")
+
+
+_NETWORK_GUARD_PATCHERS = [
+    patch.object(socket.socket, "connect", side_effect=_blocked_network),
+    patch.object(socket.socket, "connect_ex", side_effect=_blocked_network),
+    patch.object(socket.socket, "sendto", side_effect=_blocked_network),
+    patch("socket.create_connection", side_effect=_blocked_network),
+    patch("socket.getaddrinfo", side_effect=_blocked_network),
+    patch.object(
+        asyncio.BaseEventLoop,
+        "create_connection",
+        side_effect=_blocked_network,
+    ),
+]
+
+for _network_guard_patcher in _NETWORK_GUARD_PATCHERS:
+    _network_guard_patcher.start()
+
+
+def _network_guard_is_active() -> bool:
+    with socket.socket() as client:
+        try:
+            client.connect(("127.0.0.1", 7497))
+        except AssertionError as exc:
+            return "network access is forbidden" in str(exc)
+
+    return False
+
+
+_AGENT_IMPORT_GUARD_ACTIVE = _network_guard_is_active()
+if not _AGENT_IMPORT_GUARD_ACTIVE:
+    raise RuntimeError("Agent 0 test network guard was not active before import")
+
+try:
+    from agents.agent_0 import broker, config, run
+    from agents.agent_0.contracts import allowed_instruments
+    from agents.agent_0.models import AgentInstrument, QueuedOrder, SizingCap
+    from agents.agent_0.orders import (
+        build_order,
+        load_orders,
+        roll_tracking,
+        save_orders,
+    )
+    from agents.agent_0.random_policy import RandomPolicy, next_weekdays
+except BaseException:
+    for _network_guard_patcher in reversed(_NETWORK_GUARD_PATCHERS):
+        _network_guard_patcher.stop()
+    raise
 
 
 PAPER_ACCOUNT = "DU_TEST"
 NEW_YORK = ZoneInfo("America/New_York")
 
-# ib_insync/eventkit creates an asyncio self-pipe during its first import.
-# Complete that local-only initialization before each test installs the hard
-# socket guard; every broker action and test body still runs under the guard.
-_IB_MARKET_ORDER_CLASS = ib_insync.MarketOrder
+
+def tearDownModule() -> None:
+    for network_guard_patcher in reversed(_NETWORK_GUARD_PATCHERS):
+        network_guard_patcher.stop()
 
 
 def queued_order(
@@ -142,25 +194,16 @@ class SocketGuardedTestCase(unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
-
-        def blocked(*args, **kwargs):
-            raise AssertionError("real network access is forbidden in Agent 0 tests")
-
-        patchers = [
-            patch.object(socket.socket, "connect", side_effect=blocked),
-            patch.object(socket.socket, "connect_ex", side_effect=blocked),
-            patch.object(socket.socket, "sendto", side_effect=blocked),
-            patch("socket.create_connection", side_effect=blocked),
-            patch("socket.getaddrinfo", side_effect=blocked),
-            patch.object(asyncio.BaseEventLoop, "create_connection", side_effect=blocked),
-        ]
-
-        for patcher in patchers:
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        self.assertTrue(
+            _network_guard_is_active(),
+            "module-lifetime network guard must remain active through each test",
+        )
 
 
 class PaperRoutingTests(SocketGuardedTestCase):
+    def test_agent_modules_are_imported_under_already_active_guard(self):
+        self.assertTrue(_AGENT_IMPORT_GUARD_ACTIVE)
+
     def test_missing_and_non_paper_accounts_are_rejected(self):
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "Missing paper account"):
@@ -357,10 +400,19 @@ class RandomPlanTests(SocketGuardedTestCase):
 
 
 class CapacityAndMarginTests(SocketGuardedTestCase):
-    def test_three_contract_allocation_respects_fifteen_per_side(self):
-        records = [queued_order(f"allocation-{index}") for index in range(45)]
+    def test_three_contract_allocation_has_independent_fifteen_order_side_buckets(self):
+        buy_records = [
+            queued_order(f"buy-allocation-{index}", side="BUY")
+            for index in range(45)
+        ]
+        sell_records = [
+            queued_order(f"sell-allocation-{index}", side="SELL")
+            for index in range(45)
+        ]
+        records = [*buy_records, *sell_records]
         contracts = [SimpleNamespace(conId=value) for value in (1, 2, 3)]
 
+        self.assertEqual(config.CONTRACTS_PER_SYMBOL, 3)
         allocated = run.allocate_contracts(
             records,
             {"ZT": contracts},
@@ -371,7 +423,19 @@ class CapacityAndMarginTests(SocketGuardedTestCase):
             for record in records
         )
 
-        self.assertEqual(counts, Counter({(1, "BUY"): 15, (2, "BUY"): 15, (3, "BUY"): 15}))
+        self.assertEqual(
+            counts,
+            Counter(
+                {
+                    (1, "BUY"): 15,
+                    (2, "BUY"): 15,
+                    (3, "BUY"): 15,
+                    (1, "SELL"): 15,
+                    (2, "SELL"): 15,
+                    (3, "SELL"): 15,
+                }
+            ),
+        )
         self.assertLessEqual(max(counts.values()), 15)
 
     def test_existing_account_orders_consume_capacity_but_other_accounts_do_not(self):
