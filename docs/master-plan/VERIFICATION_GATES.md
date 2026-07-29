@@ -522,7 +522,7 @@ Update this table only after the user explicitly approves a gate.
 
 | Gate | Status | Evidence record |
 |---|---|---|
-| MG0 | Not started | Baseline report and P00 verification |
+| MG0 | Approved 2026-07-28 | Baseline report and P00 verification |
 | MG1 | Not started | P01/P02 verification and Agent 0 setting decision |
 | MG2 | Not started | Equation examples and source coverage |
 | MG3 | Not started | Data inventory, schemas, and migration preview |

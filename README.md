@@ -8,7 +8,6 @@ the repository root, create and prepare an isolated environment:
 ```powershell
 & "C:\\Path\\To\\Python312\\python.exe" -m venv .venv
 .\\.venv\\Scripts\\Activate.ps1
-python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
