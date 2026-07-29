@@ -265,6 +265,38 @@ class PaperRoutingTests(SocketGuardedTestCase):
                 with self.assertRaisesRegex(RuntimeError, "paper port 7497"):
                     broker.connect(PAPER_ACCOUNT)
 
+    def test_disabled_du_policy_is_rejected_before_ib_class_loading(self):
+        with patch.object(config, "REQUIRE_PAPER_ACCOUNT_PREFIX", False):
+            with self.assertRaisesRegex(RuntimeError, "DU paper-account policy"):
+                config.assert_paper_only_settings(PAPER_ACCOUNT)
+
+            with patch.object(
+                broker,
+                "_load_ib_class",
+                side_effect=AssertionError("IB class loading must not occur"),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "DU paper-account policy",
+                ):
+                    broker.connect(PAPER_ACCOUNT)
+
+    def test_changed_du_prefix_is_rejected_before_ib_class_loading(self):
+        with patch.object(config, "PAPER_ACCOUNT_PREFIX", "U"):
+            with self.assertRaisesRegex(RuntimeError, "DU paper-account policy"):
+                config.assert_paper_only_settings("U_TEST")
+
+            with patch.object(
+                broker,
+                "_load_ib_class",
+                side_effect=AssertionError("IB class loading must not occur"),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "DU paper-account policy",
+                ):
+                    broker.connect("U_TEST")
+
     def test_managed_account_and_order_account_must_match(self):
         broker.validate_managed_account(FakeIB(), PAPER_ACCOUNT)
 

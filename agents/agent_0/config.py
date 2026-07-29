@@ -108,8 +108,13 @@ def assert_paper_only_settings(account_id: str) -> None:
             f"Agent 0 expected IBKR paper port 7497, got {IBKR_PORT}."
         )
 
-    if REQUIRE_PAPER_ACCOUNT_PREFIX and not account_id.upper().startswith(PAPER_ACCOUNT_PREFIX):
+    if not REQUIRE_PAPER_ACCOUNT_PREFIX or PAPER_ACCOUNT_PREFIX != "DU":
+        raise RuntimeError(
+            "Agent 0 requires the immutable DU paper-account policy."
+        )
+
+    if not account_id.upper().startswith("DU"):
         raise RuntimeError(
             f"Agent 0 refuses account {account_id!r}. Expected a paper account "
-            f"starting with {PAPER_ACCOUNT_PREFIX!r}."
+            "starting with 'DU'."
         )
