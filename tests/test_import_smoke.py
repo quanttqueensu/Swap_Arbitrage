@@ -10,6 +10,7 @@ class ImportSmokeTests(unittest.TestCase):
         import signal_data  # noqa: F401
         import risk_data  # noqa: F401
         import backtest  # noqa: F401
+        import cloudflare_r2_test  # noqa: F401
         import agents.agent_0.run  # noqa: F401
         from agents.agent_0.broker import _load_ib_class
 
