@@ -278,10 +278,16 @@ Inspect:
 - complete test/self-check results;
 - fake-broker proof that Agent 0 is paper-only;
 - Agent 0 characterization tests;
-- 50/100/250 weekly-order documentation conflict.
+- the original conflict among implemented 25/week, mistaken current prose
+  claiming 50/week, and historical 100/250-week proposals;
+- the user's 2026-07-29 selection of 5/day across five weekdays = 25/week and
+  the P02 evidence that current artifacts are aligned while historical
+  proposals remain clearly superseded.
 
 Record the authoritative weekly order count and reason. Approval freezes Agent
-0’s current random behavior.
+0’s current random behavior. The user's selection and conditional approval do
+not make the ledger effective until the required final P02 reviews pass. Task 2
+verification is recorded in `docs/verification/P02.md`.
 
 ### MG2 — Equations, signs, timestamps, and source coverage
 
@@ -523,7 +529,7 @@ Update this table only after the user explicitly approves a gate.
 | Gate | Status | Evidence record |
 |---|---|---|
 | MG0 | Approved 2026-07-28 | Baseline report and P00 verification |
-| MG1 | Not started | P01/P02 verification and Agent 0 setting decision |
+| MG1 | Pending — conditional user approval received 2026-07-29; final P02 reviews required | P01/P02 verification and authoritative 25/week (5/day) Agent 0 setting decision |
 | MG2 | Not started | Equation examples and source coverage |
 | MG3 | Not started | Data inventory, schemas, and migration preview |
 | MG4 | Not started | Adapter tests and staged migration report |

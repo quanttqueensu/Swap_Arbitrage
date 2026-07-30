@@ -361,7 +361,7 @@ class RandomPlanTests(SocketGuardedTestCase):
             ],
         )
 
-    def test_seeded_plan_is_deterministic_and_currently_has_25_orders(self):
+    def test_authoritative_plan_has_five_orders_per_day_and_25_per_week(self):
         caps = self.sizing_caps()
         first = RandomPolicy(seed="p02-seed").build_week_plan(
             caps,
@@ -375,6 +375,8 @@ class RandomPlanTests(SocketGuardedTestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(config.ORDERS_PER_DAY, 5)
+        self.assertEqual(len(per_day), 5)
+        self.assertEqual(sum(per_day.values()), 5 * 5)
         self.assertEqual(len(first), 25)
         self.assertEqual(
             per_day,

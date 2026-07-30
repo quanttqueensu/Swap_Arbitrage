@@ -18,10 +18,9 @@ Agent 0 refuses non-paper account settings.
 ## Weekly Orders
 
 - Target: next calendar week's Monday through Friday
-- Orders per day: `5` (`50` total)
+- Orders per day: `5` (`25` total across five weekdays)
 - Activation: random from `09:00` through `15:00 America/New_York`
-- Instruments: random positive-cap contract from `YIT`, `YIW`, `ZT`, `ZF`,
-  `ZN`, and `ZB`
+- Instruments: random positive-cap contract from `YIT`, `YIW`, `ZT`, and `ZF`
 - Side: independent 50% `BUY`, 50% `SELL`
 - Quantity: random integer from `1` through the selected instrument's cap
 - Margin: IBKR what-if preview preserves at least 10% of post-order equity

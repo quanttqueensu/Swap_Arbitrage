@@ -124,6 +124,14 @@ absent. Run focused agent tests, the full suite, compilation, and diff checks.
 Stop at MG1 with no broker connection and no order submission.
 ```
 
+**Resolution note (2026-07-29):** Task 1 established that the implementation
+already generated five orders on each of five weekdays (25/week). The user
+selected that existing 5/day = 25/week behavior as authoritative and gave
+conditional MG1 approval. Task 2 aligns current prose/tests and labels the
+100/250 proposals as superseded history without changing runtime behavior.
+Task 2 verification has passed; MG1 remains pending until the required final
+P02 reviews pass. P10 has not started.
+
 ## Phase 1 prompts
 
 ### P10 — Validate the economic and executable equations
