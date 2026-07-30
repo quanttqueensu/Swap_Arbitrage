@@ -285,9 +285,9 @@ Inspect:
   proposals remain clearly superseded.
 
 Record the authoritative weekly order count and reason. Approval freezes Agent
-0’s current random behavior. The user's selection and conditional approval do
-not make the ledger effective until the required final P02 reviews pass. Task 2
-verification is recorded in `docs/verification/P02.md`.
+0’s current random behavior. All required P02 verification and reviews passed,
+so the user's 2026-07-29 approval is effective. Task 2 evidence is recorded in
+`docs/verification/P02.md`.
 
 ### MG2 — Equations, signs, timestamps, and source coverage
 
@@ -529,7 +529,7 @@ Update this table only after the user explicitly approves a gate.
 | Gate | Status | Evidence record |
 |---|---|---|
 | MG0 | Approved 2026-07-28 | Baseline report and P00 verification |
-| MG1 | Pending — conditional user approval received 2026-07-29; final P02 reviews required | P01/P02 verification and authoritative 25/week (5/day) Agent 0 setting decision |
+| MG1 | Approved 2026-07-29 | P01/P02 verification; authoritative 25/week (5/day) selected and approved |
 | MG2 | Not started | Equation examples and source coverage |
 | MG3 | Not started | Data inventory, schemas, and migration preview |
 | MG4 | Not started | Adapter tests and staged migration report |
