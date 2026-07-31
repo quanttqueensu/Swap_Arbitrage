@@ -403,7 +403,11 @@ def scan_source_evidence(
         capture_output=True,
     )
     if tracked_result.returncode:
-        return {token: () for token in found}
+        stderr = tracked_result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            "unable to enumerate tracked Python files: "
+            f"{stderr or 'git ls-files failed without stderr'}"
+        )
     tracked = tracked_result.stdout.decode("utf-8").split("\0")
     for relative_name in sorted(name for name in tracked if name):
         path = repo_root / relative_name
@@ -622,9 +626,22 @@ def _locations_in_files(
 def render_inventory(
     results: list[ArtifactProfile | ProfileFailure],
     evidence: dict[str, tuple[SourceEvidence, ...]],
+    repo_identity: str,
+    data_identity: str,
 ) -> str:
     profiles = [item for item in results if isinstance(item, ArtifactProfile)]
     failures = [item for item in results if isinstance(item, ProfileFailure)]
+    names = [Path(profile.relative_path).name for profile in profiles]
+    source_cache_count = sum(
+        name not in PIPELINE_ORDER
+        and not name.startswith("swap_arb_backtest_")
+        and name != "r2_objects.csv"
+        for name in names
+    )
+    pipeline_count = sum(
+        name in PIPELINE_ORDER or name.startswith("swap_arb_backtest_") for name in names
+    )
+    r2_count = sum(name == "r2_objects.csv" for name in names)
     lines = [
         "# Current Data Inventory",
         "",
@@ -636,6 +653,29 @@ def render_inventory(
         f"- Artifacts discovered: {len(results)}",
         f"- Profiles completed: {len(profiles)}",
         f"- Profile failures: {len(failures)}",
+        "",
+        "## CLI command contract",
+        "",
+        "```text",
+        "python -m tools.data_audit --repo-root <repo-root> --data-root <data-root> "
+        "--inventory-output <repo-root>/docs/data/current-inventory.md "
+        "--lineage-output <repo-root>/docs/data/current-column-lineage.csv",
+        "```",
+        f"- Repository root identity: `{repo_identity}`",
+        f"- Data root identity: `{data_identity}`",
+        "",
+        "## Discovery scope",
+        "",
+        "- Recursively include `data/**/*.csv` beneath `<data-root>`.",
+        "- Include optional top-level `r2_objects.csv` beneath `<data-root>`.",
+        "",
+        "## Source, cache, and R2 summary",
+        "",
+        "| Category | Artifacts |",
+        "|---|---:|",
+        f"| Source/cache CSVs | {source_cache_count} |",
+        f"| Derived pipeline/backtest CSVs | {pipeline_count} |",
+        f"| R2 manifests | {r2_count} |",
         "",
         "## Pipeline widths",
         "",
@@ -760,7 +800,12 @@ def run_audit(
         [profile for profile in profiles if isinstance(profile, ArtifactProfile)],
         evidence,
     )
-    inventory_text = render_inventory(profiles, evidence)
+    inventory_text = render_inventory(
+        profiles,
+        evidence,
+        repo_identity="<repo-root>",
+        data_identity="<data-root>",
+    )
     lineage_text = render_lineage_csv(lineage)
     verify_unchanged(before)
     atomic_write(paths.inventory_output, inventory_text)

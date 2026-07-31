@@ -220,7 +220,7 @@ import csv
 import io
 from unittest.mock import patch
 
-from tools.data_audit import atomic_write, run_audit
+from tools.data_audit import atomic_write, build_parser, run_audit
 
 
 class LineageTests(unittest.TestCase):
@@ -378,6 +378,8 @@ class AuditCommandTests(unittest.TestCase):
         (self.working / "data" / "signal_data.csv").write_text(
             "date,price,signal\n2026-01-01,100,1\n", encoding="utf-8"
         )
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(["git", "add", "signal_data.py"], cwd=self.repo, check=True)
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
@@ -394,6 +396,53 @@ class AuditCommandTests(unittest.TestCase):
         self.assertEqual(before, {path: sha256_file(path) for path in inputs})
         rows = list(csv.DictReader(io.StringIO(lineage.read_text(encoding="utf-8"))))
         self.assertEqual(len(rows), 2 + 3)
+
+    def test_inventory_has_normalized_contract_discovery_and_source_summary(self) -> None:
+        inventory = self.repo / "inventory.md"
+        lineage = self.repo / "lineage.csv"
+        run_audit(self.repo, self.working, inventory, lineage)
+        report = inventory.read_text(encoding="utf-8")
+        self.assertIn("## CLI command contract", report)
+        self.assertIn(
+            "python -m tools.data_audit --repo-root <repo-root> --data-root <data-root>",
+            report,
+        )
+        self.assertIn("- Repository root identity: `<repo-root>`", report)
+        self.assertIn("- Data root identity: `<data-root>`", report)
+        self.assertIn("## Discovery scope", report)
+        self.assertIn("`data/**/*.csv`", report)
+        self.assertIn("optional top-level `r2_objects.csv`", report)
+        self.assertIn("## Source, cache, and R2 summary", report)
+        self.assertIn("| Source/cache CSVs | 0 |", report)
+        self.assertIn("| R2 manifests | 0 |", report)
+        self.assertNotIn(str(self.root), report)
+        self.assertEqual(
+            lineage.read_bytes().split(b"\n", 1)[0],
+            b"artifact,column,ordinal,classification,source_or_derivation,writer,consumers,unit,evidence,status",
+        )
+        self.assertNotIn(b"\r\n", inventory.read_bytes())
+        self.assertNotIn(b"\r\n", lineage.read_bytes())
+
+    def test_cli_parser_requires_all_audit_root_and_output_flags(self) -> None:
+        help_text = build_parser().format_help()
+        for flag in ("--repo-root", "--data-root", "--inventory-output", "--lineage-output"):
+            self.assertIn(flag, help_text)
+
+    def test_non_git_repo_fails_before_changing_outputs(self) -> None:
+        repo = self.root / "no-git-repo"
+        working = self.root / "no-git-working"
+        repo.mkdir()
+        (working / "data").mkdir(parents=True)
+        (working / "data" / "raw_price_data.csv").write_text(
+            "date,price\n2026-01-01,100\n", encoding="utf-8"
+        )
+        inventory = repo / "inventory.md"
+        lineage = repo / "lineage.csv"
+        inventory.write_text("old", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "tracked Python"):
+            run_audit(repo, working, inventory, lineage)
+        self.assertEqual(inventory.read_text(encoding="utf-8"), "old")
+        self.assertFalse(lineage.exists())
 
     def test_atomic_write_preserves_existing_output_when_replace_fails(self) -> None:
         output = self.repo / "report.md"
