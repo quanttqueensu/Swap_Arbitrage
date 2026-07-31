@@ -173,6 +173,7 @@ def synchronized_spread_movement(
             record
             for record in records
             if record.get("observation_date") == observation_date
+            and str(record.get("available_utc")) <= decision_utc
         ]
         synchronized_utc = synchronized_decision_utc(snapshot)
         if synchronized_utc is None or synchronized_utc > decision_utc:
@@ -985,6 +986,32 @@ class TimingAndClassificationTests(unittest.TestCase):
         self.assertEqual(
             movement_fn(
                 records + later,
+                "2Y",
+                previous_date,
+                current_date,
+                previous_decision,
+                current_decision,
+            ),
+            expected,
+        )
+
+        eligible_duplicate = records + [dict(records[-1])]
+        self.assertIsNone(
+            movement_fn(
+                eligible_duplicate,
+                "2Y",
+                previous_date,
+                current_date,
+                previous_decision,
+                current_decision,
+            )
+        )
+        late_revision = dict(records[-1])
+        late_revision["available_utc"] = "2027-01-06T20:31:01Z"
+        late_revision["value_bps"] = "999"
+        self.assertEqual(
+            movement_fn(
+                records + [late_revision],
                 "2Y",
                 previous_date,
                 current_date,
