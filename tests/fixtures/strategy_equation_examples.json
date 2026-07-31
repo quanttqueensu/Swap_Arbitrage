@@ -175,7 +175,38 @@
   "pnl_examples": [
     {"id": "traditional_same_contract", "legs": [{"symbol": "YIT", "quantity": 2, "multiplier_usd_per_point": "1000", "start_price": "100.1000", "end_price": "100.1125", "costs_usd": "0"}, {"symbol": "ZT", "quantity": -1, "multiplier_usd_per_point": "2000", "start_price": "102.000000", "end_price": "101.984375", "costs_usd": "6.25"}], "expected_pnl_usd": "50"},
     {"id": "reverse_same_contract", "legs": [{"symbol": "YIW", "quantity": -1, "multiplier_usd_per_point": "1000", "start_price": "99.5000", "end_price": "99.4900", "costs_usd": "0"}, {"symbol": "ZF", "quantity": 1, "multiplier_usd_per_point": "1000", "start_price": "108.000000", "end_price": "108.015625", "costs_usd": "5.625"}], "expected_pnl_usd": "20"},
-    {"id": "eris_roll", "old_contract": {"symbol": "YITH27", "quantity": 2, "multiplier_usd_per_point": "1000", "start_price": "100.1000", "end_price": "100.1100", "close_cost_usd": "3"}, "new_contract": {"symbol": "YITM27", "quantity": 2, "multiplier_usd_per_point": "1000", "start_price": "99.9000", "end_price": "99.9050", "open_cost_usd": "4"}, "expected_same_contract_pnl_usd": "30", "expected_roll_cost_usd": "7", "expected_net_pnl_usd": "23", "expected_contract_turnover": 4},
+    {
+      "id": "eris_roll",
+      "roll_decision_utc": "2027-03-10T20:31:00Z",
+      "close_utc": "2027-03-10T20:31:00Z",
+      "open_utc": "2027-03-10T20:31:00Z",
+      "old_contract": {
+        "symbol": "YITH27",
+        "quantity": 2,
+        "multiplier_usd_per_point": "1000",
+        "start_utc": "2027-03-09T20:31:00Z",
+        "end_utc": "2027-03-10T20:31:00Z",
+        "start_price": "100.1000",
+        "end_price": "100.1100",
+        "close_cost_usd": "3"
+      },
+      "new_contract": {
+        "symbol": "YITM27",
+        "quantity": 2,
+        "multiplier_usd_per_point": "1000",
+        "start_utc": "2027-03-10T20:31:00Z",
+        "end_utc": "2027-03-11T20:31:00Z",
+        "start_price": "99.9000",
+        "end_price": "99.9050",
+        "open_cost_usd": "4"
+      },
+      "expected_old_pnl_at_roll_usd": "20",
+      "expected_net_at_roll_usd": "13",
+      "expected_same_contract_pnl_usd": "30",
+      "expected_roll_cost_usd": "7",
+      "expected_net_pnl_usd": "23",
+      "expected_contract_turnover": 4
+    },
     {"id": "reversal_cost", "exit_quantity": 3, "entry_quantity": 2, "exit_cost_usd": "275", "entry_cost_usd": "325", "expected_total_cost_usd": "600", "expected_contract_turnover": 5}
   ],
   "hedge_examples": [

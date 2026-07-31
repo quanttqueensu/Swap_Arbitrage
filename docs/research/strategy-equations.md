@@ -144,6 +144,14 @@ holidays. The real production business-day/holiday calendar remains
 `unavailable pending P11` validation and is never silently inferred from the
 synthetic calendar.
 
+Every selected funding record also carries `available_utc` no later than the
+saved `decision_utc`. A record for a required date published after that cutoff
+is absent at the decision and therefore breaks the suffix. Two eligible
+records for one observation date are ambiguous and make the history
+unavailable. Current-date and future-date records are never selected. A later
+revision whose publication is after the saved decision is excluded, so it
+cannot revise the saved historical funding estimate.
+
 ## Decision clock and movement trigger
 
 For a decision using CMS, CMT, floating, and repo inputs, every record must
@@ -154,10 +162,22 @@ permitted. A missing field, duplicate field, prior-date substitute, or record
 published after the saved decision makes the affected input set unavailable;
 future publications do not revise a saved historical decision.
 
-The movement input is the maturity-matched economic rate change
-\(\Delta r_{m,t}\), expressed once in basis points at the decision boundary.
-It does not use an Eris/Treasury price difference. The frozen movement
-classification is:
+The Agent 2 movement input is the maturity-matched fixed swap-spread change
+over one adjacent synchronized completed-business-day interval:
+
+\[
+\Delta SS_{m,t}=SS_{m,t}-SS_{m,t-1}.
+\]
+
+Both endpoint snapshots require exactly the same CMS, CMT, floating, and repo
+field identities, the same maturity and basis-point unit, and publication no
+later than their respective saved decision timestamps. The prior observation
+date must be the completed business date immediately preceding the current
+observation date under the supplied calendar. A missing endpoint, duplicate
+field, gap, late endpoint publication, wrong series, or wrong maturity makes
+the movement unavailable; no prior-date value is forward filled. Records from
+later dates are excluded and cannot revise the saved movement. The movement
+does not use an Eris/Treasury price difference. Its frozen classification is:
 
 \[
 movement(\Delta r)=
@@ -197,6 +217,14 @@ The current observation is excluded. A history with any count other than 252,
 or a zero sample standard deviation, produces no z-score. Future observations
 cannot revise an already calculated historical z-score; they belong only to a
 later decision's prior window.
+
+The 252 inputs are selected by observation date and `available_utc`, not by
+list length alone. They must be the exact consecutive completed business dates
+immediately preceding \(t\), and every record must be published no later than
+the saved `decision_utc`. A gap, an eligible duplicate date, or a late required
+record makes the history unavailable. Current/future rows are excluded, and a
+later revision published after the saved decision cannot change the saved
+history or z-score.
 
 The position state is \(p\in\{-1,0,+1\}\), where +1 is traditional and -1
 is reverse. Entry eligibility is directional and strictly positive:
@@ -337,6 +365,22 @@ PnL_i=q_iM_i(P_i^{end}-P_i^{start})-C_i.
 The signed quantity carries the long/short direction. Costs are charged to the
 action that incurs them. The fixture arithmetic is:
 
+The roll clock is explicit and gap-free:
+
+\[
+t^{old,end}=t^{close}=t^{roll}=t^{open}=t^{new,start},
+\qquad t^{old,start}<t^{roll}<t^{new,end}.
+\]
+
+The quantity held before the roll earns only its own-contract price change
+through the close/roll timestamp. The new quantity earns only its
+own-contract price change after the open/roll timestamp. Any overlap, gap, or
+misordered close/open timestamp makes the roll calculation unavailable. At a
+saved as-of timestamp, only intervals whose end timestamp has arrived may
+contribute; a later new-contract price cannot change the old-contract P&L
+saved at the roll. Close and open costs and both turnover legs are charged at
+the roll boundary.
+
 - `traditional_same_contract`: YIT contributes
   \(2(1000)(100.1125-100.1000)=25\) USD. ZT contributes
   \((-1)(2000)(101.984375-102.000000)-6.25=25\) USD. Total: 50 USD.
@@ -351,7 +395,12 @@ action that incurs them. The fixture arithmetic is:
   plus open cost is \(3+4=7\) USD; net is 23 USD; turnover is
   \(|2|+|2|=4\) contracts. The cross-contract change
   \(99.9000-100.1100=-0.2100\), which would create -420 USD at the old
-  quantity and multiplier, is not a return and is never used.
+  quantity and multiplier, is not a return and is never used. The old interval
+  ends at `2027-03-10T20:31:00Z`, exactly when the old leg closes and the new
+  leg opens. At that timestamp old mark P&L is 20 USD, the future new mark is
+  zero, roll costs are 7 USD, and net is 13 USD. The new interval ends at
+  `2027-03-11T20:31:00Z`; only then does its 10 USD mark enter the 23 USD final
+  net.
 - `reversal_cost`: the exit and opposite entry are distinct actions. Cost is
   \(275+325=600\) USD and turnover is \(|3|+|2|=5\) contracts; neither the
   cost nor the turnover is netted across the reversal.

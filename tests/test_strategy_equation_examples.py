@@ -69,16 +69,29 @@ def previous_weekday(day: date) -> date:
     return cursor
 
 
-def consecutive_lagged_funding(
-    records: list[dict[str, str]], decision_date: str
+def select_causal_history(
+    records: list[dict[str, str]],
+    value_key: str,
+    decision_date: str,
+    decision_utc: str,
+    limit: int,
 ) -> list[Decimal]:
-    by_date = {
-        date.fromisoformat(record["observation_date"]): D(record["funding_spread_bps"])
-        for record in records
-    }
-    cursor = previous_weekday(date.fromisoformat(decision_date))
+    cutoff_date = date.fromisoformat(decision_date)
+    by_date: dict[date, Decimal] = {}
+    for record in records:
+        observation_date = date.fromisoformat(record["observation_date"])
+        if observation_date >= cutoff_date or record["available_utc"] > decision_utc:
+            continue
+        if observation_date in by_date:
+            return []
+        value = D(record[value_key])
+        if not value.is_finite():
+            return []
+        by_date[observation_date] = value
+
+    cursor = previous_weekday(cutoff_date)
     newest_first: list[Decimal] = []
-    while len(newest_first) < 60 and cursor in by_date:
+    while len(newest_first) < limit and cursor in by_date:
         newest_first.append(by_date[cursor])
         cursor = previous_weekday(cursor)
     return list(reversed(newest_first))
@@ -136,6 +149,41 @@ def causal_zscore(current: Decimal, prior: list[Decimal]) -> Decimal | None:
     if sigma == 0:
         return None
     return (current - mean(prior)) / sigma
+
+
+def synchronized_spread_movement(
+    records: list[dict[str, object]],
+    maturity: str,
+    previous_observation_date: str,
+    current_observation_date: str,
+    previous_decision_utc: str,
+    current_decision_utc: str,
+) -> dict[str, Decimal | int] | None:
+    previous_date = date.fromisoformat(previous_observation_date)
+    current_date = date.fromisoformat(current_observation_date)
+    if previous_weekday(current_date) != previous_date:
+        return None
+
+    spreads: list[Decimal] = []
+    for observation_date, decision_utc in (
+        (previous_observation_date, previous_decision_utc),
+        (current_observation_date, current_decision_utc),
+    ):
+        snapshot = [
+            record
+            for record in records
+            if record.get("observation_date") == observation_date
+        ]
+        synchronized_utc = synchronized_decision_utc(snapshot)
+        if synchronized_utc is None or synchronized_utc > decision_utc:
+            return None
+        if classify_economic_inputs(snapshot, maturity, decision_utc) == "unavailable":
+            return None
+        values = {str(record["field"]): D(record["value_bps"]) for record in snapshot}
+        spreads.append(values["cms"] - values["cmt"])
+
+    delta = spreads[1] - spreads[0]
+    return {"delta_spread_bps": delta, "direction": movement_direction(delta)}
 
 
 def economic_result(
@@ -215,6 +263,51 @@ def contract_pnl(
     costs_usd: Decimal,
 ) -> Decimal:
     return D(quantity) * multiplier_usd_per_point * (end_price - start_price) - costs_usd
+
+
+def causal_roll_pnl(
+    example: dict[str, object], as_of_utc: str
+) -> dict[str, Decimal | int] | None:
+    old = example["old_contract"]
+    new = example["new_contract"]
+    boundary = str(example["roll_decision_utc"])
+    if not (
+        str(old["start_utc"])
+        < str(old["end_utc"])
+        == boundary
+        == str(example["close_utc"])
+        == str(example["open_utc"])
+        == str(new["start_utc"])
+        < str(new["end_utc"])
+    ):
+        return None
+    if as_of_utc < boundary:
+        return None
+
+    old_pnl = contract_pnl(
+        old["quantity"],
+        D(old["multiplier_usd_per_point"]),
+        D(old["start_price"]),
+        D(old["end_price"]),
+        D("0"),
+    )
+    new_pnl = D("0")
+    if as_of_utc >= str(new["end_utc"]):
+        new_pnl = contract_pnl(
+            new["quantity"],
+            D(new["multiplier_usd_per_point"]),
+            D(new["start_price"]),
+            D(new["end_price"]),
+            D("0"),
+        )
+    roll_cost = D(old["close_cost_usd"]) + D(new["open_cost_usd"])
+    return {
+        "old_pnl_usd": old_pnl,
+        "new_pnl_usd": new_pnl,
+        "roll_cost_usd": roll_cost,
+        "net_pnl_usd": old_pnl + new_pnl - roll_cost,
+        "contract_turnover": abs(old["quantity"]) + abs(new["quantity"]),
+    }
 
 
 def round_half_away_positive(value: Decimal) -> int:
@@ -495,6 +588,46 @@ class ContractPnlEquationTests(unittest.TestCase):
             example["expected_contract_turnover"],
         )
 
+    def test_roll_clock_separates_old_and_new_holding_intervals(self) -> None:
+        roll_fn = globals().get("causal_roll_pnl")
+        self.assertTrue(callable(roll_fn), "causal_roll_pnl must be callable")
+        example = self.examples["eris_roll"]
+        at_roll = roll_fn(example, example["roll_decision_utc"])
+        self.assertEqual(
+            at_roll,
+            {
+                "old_pnl_usd": D(example["expected_old_pnl_at_roll_usd"]),
+                "new_pnl_usd": D("0"),
+                "roll_cost_usd": D(example["expected_roll_cost_usd"]),
+                "net_pnl_usd": D(example["expected_net_at_roll_usd"]),
+                "contract_turnover": example["expected_contract_turnover"],
+            },
+        )
+        after_new_interval = roll_fn(example, example["new_contract"]["end_utc"])
+        self.assertEqual(
+            after_new_interval,
+            {
+                "old_pnl_usd": D(example["expected_old_pnl_at_roll_usd"]),
+                "new_pnl_usd": D("10"),
+                "roll_cost_usd": D(example["expected_roll_cost_usd"]),
+                "net_pnl_usd": D(example["expected_net_pnl_usd"]),
+                "contract_turnover": example["expected_contract_turnover"],
+            },
+        )
+
+        future_price = json.loads(json.dumps(example))
+        future_price["new_contract"]["end_price"] = "999"
+        self.assertEqual(roll_fn(future_price, example["roll_decision_utc"]), at_roll)
+
+        for shifted_start in (
+            "2027-03-10T20:30:59Z",
+            "2027-03-10T20:31:01Z",
+        ):
+            with self.subTest(new_start_utc=shifted_start):
+                invalid = json.loads(json.dumps(example))
+                invalid["new_contract"]["start_utc"] = shifted_start
+                self.assertIsNone(roll_fn(invalid, example["new_contract"]["end_utc"]))
+
     def test_reversal_charges_exit_and_entry_as_separate_actions(self) -> None:
         example = self.examples["reversal_cost"]
         total_cost = D(example["exit_cost_usd"]) + D(example["entry_cost_usd"])
@@ -574,17 +707,22 @@ class IntegerDv01EquationTests(unittest.TestCase):
 
 
 class TimingAndClassificationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
     def test_previous_weekday_uses_the_declared_monday_friday_calendar(self) -> None:
         previous_fn = globals().get("previous_weekday")
         self.assertTrue(callable(previous_fn), "previous_weekday must be callable")
         self.assertEqual(previous_fn(date(2027, 3, 1)), date(2027, 2, 26))
 
     def test_consecutive_lagged_funding_is_causal_and_breaks_at_a_gap(self) -> None:
-        consecutive_fn = globals().get("consecutive_lagged_funding")
+        consecutive_fn = globals().get("select_causal_history")
         self.assertTrue(
-            callable(consecutive_fn), "consecutive_lagged_funding must be callable"
+            callable(consecutive_fn), "select_causal_history must be callable"
         )
         decision = "2027-03-01"
+        decision_utc = "2027-03-01T20:31:00Z"
         cursor = date.fromisoformat(decision)
         dates_newest_first: list[date] = []
         for _ in range(61):
@@ -593,18 +731,23 @@ class TimingAndClassificationTests(unittest.TestCase):
         records = [
             {
                 "observation_date": observation_date.isoformat(),
+                "available_utc": f"{observation_date.isoformat()}T20:00:00Z",
                 "funding_spread_bps": "5",
             }
             for observation_date in reversed(dates_newest_first)
         ]
 
-        selected = consecutive_fn(records, decision)
+        selected = consecutive_fn(
+            records, "funding_spread_bps", decision, decision_utc, 60
+        )
         self.assertEqual(len(selected), 60)
         self.assertEqual(funding_expectation(selected), D("5"))
         self.assertEqual(records[-1]["observation_date"], "2027-02-26")
 
         forty_records = records[:1] + records[21:]
-        forty_selected = consecutive_fn(forty_records, decision)
+        forty_selected = consecutive_fn(
+            forty_records, "funding_spread_bps", decision, decision_utc, 60
+        )
         self.assertEqual(len(forty_selected), 40)
         self.assertEqual(funding_expectation(forty_selected), D("5"))
 
@@ -614,19 +757,242 @@ class TimingAndClassificationTests(unittest.TestCase):
             for record in records
             if record["observation_date"] != second_newest_date
         ]
-        broken_selected = consecutive_fn(broken_records, decision)
+        broken_selected = consecutive_fn(
+            broken_records, "funding_spread_bps", decision, decision_utc, 60
+        )
         self.assertEqual(broken_selected, [D("5")])
         self.assertIsNone(funding_expectation(broken_selected))
 
         bounded_records = records + [
-            {"observation_date": decision, "funding_spread_bps": "999"},
-            {"observation_date": "2027-03-02", "funding_spread_bps": "999"},
+            {
+                "observation_date": decision,
+                "available_utc": decision_utc,
+                "funding_spread_bps": "999",
+            },
+            {
+                "observation_date": "2027-03-02",
+                "available_utc": "2027-03-02T20:31:00Z",
+                "funding_spread_bps": "999",
+            },
         ]
-        self.assertEqual(consecutive_fn(bounded_records, decision), selected)
+        self.assertEqual(
+            consecutive_fn(
+                bounded_records, "funding_spread_bps", decision, decision_utc, 60
+            ),
+            selected,
+        )
 
         revised_old_record = [dict(record) for record in records]
         revised_old_record[0]["funding_spread_bps"] = "999"
-        self.assertEqual(consecutive_fn(revised_old_record, decision), selected)
+        self.assertEqual(
+            consecutive_fn(
+                revised_old_record,
+                "funding_spread_bps",
+                decision,
+                decision_utc,
+                60,
+            ),
+            selected,
+        )
+
+        eligible_duplicate = records + [dict(records[-1])]
+        self.assertEqual(
+            consecutive_fn(
+                eligible_duplicate,
+                "funding_spread_bps",
+                decision,
+                decision_utc,
+                60,
+            ),
+            [],
+        )
+        late_latest = [dict(record) for record in records]
+        late_latest[-1]["available_utc"] = "2027-03-01T20:31:01Z"
+        self.assertEqual(
+            consecutive_fn(
+                late_latest, "funding_spread_bps", decision, decision_utc, 60
+            ),
+            [],
+        )
+        late_revision = dict(records[-1])
+        late_revision["available_utc"] = "2027-03-01T20:31:01Z"
+        late_revision["funding_spread_bps"] = "999"
+        self.assertEqual(
+            consecutive_fn(
+                records + [late_revision],
+                "funding_spread_bps",
+                decision,
+                decision_utc,
+                60,
+            ),
+            selected,
+        )
+
+    def test_dated_zscore_history_enforces_publication_cutoff_and_exact_dates(
+        self,
+    ) -> None:
+        select_fn = globals().get("select_causal_history")
+        self.assertTrue(callable(select_fn), "select_causal_history must be callable")
+        decision = "2027-03-01"
+        decision_utc = "2027-03-01T20:31:00Z"
+        cursor = date.fromisoformat(decision)
+        newest_first: list[date] = []
+        for _ in range(252):
+            cursor = previous_weekday(cursor)
+            newest_first.append(cursor)
+        profile = expand_segments(
+            self.fixture["gross_history_profiles"]["mean_0_sd_5_252"]
+        )
+        records = [
+            {
+                "observation_date": observation_date.isoformat(),
+                "available_utc": f"{observation_date.isoformat()}T20:00:00Z",
+                "gross_bps": str(value),
+            }
+            for observation_date, value in zip(reversed(newest_first), profile)
+        ]
+        selected = select_fn(records, "gross_bps", decision, decision_utc, 252)
+        self.assertEqual(len(selected), 252)
+        self.assertEqual(causal_zscore(D("10"), selected), D("2"))
+
+        missing = records[:-2] + records[-1:]
+        missing_selected = select_fn(
+            missing, "gross_bps", decision, decision_utc, 252
+        )
+        self.assertEqual(len(missing_selected), 1)
+        self.assertIsNone(causal_zscore(D("10"), missing_selected))
+
+        duplicate = records + [dict(records[-1])]
+        self.assertEqual(
+            select_fn(duplicate, "gross_bps", decision, decision_utc, 252), []
+        )
+
+        late_latest = [dict(record) for record in records]
+        late_latest[-1]["available_utc"] = "2027-03-01T20:31:01Z"
+        self.assertEqual(
+            select_fn(late_latest, "gross_bps", decision, decision_utc, 252), []
+        )
+
+        later_rows = [
+            {
+                "observation_date": decision,
+                "available_utc": decision_utc,
+                "gross_bps": "999",
+            },
+            {
+                "observation_date": "2027-03-02",
+                "available_utc": "2027-03-02T20:31:00Z",
+                "gross_bps": "999",
+            },
+            {
+                **records[-1],
+                "available_utc": "2027-03-01T20:31:01Z",
+                "gross_bps": "999",
+            },
+        ]
+        self.assertEqual(
+            select_fn(
+                records + later_rows, "gross_bps", decision, decision_utc, 252
+            ),
+            selected,
+        )
+
+    def test_spread_movement_uses_adjacent_synchronized_saved_decisions(
+        self,
+    ) -> None:
+        movement_fn = globals().get("synchronized_spread_movement")
+        self.assertTrue(
+            callable(movement_fn), "synchronized_spread_movement must be callable"
+        )
+        previous_date = "2027-01-05"
+        current_date = "2027-01-06"
+        previous_decision = "2027-01-05T20:31:00Z"
+        current_decision = "2027-01-06T20:31:00Z"
+
+        def snapshot(observation_date: str, cms: str, cmt: str) -> list[dict[str, object]]:
+            values = {"cms": cms, "cmt": cmt, "floating": "5", "repo": "1"}
+            return [
+                {
+                    "field": field,
+                    "observation_date": observation_date,
+                    "available_utc": f"{observation_date}T20:{28 + index:02d}:00Z",
+                    "maturity": "2Y",
+                    "unit": "bps",
+                    "stale": False,
+                    "classification": "exact",
+                    "value_bps": value,
+                }
+                for index, (field, value) in enumerate(values.items())
+            ]
+
+        records = snapshot(previous_date, "450", "420") + snapshot(
+            current_date, "455", "420"
+        )
+        expected = {"delta_spread_bps": D("5"), "direction": 1}
+        actual = movement_fn(
+            records,
+            "2Y",
+            previous_date,
+            current_date,
+            previous_decision,
+            current_decision,
+        )
+        self.assertEqual(actual, expected)
+
+        missing_endpoint = [
+            record
+            for record in records
+            if not (
+                record["observation_date"] == current_date
+                and record["field"] == "cmt"
+            )
+        ]
+        self.assertIsNone(
+            movement_fn(
+                missing_endpoint,
+                "2Y",
+                previous_date,
+                current_date,
+                previous_decision,
+                current_decision,
+            )
+        )
+        self.assertIsNone(
+            movement_fn(
+                records,
+                "2Y",
+                previous_date,
+                "2027-01-07",
+                previous_decision,
+                current_decision,
+            )
+        )
+
+        late_current = [dict(record) for record in records]
+        late_current[-1]["available_utc"] = "2027-01-06T20:31:01Z"
+        self.assertIsNone(
+            movement_fn(
+                late_current,
+                "2Y",
+                previous_date,
+                current_date,
+                previous_decision,
+                current_decision,
+            )
+        )
+
+        later = snapshot("2027-01-07", "999", "0")
+        self.assertEqual(
+            movement_fn(
+                records + later,
+                "2Y",
+                previous_date,
+                current_date,
+                previous_decision,
+                current_decision,
+            ),
+            expected,
+        )
 
     def test_synchronized_decision_requires_exact_field_and_date_identity(self) -> None:
         synchronized_fn = globals().get("synchronized_decision_utc")
