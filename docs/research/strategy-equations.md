@@ -483,12 +483,14 @@ propagates to every derived output, which remains derived-with-proxy-lineage
 and cannot be presented as an exact result or complete strategy output.
 
 Non-finite, missing, stale, wrong-unit, wrong-maturity, or late economic input
-blocks the affected output. Nonpositive price/DV01, unresolved
-sign/multiplier, a one-leg basket, or a DV01 residual above 5% blocks P&L or
-execution as applicable. A missing executable leg is represented only as the
-blocked zero-leg basket; it is never emitted as a one-leg position. Risk
-flattening overrides entry or reversal and produces no entry action in the
-same transition.
+blocks the affected output. Every contract price, official price multiplier,
+swap DV01, and Treasury DV01 input must be finite and strictly positive; a
+missing or invalid value blocks the applicable P&L or basket calculation. An
+unresolved sign/multiplier, a one-leg basket, or a DV01 residual above 5%
+blocks execution. A missing executable leg is represented only as the blocked
+zero-leg basket; it is never emitted as a one-leg position. Risk flattening
+overrides entry or reversal and produces no entry action in the same
+transition.
 
 ## Deliberately unavailable items
 
