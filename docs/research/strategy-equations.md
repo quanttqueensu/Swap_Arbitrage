@@ -194,6 +194,11 @@ permitted. A missing field, duplicate field, prior-date substitute, or record
 published after the saved decision makes the affected input set unavailable;
 future publications do not revise a saved historical decision.
 
+For a two-endpoint movement, the saved clocks must satisfy
+`previous_decision_utc < current_decision_utc`. Equal or reversed decision
+timestamps make the movement unavailable even when both endpoint snapshots
+are otherwise complete.
+
 The Agent 2 movement input is the maturity-matched fixed swap-spread change
 over one adjacent synchronized completed-business-day interval:
 
@@ -404,6 +409,11 @@ examples use YITH27 with ZTH27 and YIWH27 with ZFH27; their start and end
 instrument IDs are equal before the price change is calculated. Roll examples
 instead require explicitly different old and new full identities with the
 timestamp boundary below.
+
+The roll oracle treats each contract `symbol` as its immutable identity. Both
+old and new symbols must match the full-expiry form
+`(?:YIT|YIW|ZT|ZF)[FGHJKMNQUVXZ]\d{2}` and must differ. A root-only, malformed,
+missing, or identical old/new identity makes roll P&L unavailable.
 
 The roll clock is explicit and gap-free:
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import runpy
 import unittest
 from datetime import date, timedelta
@@ -159,6 +160,8 @@ def synchronized_spread_movement(
     previous_decision_utc: str,
     current_decision_utc: str,
 ) -> dict[str, Decimal | int] | None:
+    if previous_decision_utc >= current_decision_utc:
+        return None
     previous_date = date.fromisoformat(previous_observation_date)
     current_date = date.fromisoformat(current_observation_date)
     if previous_weekday(current_date) != previous_date:
@@ -293,6 +296,15 @@ def causal_roll_pnl(
 ) -> dict[str, Decimal | int] | None:
     old = example["old_contract"]
     new = example["new_contract"]
+    full_contract_id = r"(?:YIT|YIW|ZT|ZF)[FGHJKMNQUVXZ]\d{2}"
+    old_id = str(old.get("symbol", ""))
+    new_id = str(new.get("symbol", ""))
+    if (
+        re.fullmatch(full_contract_id, old_id) is None
+        or re.fullmatch(full_contract_id, new_id) is None
+        or old_id == new_id
+    ):
+        return None
     boundary = str(example["roll_decision_utc"])
     if not (
         str(old["start_utc"])
@@ -724,6 +736,27 @@ class ContractPnlEquationTests(unittest.TestCase):
                 invalid["new_contract"]["start_utc"] = shifted_start
                 self.assertIsNone(roll_fn(invalid, example["new_contract"]["end_utc"]))
 
+    def test_roll_rejects_root_only_contract_identity(self) -> None:
+        roll_fn = globals().get("causal_roll_pnl")
+        self.assertTrue(callable(roll_fn), "causal_roll_pnl must be callable")
+        invalid = json.loads(json.dumps(self.examples["eris_roll"]))
+        invalid["old_contract"]["symbol"] = "YIT"
+        self.assertIsNone(roll_fn(invalid, invalid["new_contract"]["end_utc"]))
+
+    def test_roll_rejects_malformed_contract_identity(self) -> None:
+        roll_fn = globals().get("causal_roll_pnl")
+        self.assertTrue(callable(roll_fn), "causal_roll_pnl must be callable")
+        invalid = json.loads(json.dumps(self.examples["eris_roll"]))
+        invalid["new_contract"]["symbol"] = "YITM2"
+        self.assertIsNone(roll_fn(invalid, invalid["new_contract"]["end_utc"]))
+
+    def test_roll_rejects_identical_old_and_new_contract_identities(self) -> None:
+        roll_fn = globals().get("causal_roll_pnl")
+        self.assertTrue(callable(roll_fn), "causal_roll_pnl must be callable")
+        invalid = json.loads(json.dumps(self.examples["eris_roll"]))
+        invalid["new_contract"]["symbol"] = invalid["old_contract"]["symbol"]
+        self.assertIsNone(roll_fn(invalid, invalid["new_contract"]["end_utc"]))
+
     def test_reversal_charges_exit_and_entry_as_separate_actions(self) -> None:
         example = self.examples["reversal_cost"]
         total_cost = D(example["exit_cost_usd"]) + D(example["entry_cost_usd"])
@@ -806,6 +839,29 @@ class TimingAndClassificationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _saved_movement_records() -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        for observation_date, cms, cmt in (
+            ("2027-01-05", "450", "420"),
+            ("2027-01-06", "455", "420"),
+        ):
+            values = {"cms": cms, "cmt": cmt, "floating": "5", "repo": "1"}
+            records.extend(
+                {
+                    "field": field,
+                    "observation_date": observation_date,
+                    "available_utc": f"{observation_date}T20:{28 + index:02d}:00Z",
+                    "maturity": "2Y",
+                    "unit": "bps",
+                    "stale": False,
+                    "classification": "exact",
+                    "value_bps": value,
+                }
+                for index, (field, value) in enumerate(values.items())
+            )
+        return records
 
     def test_previous_weekday_uses_the_declared_monday_friday_calendar(self) -> None:
         previous_fn = globals().get("previous_weekday")
@@ -1114,6 +1170,39 @@ class TimingAndClassificationTests(unittest.TestCase):
                 current_decision,
             ),
             expected,
+        )
+
+    def test_spread_movement_rejects_equal_saved_decision_clocks(self) -> None:
+        movement_fn = globals().get("synchronized_spread_movement")
+        self.assertTrue(
+            callable(movement_fn), "synchronized_spread_movement must be callable"
+        )
+        decision = "2027-01-06T20:31:00Z"
+        self.assertIsNone(
+            movement_fn(
+                self._saved_movement_records(),
+                "2Y",
+                "2027-01-05",
+                "2027-01-06",
+                decision,
+                decision,
+            )
+        )
+
+    def test_spread_movement_rejects_reversed_saved_decision_clocks(self) -> None:
+        movement_fn = globals().get("synchronized_spread_movement")
+        self.assertTrue(
+            callable(movement_fn), "synchronized_spread_movement must be callable"
+        )
+        self.assertIsNone(
+            movement_fn(
+                self._saved_movement_records(),
+                "2Y",
+                "2027-01-05",
+                "2027-01-06",
+                "2027-01-07T20:31:00Z",
+                "2027-01-06T20:31:00Z",
+            )
         )
 
     def test_synchronized_decision_requires_exact_field_and_date_identity(self) -> None:
