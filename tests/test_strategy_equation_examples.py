@@ -296,13 +296,16 @@ def causal_roll_pnl(
 ) -> dict[str, Decimal | int] | None:
     old = example["old_contract"]
     new = example["new_contract"]
-    full_contract_id = r"(?:YIT|YIW|ZT|ZF)[FGHJKMNQUVXZ]\d{2}"
+    full_contract_id = r"(?P<root>YIT|YIW|ZT|ZF)[HMUZ]\d{2}"
     old_id = str(old.get("symbol", ""))
     new_id = str(new.get("symbol", ""))
+    old_match = re.fullmatch(full_contract_id, old_id)
+    new_match = re.fullmatch(full_contract_id, new_id)
     if (
-        re.fullmatch(full_contract_id, old_id) is None
-        or re.fullmatch(full_contract_id, new_id) is None
+        old_match is None
+        or new_match is None
         or old_id == new_id
+        or old_match.group("root") != new_match.group("root")
     ):
         return None
     boundary = str(example["roll_decision_utc"])
@@ -755,6 +758,21 @@ class ContractPnlEquationTests(unittest.TestCase):
         self.assertTrue(callable(roll_fn), "causal_roll_pnl must be callable")
         invalid = json.loads(json.dumps(self.examples["eris_roll"]))
         invalid["new_contract"]["symbol"] = invalid["old_contract"]["symbol"]
+        self.assertIsNone(roll_fn(invalid, invalid["new_contract"]["end_utc"]))
+
+    def test_roll_rejects_cross_product_contract_identities(self) -> None:
+        roll_fn = globals().get("causal_roll_pnl")
+        self.assertTrue(callable(roll_fn), "causal_roll_pnl must be callable")
+        invalid = json.loads(json.dumps(self.examples["eris_roll"]))
+        invalid["new_contract"]["symbol"] = "ZTM27"
+        self.assertIsNone(roll_fn(invalid, invalid["new_contract"]["end_utc"]))
+
+    def test_roll_rejects_nonquarterly_contract_months(self) -> None:
+        roll_fn = globals().get("causal_roll_pnl")
+        self.assertTrue(callable(roll_fn), "causal_roll_pnl must be callable")
+        invalid = json.loads(json.dumps(self.examples["eris_roll"]))
+        invalid["old_contract"]["symbol"] = "YITF27"
+        invalid["new_contract"]["symbol"] = "YITG27"
         self.assertIsNone(roll_fn(invalid, invalid["new_contract"]["end_utc"]))
 
     def test_reversal_charges_exit_and_entry_as_separate_actions(self) -> None:

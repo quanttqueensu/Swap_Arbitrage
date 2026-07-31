@@ -412,8 +412,10 @@ timestamp boundary below.
 
 The roll oracle treats each contract `symbol` as its immutable identity. Both
 old and new symbols must match the full-expiry form
-`(?:YIT|YIW|ZT|ZF)[FGHJKMNQUVXZ]\d{2}` and must differ. A root-only, malformed,
-missing, or identical old/new identity makes roll P&L unavailable.
+`(?P<root>YIT|YIW|ZT|ZF)[HMUZ]\d{2}`, must share the same root, and must differ.
+Only the listed March quarterly cycle (`H`, `M`, `U`, `Z`) is exact. A
+root-only, malformed, missing, cross-product, non-quarterly, or identical
+old/new identity makes roll P&L unavailable.
 
 The roll clock is explicit and gap-free:
 
