@@ -140,26 +140,6 @@ unavailable pending P11.
 
 ## Decision clock and movement trigger
 
-The movement input is the maturity-matched economic rate change
-\(\Delta r_{m,t}\), expressed once in basis points at the decision boundary.
-It does not use an Eris/Treasury price difference. The frozen movement
-classification is:
-
-\[
-movement(\Delta r)=
-\begin{cases}
-+1,&\Delta r\geq5.00\ \text{bp}\\
--1,&\Delta r\leq-5.00\ \text{bp}\\
-0,&\text{otherwise.}
-\end{cases}
-\]
-
-Thus the six fixture results are literal boundary checks: 4.99 maps to 0,
-5.00 and 5.01 map to +1, -4.99 maps to 0, and -5.00 and -5.01 map to
--1. The threshold is inclusive in both directions. A decision still requires
-the causal funding and z-score histories and all maturity-matched inputs to be
-ready; movement alone cannot authorize an entry.
-
 ## Causal z-score and state rules
 
 The causal standardized gross opportunity is:
@@ -183,36 +163,6 @@ The current observation is excluded. A history with any count other than 252,
 or a zero sample standard deviation, produces no z-score. Future observations
 cannot revise an already calculated historical z-score; they belong only to a
 later decision's prior window.
-
-The position state is \(p\in\{-1,0,+1\}\), where +1 is traditional and -1
-is reverse. Entry eligibility is directional and strictly positive:
-
-\[
-E^+=\left[z\geq2.0\right]\land\left[X^{net,+1}>0\right],\qquad
-E^-=\left[z\leq-2.0\right]\land\left[X^{net,-1}>0\right].
-\]
-
-At a flat position, \(E^+\) enters traditional and \(E^-\) enters reverse.
-At an existing position, an eligible opposite entry is a reversal with two
-ordered actions: exit the existing side, then enter the new side. Otherwise an
-existing side exits when \(|z|\leq0.5\), inclusive, or when that side's net
-opportunity is nonpositive. It persists outside those conditions.
-
-The explicit entry checks are: 1.9999 stays flat, while 2.0 and 2.0001 enter
-traditional; -1.9999 stays flat, while -2.0 and -2.0001 enter reverse. From a
-traditional position, \(|z|=0.4999\) and 0.5 exit, while 0.5001 persists when
-traditional net opportunity remains positive.
-
-| Fixture state | Input summary | Result |
-|---|---|---|
-| `traditional_entry_at_boundary` | flat, \(z=2.0\), traditional net = 0.0001 bp | +1; `enter_traditional` |
-| `traditional_persistence` | +1, \(z=1.0\), traditional net = 1 bp | +1; no action |
-| `traditional_hysteretic_exit_at_boundary` | +1, \(z=0.5\) | 0; `exit_traditional` |
-| `reverse_entry_at_boundary` | flat, \(z=-2.0\), reverse net = 0.0001 bp | -1; `enter_reverse` |
-| `traditional_to_reverse_reversal` | +1, \(z=-2.0\), reverse net = 2 bp | -1; `exit_traditional`, then `enter_reverse` |
-| `risk_flatten_overrides_entry` | +1 with an otherwise eligible reverse entry | 0; `risk_flatten` only |
-| `missing_data_flattens` | -1 with data not ready | 0; `data_flatten` only |
-| `nonpositive_net_exits` | -1, reverse net = 0 bp | 0; `exit_reverse` |
 
 ## Directional costs and eligibility
 
@@ -241,112 +191,9 @@ while 0.0001 bp is eligible.
 
 ## Executable futures direction
 
-One long Eris SOFR Swap Futures contract receives fixed and pays compounded
-SOFR. Long Treasury futures prices fall when yields rise. Consequently, the
-economic direction establishes the quantity signs before DV01 sizing:
-
-| Direction | `d` | Eris quantity sign | Swap exposure | Treasury quantity sign |
-|---|---:|---:|---|---:|
-| Traditional | `+1` | positive | receive fixed/pay compounded SOFR | negative |
-| Reverse | `-1` | negative | pay fixed/receive compounded SOFR | positive |
-
-The side mapping is fixed, but published 2:1 ETU and 1:1 EWV ratios are only
-sanity checks. The independently selected integer basket uses current,
-validated contract/CTD DV01 magnitudes; unavailable DV01 blocks execution.
-
 ## Integer DV01 hedge
 
-The selector accepts positive DV01 magnitudes \(D_S\) and \(D_T\). Because a
-long Eris or Treasury futures contract loses value for a one-basis-point rate
-increase, each signed long-contract exposure is explicitly
-
-\[
-\delta_S=-D_S,\qquad\delta_T=-D_T.
-\]
-
-For positive target \(D^*\), first round the positive swap magnitude half away
-from zero and apply the economic direction:
-
-\[
-n_S=d\,round_{half\ away}(D^*/D_S).
-\]
-
-A zero rounded swap leg blocks the basket. Otherwise solve the continuous
-Treasury quantity
-
-\[
-n_T^*=-\frac{n_S\delta_S}{\delta_T},
-\]
-
-test only \(\lfloor n_T^*\rfloor\) and the adjacent ceiling, and minimize in
-order: absolute net DV01, gross DV01, then integer Treasury quantity. Net and
-residual are
-
-\[
-DV01^{net}=n_S\delta_S+n_T\delta_T,\qquad
-\rho=|DV01^{net}|/D^*.
-\]
-
-Both legs must be nonzero and \(\rho\leq0.05\), inclusive. Invalid direction,
-nonpositive target, or nonpositive leg DV01 returns a blocked zero-leg result.
-
-The fixture calculations are:
-
-- `traditional_exact_5_percent`: \(n_S=round(1000/100)=10\),
-  \(n_T^*=-1.0526\ldots\), and -1 beats -2. Net is
-  \(10(-100)+(-1)(-950)=-50\), so \(\rho=50/1000=0.05\): allowed.
-- `reverse_exact_5_percent`: \(n_S=-10\), \(n_T^*=1.0526\ldots\), and
-  \(n_T=1\). Net is \((-10)(-100)+1(-950)=50\), so \(\rho=0.05\): allowed.
-- `traditional_5_01_percent_block`: \(n_S=10\), \(n_T=-1\), net is
-  \(-1000+949.9=-50.1\), and \(\rho=50.1/1000=0.0501\): blocked.
-- `reverse_4_99_percent_allow`: \(n_S=-10\), \(n_T=1\), net is
-  \(1000-950.1=49.9\), and \(\rho=49.9/1000=0.0499\): allowed.
-- `tie_chooses_lower_gross`: \(n_S=round(300/100)=3\) and
-  \(n_T^*=-1.5\). Candidates -2 and -1 both leave 100 USD/bp absolute net;
-  their gross exposures are 700 and 500 USD/bp, so -1 wins. Net is -100 and
-  \(\rho=100/300=0.33333333333333333333333333333333333333333333333333\):
-  blocked.
-- `half_swap_rounds_away`: 250/100 = 2.5 rounds to \(n_S=3\), not 2;
-  \(n_T^*=-2\), net is \(3(-100)+(-2)(-150)=0\), and \(\rho=0\): allowed.
-- `zero_swap_blocks`: 40/100 = 0.4 rounds to zero, so both returned
-  quantities, net, and residual are zero and the basket is blocked.
-
 ## Contract P&L, reversal, roll, and flattening
-
-Each contract is marked only over its own price history:
-
-\[
-PnL_i=q_iM_i(P_i^{end}-P_i^{start})-C_i.
-\]
-
-The signed quantity carries the long/short direction. Costs are charged to the
-action that incurs them. The fixture arithmetic is:
-
-- `traditional_same_contract`: YIT contributes
-  \(2(1000)(100.1125-100.1000)=25\) USD. ZT contributes
-  \((-1)(2000)(101.984375-102.000000)-6.25=25\) USD. Total: 50 USD.
-  This checks both the positive Eris/negative Treasury signs and the exact
-  1,000/2,000 USD-per-point multipliers.
-- `reverse_same_contract`: YIW contributes
-  \((-1)(1000)(99.4900-99.5000)=10\) USD. ZF contributes
-  \(1(1000)(108.015625-108.000000)-5.625=10\) USD. Total: 20 USD.
-- `eris_roll`: old YITH27 P&L is
-  \(2(1000)(100.1100-100.1000)=20\) USD and new YITM27 P&L is
-  \(2(1000)(99.9050-99.9000)=10\) USD. Same-contract P&L is 30 USD; close
-  plus open cost is \(3+4=7\) USD; net is 23 USD; turnover is
-  \(|2|+|2|=4\) contracts. The cross-contract change
-  \(99.9000-100.1100=-0.2100\), which would create -420 USD at the old
-  quantity and multiplier, is not a return and is never used.
-- `reversal_cost`: the exit and opposite entry are distinct actions. Cost is
-  \(275+325=600\) USD and turnover is \(|3|+|2|=5\) contracts; neither the
-  cost nor the turnover is netted across the reversal.
-
-Flattening is fail-closed. `risk_flatten` has first precedence and produces a
-single risk-flatten action for a nonzero position, even if an opposite entry
-would otherwise qualify. If there is no risk flatten but required data is not
-ready, a nonzero position produces one `data_flatten` action. A flat position
-produces no redundant flatten action. Risk or data flatten never includes an
-entry action in the same transition.
 
 ## Golden calculations
 

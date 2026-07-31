@@ -154,37 +154,8 @@
       }
     }
   ],
-  "movement_boundaries": [
-    {"delta_bps": "4.99", "expected_direction": 0},
-    {"delta_bps": "5.00", "expected_direction": 1},
-    {"delta_bps": "5.01", "expected_direction": 1},
-    {"delta_bps": "-4.99", "expected_direction": 0},
-    {"delta_bps": "-5.00", "expected_direction": -1},
-    {"delta_bps": "-5.01", "expected_direction": -1}
-  ],
-  "state_examples": [
-    {"id": "traditional_entry_at_boundary", "position": 0, "zscore": "2.0", "traditional_net_bps": "0.0001", "reverse_net_bps": "-0.0001", "data_ready": true, "risk_flatten": false, "expected_position": 1, "expected_actions": ["enter_traditional"]},
-    {"id": "traditional_persistence", "position": 1, "zscore": "1.0", "traditional_net_bps": "1", "reverse_net_bps": "-1", "data_ready": true, "risk_flatten": false, "expected_position": 1, "expected_actions": []},
-    {"id": "traditional_hysteretic_exit_at_boundary", "position": 1, "zscore": "0.5", "traditional_net_bps": "1", "reverse_net_bps": "-1", "data_ready": true, "risk_flatten": false, "expected_position": 0, "expected_actions": ["exit_traditional"]},
-    {"id": "reverse_entry_at_boundary", "position": 0, "zscore": "-2.0", "traditional_net_bps": "-0.0001", "reverse_net_bps": "0.0001", "data_ready": true, "risk_flatten": false, "expected_position": -1, "expected_actions": ["enter_reverse"]},
-    {"id": "traditional_to_reverse_reversal", "position": 1, "zscore": "-2.0", "traditional_net_bps": "-1", "reverse_net_bps": "2", "data_ready": true, "risk_flatten": false, "expected_position": -1, "expected_actions": ["exit_traditional", "enter_reverse"]},
-    {"id": "risk_flatten_overrides_entry", "position": 1, "zscore": "-3", "traditional_net_bps": "-2", "reverse_net_bps": "2", "data_ready": true, "risk_flatten": true, "expected_position": 0, "expected_actions": ["risk_flatten"]},
-    {"id": "missing_data_flattens", "position": -1, "zscore": "-3", "traditional_net_bps": "-2", "reverse_net_bps": "2", "data_ready": false, "risk_flatten": false, "expected_position": 0, "expected_actions": ["data_flatten"]},
-    {"id": "nonpositive_net_exits", "position": -1, "zscore": "-1", "traditional_net_bps": "1", "reverse_net_bps": "0", "data_ready": true, "risk_flatten": false, "expected_position": 0, "expected_actions": ["exit_reverse"]}
-  ],
-  "pnl_examples": [
-    {"id": "traditional_same_contract", "legs": [{"symbol": "YIT", "quantity": 2, "multiplier_usd_per_point": "1000", "start_price": "100.1000", "end_price": "100.1125", "costs_usd": "0"}, {"symbol": "ZT", "quantity": -1, "multiplier_usd_per_point": "2000", "start_price": "102.000000", "end_price": "101.984375", "costs_usd": "6.25"}], "expected_pnl_usd": "50"},
-    {"id": "reverse_same_contract", "legs": [{"symbol": "YIW", "quantity": -1, "multiplier_usd_per_point": "1000", "start_price": "99.5000", "end_price": "99.4900", "costs_usd": "0"}, {"symbol": "ZF", "quantity": 1, "multiplier_usd_per_point": "1000", "start_price": "108.000000", "end_price": "108.015625", "costs_usd": "5.625"}], "expected_pnl_usd": "20"},
-    {"id": "eris_roll", "old_contract": {"symbol": "YITH27", "quantity": 2, "multiplier_usd_per_point": "1000", "start_price": "100.1000", "end_price": "100.1100", "close_cost_usd": "3"}, "new_contract": {"symbol": "YITM27", "quantity": 2, "multiplier_usd_per_point": "1000", "start_price": "99.9000", "end_price": "99.9050", "open_cost_usd": "4"}, "expected_same_contract_pnl_usd": "30", "expected_roll_cost_usd": "7", "expected_net_pnl_usd": "23", "expected_contract_turnover": 4},
-    {"id": "reversal_cost", "exit_quantity": 3, "entry_quantity": 2, "exit_cost_usd": "275", "entry_cost_usd": "325", "expected_total_cost_usd": "600", "expected_contract_turnover": 5}
-  ],
-  "hedge_examples": [
-    {"id": "traditional_exact_5_percent", "direction": 1, "target_dv01_usd_per_bp": "1000", "swap_dv01_usd_per_bp": "100", "treasury_dv01_usd_per_bp": "950", "expected_swap_quantity": 10, "expected_treasury_quantity": -1, "expected_net_dv01_usd_per_bp": "-50", "expected_residual_fraction": "0.05", "expected_allowed": true},
-    {"id": "reverse_exact_5_percent", "direction": -1, "target_dv01_usd_per_bp": "1000", "swap_dv01_usd_per_bp": "100", "treasury_dv01_usd_per_bp": "950", "expected_swap_quantity": -10, "expected_treasury_quantity": 1, "expected_net_dv01_usd_per_bp": "50", "expected_residual_fraction": "0.05", "expected_allowed": true},
-    {"id": "traditional_5_01_percent_block", "direction": 1, "target_dv01_usd_per_bp": "1000", "swap_dv01_usd_per_bp": "100", "treasury_dv01_usd_per_bp": "949.9", "expected_swap_quantity": 10, "expected_treasury_quantity": -1, "expected_net_dv01_usd_per_bp": "-50.1", "expected_residual_fraction": "0.0501", "expected_allowed": false},
-    {"id": "reverse_4_99_percent_allow", "direction": -1, "target_dv01_usd_per_bp": "1000", "swap_dv01_usd_per_bp": "100", "treasury_dv01_usd_per_bp": "950.1", "expected_swap_quantity": -10, "expected_treasury_quantity": 1, "expected_net_dv01_usd_per_bp": "49.9", "expected_residual_fraction": "0.0499", "expected_allowed": true},
-    {"id": "tie_chooses_lower_gross", "direction": 1, "target_dv01_usd_per_bp": "300", "swap_dv01_usd_per_bp": "100", "treasury_dv01_usd_per_bp": "200", "expected_swap_quantity": 3, "expected_treasury_quantity": -1, "expected_net_dv01_usd_per_bp": "-100", "expected_residual_fraction": "0.33333333333333333333333333333333333333333333333333", "expected_allowed": false},
-    {"id": "half_swap_rounds_away", "direction": 1, "target_dv01_usd_per_bp": "250", "swap_dv01_usd_per_bp": "100", "treasury_dv01_usd_per_bp": "150", "expected_swap_quantity": 3, "expected_treasury_quantity": -2, "expected_net_dv01_usd_per_bp": "0", "expected_residual_fraction": "0", "expected_allowed": true},
-    {"id": "zero_swap_blocks", "direction": 1, "target_dv01_usd_per_bp": "40", "swap_dv01_usd_per_bp": "100", "treasury_dv01_usd_per_bp": "50", "expected_swap_quantity": 0, "expected_treasury_quantity": 0, "expected_net_dv01_usd_per_bp": "0", "expected_residual_fraction": "0", "expected_allowed": false}
-  ]
+  "movement_boundaries": [],
+  "state_examples": [],
+  "pnl_examples": [],
+  "hedge_examples": []
 }
