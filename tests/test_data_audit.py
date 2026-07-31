@@ -210,6 +210,16 @@ class CsvProfilingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "row width differs from header width"):
             profile_csv(path, self.root, full_scan_limit_bytes=1)
 
+    def test_unknown_csv_without_date_is_profiled_without_a_candidate_key(self) -> None:
+        path = self.root / "external-cache.csv"
+        path.write_text("instrument,price\nSOFR1,99.5\n", encoding="utf-8")
+
+        result = profile_artifacts([path], self.root, {})[0]
+
+        self.assertNotIsInstance(result, ProfileFailure)
+        self.assertEqual(result.key_rule, KeyRule())
+        self.assertIsNone(result.duplicate_key_count)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -328,6 +338,24 @@ class LineageTests(unittest.TestCase):
 
         row = next(row for row in build_lineage([profile_csv(path, self.root)], evidence) if row.column == "mystery")
 
+        self.assertEqual(row.status, "discrepancy")
+
+    def test_terminal_copied_column_with_only_upstream_evidence_is_unused(self) -> None:
+        risk = self.root / "risk_data.csv"
+        backtest = self.root / "swap_arb_backtest_case.csv"
+        risk.write_text("date,dgs2\n2026-01-01,4.1\n", encoding="utf-8")
+        backtest.write_text("date,dgs2\n2026-01-01,4.1\n", encoding="utf-8")
+        profiles = [profile_csv(path, self.root) for path in (risk, backtest)]
+        evidence = {
+            "dgs2": (
+                SourceEvidence("dgs2", "config.py:68", '"BC_2YEAR": "dgs2",'),
+            )
+        }
+
+        rows = build_lineage(profiles, evidence)
+
+        row = next(item for item in rows if item.artifact == backtest.name and item.column == "dgs2")
+        self.assertEqual(row.classification, "unused")
         self.assertEqual(row.status, "discrepancy")
 
     def test_copied_column_with_unknown_unit_is_a_discrepancy(self) -> None:

@@ -373,7 +373,7 @@ def profile_artifacts(
         relative_path = path.relative_to(data_root).as_posix()
         key_rule = key_rules.get(
             path.name,
-            KeyRule(("date",), "candidate") if path.name.endswith(".csv") else KeyRule(),
+            KeyRule(),
         )
         try:
             results.append(profile_csv(path, data_root, key_rule))
@@ -546,7 +546,16 @@ def build_lineage(
             locations = tuple(item.location for item in evidence.get(column, ()))
             used_downstream = any(column in next_profile.headers for next_profile in next_profiles)
             classification, classification_verified = _classification_for(artifact_name, column)
-            if copied and not used_downstream and not locations and next_profiles:
+            writer_evidence = any(
+                location.startswith(f"{writer_for(artifact_name)}:") for location in locations
+            )
+            unused_intermediate = bool(next_profiles) and not locations
+            unused_terminal = (
+                artifact_name.startswith("swap_arb_backtest_")
+                and not next_profiles
+                and not writer_evidence
+            )
+            if copied and not used_downstream and (unused_intermediate or unused_terminal):
                 classification, classification_verified = "unused", True
             unit, unit_verified = _unit_for(column)
             status = (
