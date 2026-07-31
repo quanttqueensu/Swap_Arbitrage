@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP, getcontext, localcontext
 from pathlib import Path
 
@@ -39,6 +40,73 @@ def funding_expectation(history: list[Decimal]) -> Decimal | None:
     trailing = history[-60:]
     one_step = mean(trailing)
     return mean([one_step] * 20)
+
+
+def previous_weekday(day: date) -> date:
+    cursor = day - timedelta(days=1)
+    while cursor.weekday() >= 5:
+        cursor -= timedelta(days=1)
+    return cursor
+
+
+def consecutive_lagged_funding(
+    records: list[dict[str, str]], decision_date: str
+) -> list[Decimal]:
+    by_date = {
+        date.fromisoformat(record["observation_date"]): D(record["funding_spread_bps"])
+        for record in records
+    }
+    cursor = previous_weekday(date.fromisoformat(decision_date))
+    newest_first: list[Decimal] = []
+    while len(newest_first) < 60 and cursor in by_date:
+        newest_first.append(by_date[cursor])
+        cursor = previous_weekday(cursor)
+    return list(reversed(newest_first))
+
+
+def synchronized_decision_utc(records: list[dict[str, str]]) -> str | None:
+    required = {"cms", "cmt", "floating", "repo"}
+    if len(records) != 4 or {record["field"] for record in records} != required:
+        return None
+    dates = {record["observation_date"] for record in records}
+    if len(dates) != 1:
+        return None
+    if any(record["available_utc"] <= record["observation_date"] for record in records):
+        return None
+    return max(record["available_utc"] for record in records)
+
+
+def classify_economic_inputs(
+    records: list[dict[str, object]], maturity: str, decision_utc: str
+) -> str:
+    required = {"cms", "cmt", "floating", "repo"}
+    if len(records) != 4 or {str(record.get("field")) for record in records} != required:
+        return "unavailable"
+    classifications: set[str] = set()
+    for record in records:
+        if record.get("unit") != "bps" or record.get("maturity") != maturity:
+            return "unavailable"
+        if record.get("stale") is not False or str(record.get("available_utc")) > decision_utc:
+            return "unavailable"
+        try:
+            value = D(record.get("value_bps"))
+        except (InvalidOperation, ValueError):
+            return "unavailable"
+        if not value.is_finite():
+            return "unavailable"
+        classification = str(record.get("classification"))
+        if classification not in {"exact", "proxy"}:
+            return "unavailable"
+        classifications.add(classification)
+    return "proxy" if "proxy" in classifications else "exact"
+
+
+def valid_positive_decimals(*values: object) -> bool:
+    try:
+        parsed = [D(value) for value in values]
+    except (InvalidOperation, ValueError):
+        return False
+    return all(value.is_finite() and value > 0 for value in parsed)
 
 
 def causal_zscore(current: Decimal, prior: list[Decimal]) -> Decimal | None:
@@ -483,3 +551,213 @@ class IntegerDv01EquationTests(unittest.TestCase):
                     select_fn(direction, D(target), D(swap), D(treasury)),
                     blocked,
                 )
+
+
+class TimingAndClassificationTests(unittest.TestCase):
+    def test_previous_weekday_uses_the_declared_monday_friday_calendar(self) -> None:
+        previous_fn = globals().get("previous_weekday")
+        self.assertTrue(callable(previous_fn), "previous_weekday must be callable")
+        self.assertEqual(previous_fn(date(2027, 3, 1)), date(2027, 2, 26))
+
+    def test_consecutive_lagged_funding_is_causal_and_breaks_at_a_gap(self) -> None:
+        consecutive_fn = globals().get("consecutive_lagged_funding")
+        self.assertTrue(
+            callable(consecutive_fn), "consecutive_lagged_funding must be callable"
+        )
+        decision = "2027-03-01"
+        cursor = date.fromisoformat(decision)
+        dates_newest_first: list[date] = []
+        for _ in range(61):
+            cursor = previous_weekday(cursor)
+            dates_newest_first.append(cursor)
+        records = [
+            {
+                "observation_date": observation_date.isoformat(),
+                "funding_spread_bps": "5",
+            }
+            for observation_date in reversed(dates_newest_first)
+        ]
+
+        selected = consecutive_fn(records, decision)
+        self.assertEqual(len(selected), 60)
+        self.assertEqual(funding_expectation(selected), D("5"))
+        self.assertEqual(records[-1]["observation_date"], "2027-02-26")
+
+        forty_records = records[:1] + records[21:]
+        forty_selected = consecutive_fn(forty_records, decision)
+        self.assertEqual(len(forty_selected), 40)
+        self.assertEqual(funding_expectation(forty_selected), D("5"))
+
+        second_newest_date = records[-2]["observation_date"]
+        broken_records = [
+            record
+            for record in records
+            if record["observation_date"] != second_newest_date
+        ]
+        broken_selected = consecutive_fn(broken_records, decision)
+        self.assertEqual(broken_selected, [D("5")])
+        self.assertIsNone(funding_expectation(broken_selected))
+
+        bounded_records = records + [
+            {"observation_date": decision, "funding_spread_bps": "999"},
+            {"observation_date": "2027-03-02", "funding_spread_bps": "999"},
+        ]
+        self.assertEqual(consecutive_fn(bounded_records, decision), selected)
+
+        revised_old_record = [dict(record) for record in records]
+        revised_old_record[0]["funding_spread_bps"] = "999"
+        self.assertEqual(consecutive_fn(revised_old_record, decision), selected)
+
+    def test_synchronized_decision_requires_exact_field_and_date_identity(self) -> None:
+        synchronized_fn = globals().get("synchronized_decision_utc")
+        self.assertTrue(
+            callable(synchronized_fn), "synchronized_decision_utc must be callable"
+        )
+        records = [
+            {
+                "field": "cms",
+                "observation_date": "2027-01-06",
+                "available_utc": "2027-01-06T20:29:00Z",
+            },
+            {
+                "field": "cmt",
+                "observation_date": "2027-01-06",
+                "available_utc": "2027-01-06T20:30:00Z",
+            },
+            {
+                "field": "floating",
+                "observation_date": "2027-01-06",
+                "available_utc": "2027-01-06T20:28:00Z",
+            },
+            {
+                "field": "repo",
+                "observation_date": "2027-01-06",
+                "available_utc": "2027-01-06T20:31:00Z",
+            },
+        ]
+        saved_decision = synchronized_fn(records)
+        self.assertEqual(saved_decision, "2027-01-06T20:31:00Z")
+        self.assertIsNone(synchronized_fn(records[:-1]))
+
+        prior_date = [dict(record) for record in records]
+        prior_date[3]["observation_date"] = "2027-01-05"
+        self.assertIsNone(synchronized_fn(prior_date))
+
+        later = [dict(record) for record in records]
+        later[0]["available_utc"] = "2027-01-06T20:32:00Z"
+        self.assertEqual(synchronized_fn(later), "2027-01-06T20:32:00Z")
+
+        premature = [dict(record) for record in records]
+        premature[0]["available_utc"] = "2027-01-06"
+        self.assertIsNone(synchronized_fn(premature))
+
+        future_records = [
+            {
+                "field": record["field"],
+                "observation_date": "2027-01-07",
+                "available_utc": "2027-01-07T20:31:00Z",
+            }
+            for record in records
+        ]
+        archive = records + future_records
+        self.assertEqual(len(archive), 8)
+        self.assertEqual(saved_decision, "2027-01-06T20:31:00Z")
+        self.assertEqual(synchronized_fn(archive[:4]), saved_decision)
+
+    def test_economic_input_classification_is_mutually_exclusive_and_fail_closed(
+        self,
+    ) -> None:
+        classify_fn = globals().get("classify_economic_inputs")
+        self.assertTrue(
+            callable(classify_fn), "classify_economic_inputs must be callable"
+        )
+        decision_utc = "2027-01-06T20:31:00Z"
+        records: list[dict[str, object]] = [
+            {
+                "field": field,
+                "unit": "bps",
+                "maturity": "2Y",
+                "stale": False,
+                "available_utc": available_utc,
+                "value_bps": value_bps,
+                "classification": "exact",
+            }
+            for field, available_utc, value_bps in [
+                ("cms", "2027-01-06T20:29:00Z", "420"),
+                ("cmt", "2027-01-06T20:30:00Z", "400"),
+                ("floating", "2027-01-06T20:28:00Z", "4.5"),
+                ("repo", "2027-01-06T20:31:00Z", "4.0"),
+            ]
+        ]
+        saved_result = classify_fn(records, "2Y", decision_utc)
+        self.assertEqual(saved_result, "exact")
+
+        proxy = [dict(record) for record in records]
+        proxy[3]["classification"] = "proxy"
+        self.assertEqual(classify_fn(proxy, "2Y", decision_utc), "proxy")
+
+        duplicate_cms = [dict(record) for record in records]
+        duplicate_cms[3]["field"] = "cms"
+        malformed_cases = {
+            "missing_repo": records[:-1],
+            "duplicate_cms": duplicate_cms,
+        }
+        field_mutations = {
+            "wrong_unit": ("unit", "decimal"),
+            "wrong_maturity": ("maturity", "5Y"),
+            "stale": ("stale", True),
+            "late": ("available_utc", "2027-01-06T20:31:01Z"),
+            "nonfinite": ("value_bps", "NaN"),
+            "unrecognized_classification": ("classification", "assumed"),
+        }
+        for name, (field, value) in field_mutations.items():
+            mutated = [dict(record) for record in records]
+            mutated[0][field] = value
+            malformed_cases[name] = mutated
+        missing_value = [dict(record) for record in records]
+        del missing_value[0]["value_bps"]
+        malformed_cases["missing_value"] = missing_value
+
+        for name, malformed in malformed_cases.items():
+            with self.subTest(case=name):
+                self.assertEqual(
+                    classify_fn(malformed, "2Y", decision_utc), "unavailable"
+                )
+
+        future_replacement = [dict(record) for record in records]
+        future_replacement[3]["available_utc"] = "2027-01-07T20:31:00Z"
+        self.assertEqual(
+            classify_fn(future_replacement, "2Y", decision_utc), "unavailable"
+        )
+        self.assertEqual(saved_result, "exact")
+
+    def test_contract_inputs_must_be_positive_and_two_leg_baskets_fail_closed(
+        self,
+    ) -> None:
+        positive_fn = globals().get("valid_positive_decimals")
+        self.assertTrue(
+            callable(positive_fn), "valid_positive_decimals must be callable"
+        )
+        self.assertTrue(positive_fn("1000", "100.25", "100", "950"))
+        invalid_values = [None, "0", "-1", "NaN", "Infinity", "-Infinity"]
+        input_names = ["multiplier", "price", "swap_dv01", "treasury_dv01"]
+        valid = ["1000", "100.25", "100", "950"]
+        for input_index, input_name in enumerate(input_names):
+            for invalid in invalid_values:
+                with self.subTest(input=input_name, value=invalid):
+                    candidate = list(valid)
+                    candidate[input_index] = invalid
+                    self.assertFalse(positive_fn(*candidate))
+
+        select_fn = globals().get("select_hedge")
+        self.assertTrue(callable(select_fn), "select_hedge must be callable")
+        self.assertEqual(
+            select_fn(1, D("1000"), D("100"), D("0")),
+            {
+                "swap_quantity": 0,
+                "treasury_quantity": 0,
+                "net_dv01": D("0"),
+                "residual_fraction": D("0"),
+                "allowed": False,
+            },
+        )

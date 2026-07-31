@@ -113,7 +113,9 @@ lineage; a missing required input makes the affected output `unavailable`.
 
 The funding spread is \(FS_t=L_t-repo_t\), in basis points. The frozen
 research estimator accepts only the consecutive one-business-day-lagged suffix
-available at \(t\). With \(n_t\) such observations,
+available at \(t\): a maximum 60 completed business dates, a minimum 40
+completed business dates, and a frozen 20-business-day forecast horizon. With
+\(n_t\) such observations,
 
 \[
 N_t=\min(60,n_t), \qquad N_t\geq40
@@ -134,11 +136,23 @@ forecast steps are identical, so their horizon average equals the trailing
 mean exactly. Forty 5-bp observations produce 5 bp; 60 5-bp observations
 also produce 5 bp; 39 observations produce no forecast. Once the history has
 60 observations, an older 999-bp value is outside the trailing window and
-does not change the 5-bp result. This test-only arithmetic presumes the
-history was already selected causally; production calendar validation remains
-unavailable pending P11.
+does not change the 5-bp result. The 60/40 funding history is a consecutive
+suffix ending at (t-1); a missing required business date breaks the suffix,
+even when older observations exist. P10 demonstrates this dated selection
+with an explicit synthetic Monday-Friday business-day calendar with no
+holidays. The real production business-day/holiday calendar remains
+`unavailable pending P11` validation and is never silently inferred from the
+synthetic calendar.
 
 ## Decision clock and movement trigger
+
+For a decision using CMS, CMT, floating, and repo inputs, every record must
+have exactly the same observation date and exact field identity. The
+`decision_utc` is the maximum of the required same-observation-date publication
+timestamps. No guessed fixed clock, forward fill, or intraday interpolation is
+permitted. A missing field, duplicate field, prior-date substitute, or record
+published after the saved decision makes the affected input set unavailable;
+future publications do not revise a saved historical decision.
 
 The movement input is the maturity-matched economic rate change
 \(\Delta r_{m,t}\), expressed once in basis points at the decision boundary.
@@ -169,8 +183,8 @@ z_{m,t}=\frac{X^{gross}_{m,t}-\mu_{m,t^-}}{\sigma_{m,t^-}}
 \]
 
 where \(\mu_{m,t^-}\) and \(\sigma_{m,t^-}\) are respectively the mean and
-sample standard deviation of exactly the 252 completed observations preceding
-\(t\):
+sample standard deviation of exactly the 252 completed business dates
+preceding \(t\), excluding \(X^{gross}(t)\):
 
 \[
 \mu_{m,t^-}=\frac{1}{252}\sum_{i=1}^{252}X^{gross}_{m,t-i},
@@ -264,8 +278,8 @@ increase, each signed long-contract exposure is explicitly
 \delta_S=-D_S,\qquad\delta_T=-D_T.
 \]
 
-For positive target \(D^*\), first round the positive swap magnitude half away
-from zero and apply the economic direction:
+For positive target \(D^*\), first apply the rule `half ties away from zero` to
+the positive swap magnitude and apply the economic direction:
 
 \[
 n_S=d\,round_{half\ away}(D^*/D_S).
@@ -313,7 +327,8 @@ The fixture calculations are:
 
 ## Contract P&L, reversal, roll, and flattening
 
-Each contract is marked only over its own price history:
+Each contract is marked only over its own price history under the
+`same-contract` rule:
 
 \[
 PnL_i=q_iM_i(P_i^{end}-P_i^{start})-C_i.
@@ -441,8 +456,47 @@ so \(\sigma=\sqrt{6275/251}=5\) bp and
 
 ## Availability and proxy matrix
 
+| Field/output | Required classification in P10 |
+|---|---|
+| maturity-matched CMS 2Y/5Y history | unavailable pending P11 source validation |
+| Treasury CMT 2Y/5Y | exact only when official same-date rate and publication metadata pass |
+| exact floating reference `L` | unavailable until approved mapping |
+| maturity/collateral-consistent repo | unavailable pending P11 |
+| production business-day/holiday calendar | unavailable pending P11 |
+| `EFFR-SOFR` | proxy |
+| funding estimator parameters | assumed/frozen research parameters |
+| example execution costs | assumed synthetic |
+| current Eris DV01 | exact only from validated current contract metadata |
+| current Treasury futures DV01 | exact only from validated CTD and conversion factor |
+| CME displayed 2:1/1:1 ratios | exact published facts, sanity checks only |
+| economic example outputs | derived synthetic |
+| 2Y/5Y executable basket | derived only when all contract inputs are exact |
+| 10Y/30Y executable basket | unavailable |
+| intraday trigger | unavailable |
+| forward funding curve | unavailable pending P11 |
+| complete four-maturity strategy result | unavailable |
+
 ## Fail-closed conditions
 
+Input classifications are mutually exclusive. Any proxy input lineage
+propagates to every derived output, which remains derived-with-proxy-lineage
+and cannot be presented as an exact result or complete strategy output.
+
+Non-finite, missing, stale, wrong-unit, wrong-maturity, or late economic input
+blocks the affected output. Nonpositive price/DV01, unresolved
+sign/multiplier, a one-leg basket, or a DV01 residual above 5% blocks P&L or
+execution as applicable. A missing executable leg is represented only as the
+blocked zero-leg basket; it is never emitted as a one-leg position. Risk
+flattening overrides entry or reversal and produces no entry action in the
+same transition.
+
 ## Deliberately unavailable items
+
+P10 does not claim a complete executable strategy. Exact CMS history, exact
+floating-reference mapping, collateral-consistent repo, the production
+business-day calendar, forward funding curve, 10Y/30Y executable baskets, and
+an intraday trigger remain unavailable as shown in the matrix. The 2Y/5Y
+equations and synthetic examples are the bounded contract pending MG2 and P11
+validation; they do not fill any unavailable input with a proxy.
 
 ## MG2 manual recalculation checklist
