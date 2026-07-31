@@ -389,6 +389,8 @@ def scan_source_evidence(
     ).stdout.decode("utf-8").split("\0")
     for relative_name in sorted(name for name in tracked if name):
         path = repo_root / relative_name
+        if not path.is_file():
+            continue
         if any(part in excluded for part in path.relative_to(repo_root).parts):
             continue
         source = path.read_text(encoding="utf-8")

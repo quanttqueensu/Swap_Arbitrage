@@ -270,6 +270,17 @@ class LineageTests(unittest.TestCase):
         self.assertEqual(evidence["untracked"], ())
         self.assertEqual(evidence["ignored"], ())
 
+    def test_source_scan_skips_tracked_python_deleted_from_worktree(self) -> None:
+        deleted = self.root / "deleted.py"
+        deleted.write_text('TOKEN = "deleted"\n', encoding="utf-8")
+        self._git("init", "-q")
+        self._git("add", "deleted.py")
+        deleted.unlink()
+
+        evidence = scan_source_evidence(self.root, {"deleted"})
+
+        self.assertEqual(evidence["deleted"], ())
+
     def test_lineage_covers_every_ordinal_and_marks_copied_unused_columns(self) -> None:
         raw = self.root / "raw_price_data.csv"
         signal = self.root / "signal_data.csv"
