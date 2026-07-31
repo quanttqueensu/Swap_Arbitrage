@@ -216,6 +216,11 @@ if __name__ == "__main__":
 
 
 from tools.data_audit import SourceEvidence, build_lineage, scan_source_evidence
+import csv
+import io
+from unittest.mock import patch
+
+from tools.data_audit import atomic_write, run_audit
 
 
 class LineageTests(unittest.TestCase):
@@ -353,3 +358,60 @@ class LineageTests(unittest.TestCase):
                 ("second/swap_arb_backtest_case.csv", 1),
             },
         )
+
+
+class AuditCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.repo = self.root / "repo"
+        self.working = self.root / "working"
+        self.repo.mkdir()
+        (self.working / "data").mkdir(parents=True)
+        (self.repo / "signal_data.py").write_text(
+            'OUTPUT = "signal_data.csv"\nframe["signal"] = frame["price"]\n',
+            encoding="utf-8",
+        )
+        (self.working / "data" / "raw_price_data.csv").write_text(
+            "date,price\n2026-01-01,100\n", encoding="utf-8"
+        )
+        (self.working / "data" / "signal_data.csv").write_text(
+            "date,price,signal\n2026-01-01,100,1\n", encoding="utf-8"
+        )
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_identical_runs_are_byte_stable_and_leave_inputs_unchanged(self) -> None:
+        inventory = self.repo / "docs" / "data" / "current-inventory.md"
+        lineage = self.repo / "docs" / "data" / "current-column-lineage.csv"
+        inputs = discover_artifacts(self.working)
+        before = {path: sha256_file(path) for path in inputs}
+        run_audit(self.repo, self.working, inventory, lineage)
+        first = (inventory.read_bytes(), lineage.read_bytes())
+        run_audit(self.repo, self.working, inventory, lineage)
+        self.assertEqual(first, (inventory.read_bytes(), lineage.read_bytes()))
+        self.assertEqual(before, {path: sha256_file(path) for path in inputs})
+        rows = list(csv.DictReader(io.StringIO(lineage.read_text(encoding="utf-8"))))
+        self.assertEqual(len(rows), 2 + 3)
+
+    def test_atomic_write_preserves_existing_output_when_replace_fails(self) -> None:
+        output = self.repo / "report.md"
+        output.write_text("old", encoding="utf-8")
+        with patch("tools.data_audit.os.replace", side_effect=OSError("blocked")):
+            with self.assertRaisesRegex(OSError, "blocked"):
+                atomic_write(output, "new")
+        self.assertEqual(output.read_text(encoding="utf-8"), "old")
+        self.assertEqual(list(self.repo.glob(".report.md.*.tmp")), [])
+
+    def test_inventory_records_profile_failure_and_pipeline_widths(self) -> None:
+        (self.working / "data" / "bad.csv").write_bytes(b"date,value\n\xff")
+        inventory = self.repo / "inventory.md"
+        lineage = self.repo / "lineage.csv"
+        run_audit(self.repo, self.working, inventory, lineage)
+        report = inventory.read_text(encoding="utf-8")
+        self.assertIn("## Pipeline widths", report)
+        self.assertIn("raw_price_data.csv | 2", report)
+        self.assertIn("signal_data.csv | 3", report)
+        self.assertIn("bad.csv", report)
+        self.assertIn("UnicodeDecodeError", report)

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import ast
 import csv
 import hashlib
+import io
+import os
 import subprocess
+import tempfile
 from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,6 +80,18 @@ PIPELINE_ORDER = (
     "raw_price_data.csv",
     "signal_data.csv",
     "risk_data.csv",
+)
+LINEAGE_FIELDS = (
+    "artifact",
+    "column",
+    "ordinal",
+    "classification",
+    "source_or_derivation",
+    "writer",
+    "consumers",
+    "unit",
+    "evidence",
+    "status",
 )
 
 
@@ -381,12 +397,14 @@ def scan_source_evidence(
         token: set() for token in tokens | {"__csv_read__", "__csv_write__"}
     }
     excluded = {".venv", "__pycache__", ".superpowers", ".worktrees"}
-    tracked = subprocess.run(
+    tracked_result = subprocess.run(
         ["git", "ls-files", "-z", "--", "*.py"],
         cwd=repo_root,
-        check=True,
         capture_output=True,
-    ).stdout.decode("utf-8").split("\0")
+    )
+    if tracked_result.returncode:
+        return {token: () for token in found}
+    tracked = tracked_result.stdout.decode("utf-8").split("\0")
     for relative_name in sorted(name for name in tracked if name):
         path = repo_root / relative_name
         if not path.is_file():
@@ -560,3 +578,210 @@ def build_lineage(
                 )
             )
     return tuple(rows)
+
+
+def render_lineage_csv(rows: tuple[LineageRow, ...]) -> str:
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=LINEAGE_FIELDS, lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(
+            {
+                "artifact": row.artifact,
+                "column": row.column,
+                "ordinal": row.ordinal,
+                "classification": row.classification,
+                "source_or_derivation": row.source_or_derivation,
+                "writer": row.writer,
+                "consumers": ";".join(row.consumers),
+                "unit": row.unit,
+                "evidence": row.evidence,
+                "status": row.status,
+            }
+        )
+    return output.getvalue()
+
+
+def _locations(evidence: dict[str, tuple[SourceEvidence, ...]], token: str) -> str:
+    return "; ".join(item.location for item in evidence.get(token, ())) or "none found"
+
+
+def _locations_in_files(
+    evidence: dict[str, tuple[SourceEvidence, ...]],
+    token: str,
+    files: tuple[str, ...],
+) -> str:
+    locations = (
+        item.location
+        for item in evidence.get(token, ())
+        if any(item.location.startswith(f"{path}:") for path in files)
+    )
+    return "; ".join(locations) or "none found"
+
+
+def render_inventory(
+    results: list[ArtifactProfile | ProfileFailure],
+    evidence: dict[str, tuple[SourceEvidence, ...]],
+) -> str:
+    profiles = [item for item in results if isinstance(item, ArtifactProfile)]
+    failures = [item for item in results if isinstance(item, ProfileFailure)]
+    lines = [
+        "# Current Data Inventory",
+        "",
+        "## Audit contract",
+        "",
+        "- Repository code and external data roots are supplied separately.",
+        "- Inputs are read-only and checked by SHA-256 before and after generation.",
+        "- Files over 25 MiB use the first and last 1,000 rows for column metrics.",
+        f"- Artifacts discovered: {len(results)}",
+        f"- Profiles completed: {len(profiles)}",
+        f"- Profile failures: {len(failures)}",
+        "",
+        "## Pipeline widths",
+        "",
+        "| Artifact | Columns |",
+        "|---|---:|",
+    ]
+    for profile in profiles:
+        name = Path(profile.relative_path).name
+        if name in PIPELINE_ORDER or name.startswith("swap_arb_backtest_"):
+            lines.append(f"| {name} | {len(profile.headers)} |")
+    lines.extend(["", "## Artifact profiles", ""])
+    discrepancies: list[str] = []
+    for profile in profiles:
+        name = Path(profile.relative_path).name
+        missing = "; ".join(
+            f"{column.name}#{column.ordinal}={column.missing_count}"
+            for column in profile.columns
+        )
+        constants = "; ".join(
+            f"{column.name}#{column.ordinal}"
+            for column in profile.columns
+            if column.constant
+        ) or "none"
+        duplicate_columns = "; ".join(
+            f"{left}={right}" for left, right in profile.duplicate_column_pairs
+        ) or "none"
+        units = "; ".join(
+            f"{column.name}#{column.ordinal}={_unit_for(column.name)[0]} "
+            f"({'verified' if _unit_for(column.name)[1] else 'candidate'})"
+            for column in profile.columns
+        )
+        writer = writer_for(name)
+        readers = consumers_for(name)
+        lines.extend(
+            [
+                f"### `{profile.relative_path}`",
+                "",
+                f"- Purpose: {purpose_for(name)}",
+                f"- Source: {source_for(name)}",
+                f"- Size bytes: {profile.size_bytes}",
+                f"- SHA-256: `{profile.sha256}`",
+                f"- Rows: {profile.row_count}",
+                f"- Columns: {len(profile.headers)}",
+                f"- Header: `{','.join(profile.headers)}`",
+                f"- Duplicate headers: {', '.join(profile.duplicate_headers) or 'none'}",
+                f"- Candidate key: {', '.join(profile.key_rule.columns) or 'unknown'} ({profile.key_rule.status})",
+                f"- Duplicate-key rows: {profile.duplicate_key_count if profile.duplicate_key_count is not None else 'unknown'}",
+                f"- Time range: {profile.start_time or 'unknown'} to {profile.end_time or 'unknown'} ({profile.time_column or 'no time column'})",
+                f"- Sort order: {profile.sort_order}",
+                f"- Scan mode: {profile.scan_mode}",
+                f"- Missing counts: {missing}",
+                f"- Constant columns: {constants}",
+                f"- Exact duplicate column ordinals: {duplicate_columns}",
+                f"- Units: {units}",
+                f"- Writer: {writer}",
+                f"- Writer call evidence: {_locations_in_files(evidence, '__csv_write__', (writer,))}",
+                f"- Readers: {', '.join(readers) or 'none found'}",
+                f"- Reader call evidence: {_locations_in_files(evidence, '__csv_read__', readers)}",
+                f"- Artifact-name evidence: {_locations(evidence, name)}",
+                "",
+            ]
+        )
+        if profile.duplicate_headers:
+            discrepancies.append(f"{profile.relative_path}: duplicate headers")
+        if purpose_for(name).startswith("unresolved") or source_for(name).startswith("unresolved"):
+            discrepancies.append(f"{profile.relative_path}: purpose or source unresolved")
+    discrepancies.extend(
+        f"{failure.relative_path}: {failure.error_type}: {failure.message}"
+        for failure in failures
+    )
+    lines.extend(["## Discrepancy ledger", ""])
+    lines.extend(
+        [f"- {item}" for item in sorted(discrepancies)]
+        if discrepancies
+        else ["- No profiling discrepancies."]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def atomic_write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def run_audit(
+    repo_root: Path,
+    data_root: Path,
+    inventory_output: Path,
+    lineage_output: Path,
+) -> None:
+    paths = validate_paths(repo_root, data_root, inventory_output, lineage_output)
+    artifacts = discover_artifacts(paths.data_root)
+    before = {path: sha256_file(path) for path in artifacts}
+    profiles = profile_artifacts(artifacts, paths.data_root, CURRENT_KEY_RULES)
+    tokens = {
+        item
+        for profile in profiles
+        if isinstance(profile, ArtifactProfile)
+        for item in (Path(profile.relative_path).name, *profile.headers)
+    }
+    evidence = scan_source_evidence(paths.repo_root, tokens)
+    lineage = build_lineage(
+        [profile for profile in profiles if isinstance(profile, ArtifactProfile)],
+        evidence,
+    )
+    inventory_text = render_inventory(profiles, evidence)
+    lineage_text = render_lineage_csv(lineage)
+    verify_unchanged(before)
+    atomic_write(paths.inventory_output, inventory_text)
+    atomic_write(paths.lineage_output, lineage_text)
+    verify_unchanged(before)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Audit current Swap Arbitrage data read-only.")
+    parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--inventory-output", type=Path, required=True)
+    parser.add_argument("--lineage-output", type=Path, required=True)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    run_audit(args.repo_root, args.data_root, args.inventory_output, args.lineage_output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
