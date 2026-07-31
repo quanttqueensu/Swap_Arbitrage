@@ -393,6 +393,7 @@ def scan_source_evidence(
     repo_root: Path,
     tokens: set[str],
 ) -> dict[str, tuple[SourceEvidence, ...]]:
+    resolved_repo_root = repo_root.resolve(strict=True)
     found: dict[str, set[SourceEvidence]] = {
         token: set() for token in tokens | {"__csv_read__", "__csv_write__"}
     }
@@ -410,17 +411,32 @@ def scan_source_evidence(
         )
     tracked = tracked_result.stdout.decode("utf-8").split("\0")
     for relative_name in sorted(name for name in tracked if name):
-        path = repo_root / relative_name
-        if not path.is_file():
+        relative_path = Path(relative_name)
+        if (
+            relative_path.is_absolute()
+            or ".." in relative_path.parts
+            or any(part in excluded for part in relative_path.parts)
+        ):
             continue
-        if any(part in excluded for part in path.relative_to(repo_root).parts):
+        path = repo_root / relative_path
+        components = (
+            repo_root.joinpath(*relative_path.parts[:index])
+            for index in range(1, len(relative_path.parts) + 1)
+        )
+        if any(_is_link(component) for component in components):
             continue
-        source = path.read_text(encoding="utf-8")
+        try:
+            resolved_path = path.resolve(strict=True)
+        except OSError:
+            continue
+        if not resolved_path.is_file() or resolved_repo_root not in resolved_path.parents:
+            continue
+        source = resolved_path.read_text(encoding="utf-8")
         lines = source.splitlines()
-        tree = ast.parse(source, filename=str(path))
+        tree = ast.parse(source, filename=str(resolved_path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in tokens:
-                relative = path.relative_to(repo_root).as_posix()
+                relative = relative_path.as_posix()
                 found[node.value].add(
                     SourceEvidence(node.value, f"{relative}:{node.lineno}", lines[node.lineno - 1].strip())
                 )
@@ -440,7 +456,7 @@ def scan_source_evidence(
                     else ""
                 )
                 if evidence_token:
-                    relative = path.relative_to(repo_root).as_posix()
+                    relative = relative_path.as_posix()
                     found[evidence_token].add(
                         SourceEvidence(
                             evidence_token,

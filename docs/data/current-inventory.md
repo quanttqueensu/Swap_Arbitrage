@@ -36942,7 +36942,7 @@ python -m tools.data_audit --repo-root <repo-root> --data-root <data-root> --inv
 - Writer call evidence: raw_price_data.py:822; raw_price_data.py:834; raw_price_data.py:837; raw_price_data.py:863; raw_price_data.py:866; raw_price_data.py:876
 - Readers: signal_data.py
 - Reader call evidence: none found
-- Artifact-name evidence: config.py:16; tests/test_data_audit.py:273; tests/test_data_audit.py:306; tests/test_data_audit.py:362; tests/test_data_audit.py:409; tests/test_data_audit.py:478; tools/data_audit.py:120; tools/data_audit.py:126; tools/data_audit.py:136; tools/data_audit.py:147; tools/data_audit.py:184; tools/data_audit.py:476; tools/data_audit.py:579; tools/data_audit.py:80
+- Artifact-name evidence: config.py:16; tests/test_data_audit.py:268; tests/test_data_audit.py:340; tests/test_data_audit.py:396; tests/test_data_audit.py:443; tests/test_data_audit.py:512; tools/data_audit.py:120; tools/data_audit.py:126; tools/data_audit.py:136; tools/data_audit.py:147; tools/data_audit.py:184; tools/data_audit.py:492; tools/data_audit.py:595; tools/data_audit.py:80
 
 ### `data/risk_data.csv`
 
@@ -36967,7 +36967,7 @@ python -m tools.data_audit --repo-root <repo-root> --data-root <data-root> --inv
 - Writer call evidence: risk_data.py:473
 - Readers: backtest.py
 - Reader call evidence: backtest.py:70
-- Artifact-name evidence: config.py:18; tests/test_data_audit.py:308; tests/test_data_audit.py:320; tests/test_data_audit.py:344; tests/test_dv01_pipeline.py:79; tools/data_audit.py:122; tools/data_audit.py:128; tools/data_audit.py:138; tools/data_audit.py:149; tools/data_audit.py:186; tools/data_audit.py:486; tools/data_audit.py:524; tools/data_audit.py:540; tools/data_audit.py:82
+- Artifact-name evidence: config.py:18; tests/test_data_audit.py:342; tests/test_data_audit.py:354; tests/test_data_audit.py:378; tests/test_dv01_pipeline.py:79; tools/data_audit.py:122; tools/data_audit.py:128; tools/data_audit.py:138; tools/data_audit.py:149; tools/data_audit.py:186; tools/data_audit.py:502; tools/data_audit.py:540; tools/data_audit.py:556; tools/data_audit.py:82
 
 ### `data/signal_data.csv`
 
@@ -36992,7 +36992,7 @@ python -m tools.data_audit --repo-root <repo-root> --data-root <data-root> --inv
 - Writer call evidence: signal_data.py:235
 - Readers: risk_data.py
 - Reader call evidence: risk_data.py:316; risk_data.py:451
-- Artifact-name evidence: config.py:17; tests/test_data_audit.py:273; tests/test_data_audit.py:275; tests/test_data_audit.py:307; tests/test_data_audit.py:327; tests/test_data_audit.py:335; tests/test_data_audit.py:363; tests/test_data_audit.py:368; tests/test_data_audit.py:412; tools/data_audit.py:121; tools/data_audit.py:127; tools/data_audit.py:137; tools/data_audit.py:148; tools/data_audit.py:185; tools/data_audit.py:478; tools/data_audit.py:81
+- Artifact-name evidence: config.py:17; tests/test_data_audit.py:268; tests/test_data_audit.py:270; tests/test_data_audit.py:341; tests/test_data_audit.py:361; tests/test_data_audit.py:369; tests/test_data_audit.py:397; tests/test_data_audit.py:402; tests/test_data_audit.py:446; tools/data_audit.py:121; tools/data_audit.py:127; tools/data_audit.py:137; tools/data_audit.py:148; tools/data_audit.py:185; tools/data_audit.py:494; tools/data_audit.py:81
 
 ### `data/swap_arb_backtest_2018-01-02_2026-07-07.csv`
 
@@ -37217,7 +37217,7 @@ python -m tools.data_audit --repo-root <repo-root> --data-root <data-root> --inv
 - Writer call evidence: none found
 - Readers: none found
 - Reader call evidence: none found
-- Artifact-name evidence: tests/test_data_audit.py:112; tests/test_data_audit.py:50; tests/test_data_audit.py:53; tools/data_audit.py:139; tools/data_audit.py:150; tools/data_audit.py:187; tools/data_audit.py:241; tools/data_audit.py:647; tools/data_audit.py:653
+- Artifact-name evidence: tests/test_data_audit.py:112; tests/test_data_audit.py:50; tests/test_data_audit.py:53; tools/data_audit.py:139; tools/data_audit.py:150; tools/data_audit.py:187; tools/data_audit.py:241; tools/data_audit.py:663; tools/data_audit.py:669
 
 ## Discrepancy ledger
 

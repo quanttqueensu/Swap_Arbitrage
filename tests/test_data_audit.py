@@ -220,11 +220,6 @@ class CsvProfilingTests(unittest.TestCase):
         self.assertEqual(result.key_rule, KeyRule())
         self.assertIsNone(result.duplicate_key_count)
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 from tools.data_audit import SourceEvidence, build_lineage, scan_source_evidence
 import csv
 import io
@@ -301,6 +296,45 @@ class LineageTests(unittest.TestCase):
         evidence = scan_source_evidence(self.root, {"deleted"})
 
         self.assertEqual(evidence["deleted"], ())
+
+    def test_source_scan_skips_tracked_python_replaced_by_symlink(self) -> None:
+        tracked = self.root / "tracked.py"
+        tracked.write_text('TOKEN = "inside"\n', encoding="utf-8")
+        self._git("init", "-q")
+        self._git("add", "tracked.py")
+        tracked.unlink()
+        with tempfile.TemporaryDirectory() as external_name:
+            external = Path(external_name) / "external.py"
+            external.write_text('TOKEN = "outside"\n', encoding="utf-8")
+            try:
+                os.symlink(external, tracked)
+            except OSError as error:
+                self.skipTest(f"Windows denied file link creation: {error}")
+
+            evidence = scan_source_evidence(self.root, {"outside"})
+
+        self.assertEqual(evidence["outside"], ())
+
+    def test_source_scan_skips_tracked_python_beneath_linked_parent(self) -> None:
+        package = self.root / "package"
+        package.mkdir()
+        tracked = package / "tracked.py"
+        tracked.write_text('TOKEN = "inside"\n', encoding="utf-8")
+        self._git("init", "-q")
+        self._git("add", "package/tracked.py")
+        tracked.unlink()
+        package.rmdir()
+        with tempfile.TemporaryDirectory() as external_name:
+            external = Path(external_name)
+            (external / "tracked.py").write_text('TOKEN = "outside"\n', encoding="utf-8")
+            try:
+                os.symlink(external, package, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"Windows denied directory link creation: {error}")
+
+            evidence = scan_source_evidence(self.root, {"outside"})
+
+        self.assertEqual(evidence["outside"], ())
 
     def test_lineage_covers_every_ordinal_and_marks_copied_unused_columns(self) -> None:
         raw = self.root / "raw_price_data.csv"
@@ -506,3 +540,7 @@ class AuditCommandTests(unittest.TestCase):
         self.assertIn("signal_data.csv | 3", report)
         self.assertIn("bad.csv", report)
         self.assertIn("UnicodeDecodeError", report)
+
+
+if __name__ == "__main__":
+    unittest.main()
