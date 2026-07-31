@@ -60,6 +60,58 @@ class AuditBoundaryTests(unittest.TestCase):
 
         self.assertEqual(discover_artifacts(self.data_root), [])
 
+    def test_rejects_a_symlinked_supplied_data_root(self) -> None:
+        linked_target = self.root / "linked-root-target"
+        (linked_target / "data").mkdir(parents=True)
+        (linked_target / "data" / "source.csv").write_text("value\n1\n", encoding="utf-8")
+        linked_root = self.root / "linked-working"
+        try:
+            os.symlink(linked_target, linked_root, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"Windows denied directory link creation: {error}")
+
+        with self.assertRaisesRegex(ValueError, "data root must not be a symlink"):
+            discover_artifacts(linked_root)
+
+    def test_validate_paths_rejects_a_symlinked_data_root(self) -> None:
+        linked_target = self.root / "linked-root-target"
+        linked_target.mkdir()
+        linked_root = self.root / "linked-working"
+        try:
+            os.symlink(linked_target, linked_root, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"Windows denied directory link creation: {error}")
+
+        with self.assertRaisesRegex(ValueError, "data root must not be a symlink"):
+            validate_paths(
+                self.repo_root,
+                linked_root,
+                self.repo_root / "inventory.md",
+                self.repo_root / "lineage.csv",
+            )
+
+    def test_excludes_a_symlinked_csv(self) -> None:
+        linked_target = self.root / "linked.csv"
+        linked_target.write_text("value\n1\n", encoding="utf-8")
+        link = self.data_root / "data" / "linked.csv"
+        try:
+            os.symlink(linked_target, link)
+        except OSError as error:
+            self.skipTest(f"Windows denied file link creation: {error}")
+
+        self.assertEqual(discover_artifacts(self.data_root), [])
+
+    def test_excludes_a_symlinked_r2_manifest(self) -> None:
+        linked_target = self.root / "linked-r2.csv"
+        linked_target.write_text("object_key\nx\n", encoding="utf-8")
+        link = self.data_root / "r2_objects.csv"
+        try:
+            os.symlink(linked_target, link)
+        except OSError as error:
+            self.skipTest(f"Windows denied file link creation: {error}")
+
+        self.assertEqual(discover_artifacts(self.data_root), [])
+
     def test_reads_duplicate_raw_headers_without_normalizing_them(self) -> None:
         path = self.data_root / "data" / "duplicate.csv"
         path.write_text("date,value,value\n2026-01-01,1,1\n", encoding="utf-8")

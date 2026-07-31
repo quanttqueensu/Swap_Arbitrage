@@ -18,7 +18,14 @@ class AuditPaths:
     lineage_output: Path
 
 
-def _resolved_directory(path: Path, label: str) -> Path:
+def _is_link(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or (is_junction is not None and is_junction())
+
+
+def _resolved_directory(path: Path, label: str, reject_links: bool = False) -> Path:
+    if reject_links and _is_link(path):
+        raise ValueError(f"{label} must not be a symlink")
     resolved = path.resolve(strict=True)
     if not resolved.is_dir():
         raise ValueError(f"{label} must be a directory: {resolved}")
@@ -32,7 +39,7 @@ def validate_paths(
     lineage_output: Path,
 ) -> AuditPaths:
     repo = _resolved_directory(repo_root, "repo root")
-    data = _resolved_directory(data_root, "data root")
+    data = _resolved_directory(data_root, "data root", reject_links=True)
     outputs = (inventory_output.resolve(), lineage_output.resolve())
     if any(repo not in output.parents for output in outputs):
         raise ValueError("output must be inside repo root")
@@ -40,12 +47,12 @@ def validate_paths(
 
 
 def _csv_files(directory: Path) -> list[Path]:
-    if directory.is_symlink():
+    if _is_link(directory):
         return []
 
     artifacts: list[Path] = []
     for path in directory.iterdir():
-        if path.is_symlink():
+        if _is_link(path):
             continue
         if path.is_dir():
             artifacts.extend(_csv_files(path))
@@ -55,12 +62,14 @@ def _csv_files(directory: Path) -> list[Path]:
 
 
 def discover_artifacts(data_root: Path) -> list[Path]:
+    if _is_link(data_root):
+        raise ValueError("data root must not be a symlink")
     data_root.resolve(strict=True)
     root = data_root
     data_directory = root / "data"
     artifacts = _csv_files(data_directory) if data_directory.is_dir() else []
     r2_manifest = root / "r2_objects.csv"
-    if r2_manifest.is_file() and not r2_manifest.is_symlink():
+    if r2_manifest.is_file() and not _is_link(r2_manifest):
         artifacts.append(r2_manifest)
     return sorted(artifacts, key=lambda path: path.relative_to(root).as_posix())
 
