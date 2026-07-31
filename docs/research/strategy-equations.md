@@ -1,6 +1,6 @@
 # P10 Strategy Equations
 
-**Status:** Proposed research contract pending MG2
+**Status:** Approved at MG2 on 2026-07-31
 **Executable universe:** 2Y and 5Y only
 **Source verification date:** 2026-07-31
 
@@ -8,8 +8,8 @@
 
 P10 is a documentation-and-test research contract. It separates the economic
 swap-spread hypothesis from the futures basket that may implement an approved
-direction, and it stops at MG2 pending manual approval. No production strategy
-behavior changes in P10. In particular, P10 does not access Quantt,
+direction. The contract was approved at MG2 on 2026-07-31; that approval does
+not change production strategy behavior. In particular, P10 does not access Quantt,
 Cloudflare/R2, IBKR, or market-data APIs; submit, cancel, or simulate broker
 orders; or create a production strategy, broker, risk, or backtest behavior.
 
@@ -599,7 +599,7 @@ P10 does not claim a complete executable strategy. Exact CMS history, exact
 floating-reference mapping, collateral-consistent repo, the production
 business-day calendar, forward funding curve, 10Y/30Y executable baskets, and
 an intraday trigger remain unavailable as shown in the matrix. The 2Y/5Y
-equations and synthetic examples are the bounded contract pending MG2 and P11
-validation; they do not fill any unavailable input with a proxy.
+equations and synthetic examples are the MG2-approved bounded contract pending
+later P11 validation; they do not fill any unavailable input with a proxy.
 
 ## MG2 manual recalculation checklist

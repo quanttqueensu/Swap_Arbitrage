@@ -530,7 +530,7 @@ Update this table only after the user explicitly approves a gate.
 |---|---|---|
 | MG0 | Approved 2026-07-28 | Baseline report and P00 verification |
 | MG1 | Approved 2026-07-29 | P01/P02 verification; authoritative 25/week (5/day) selected and approved |
-| MG2 | Not started | Equation examples and source coverage |
+| MG2 | Approved 2026-07-31 | P10 equation examples, source coverage, and verification |
 | MG3 | Not started | Data inventory, schemas, and migration preview |
 | MG4 | Not started | Adapter tests and staged migration report |
 | MG5 | Not started | Shared strategy golden/invariant evidence |
