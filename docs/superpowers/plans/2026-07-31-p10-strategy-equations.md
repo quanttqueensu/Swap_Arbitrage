@@ -212,6 +212,7 @@ def D(value: object) -> Decimal:
 
 class FixtureContractTests(unittest.TestCase):
     def test_fixture_has_four_directional_examples(self) -> None:
+        self.assertTrue(FIXTURE_PATH.exists(), f"missing fixture: {FIXTURE_PATH}")
         fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
         examples = fixture["economic_examples"]
         self.assertEqual(len(examples), 4)
@@ -229,7 +230,7 @@ Run:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p 'test_strategy_equation_examples.py' -v
 ```
 
-Expected: exit `1` with `FileNotFoundError` for `strategy_equation_examples.json`; no import or production-module failure.
+Expected: exit `1` with an assertion failure containing `missing fixture:`, proving the fixture contract is absent without treating the RED state as a setup error; no import or production-module failure.
 
 - [ ] **Step 3: Add exact Decimal calculation helpers**
 
