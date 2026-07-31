@@ -1,6 +1,36 @@
 {
   "schema_version": "p10.strategy-equations.v1",
   "classification": "assumed_synthetic",
+  "quote_conventions": {
+    "YIT": {
+      "source_id": "CME-ERIS-FAQ",
+      "quote_format": "decimal index points",
+      "minimum_increment_points": "0.0025",
+      "multiplier_usd_per_point": "1000",
+      "tick_value_usd": "2.50"
+    },
+    "YIW": {
+      "source_id": "CME-ERIS-FAQ",
+      "quote_format": "decimal index points",
+      "minimum_increment_points": "0.0100",
+      "multiplier_usd_per_point": "1000",
+      "tick_value_usd": "10.00"
+    },
+    "ZT": {
+      "source_id": "CME-TREASURY-SPECS",
+      "quote_format": "whole points plus 32nds and eighths of a 32nd",
+      "minimum_increment_points": "0.00390625",
+      "multiplier_usd_per_point": "2000",
+      "tick_value_usd": "7.8125"
+    },
+    "ZF": {
+      "source_id": "CME-TREASURY-SPECS",
+      "quote_format": "whole points plus 32nds and eighths of a 32nd",
+      "minimum_increment_points": "0.0078125",
+      "multiplier_usd_per_point": "1000",
+      "tick_value_usd": "7.8125"
+    }
+  },
   "funding_profiles": {
     "flat_5_bps_60": [{"value_bps": "5", "count": 60}],
     "flat_5_bps_40": [{"value_bps": "5", "count": 40}],
@@ -173,8 +203,78 @@
     {"id": "nonpositive_net_exits", "position": -1, "zscore": "-1", "traditional_net_bps": "1", "reverse_net_bps": "0", "data_ready": true, "risk_flatten": false, "expected_position": 0, "expected_actions": ["exit_reverse"]}
   ],
   "pnl_examples": [
-    {"id": "traditional_same_contract", "legs": [{"symbol": "YIT", "quantity": 2, "multiplier_usd_per_point": "1000", "start_price": "100.1000", "end_price": "100.1125", "costs_usd": "0"}, {"symbol": "ZT", "quantity": -1, "multiplier_usd_per_point": "2000", "start_price": "102.000000", "end_price": "101.984375", "costs_usd": "6.25"}], "expected_pnl_usd": "50"},
-    {"id": "reverse_same_contract", "legs": [{"symbol": "YIW", "quantity": -1, "multiplier_usd_per_point": "1000", "start_price": "99.5000", "end_price": "99.4900", "costs_usd": "0"}, {"symbol": "ZF", "quantity": 1, "multiplier_usd_per_point": "1000", "start_price": "108.000000", "end_price": "108.015625", "costs_usd": "5.625"}], "expected_pnl_usd": "20"},
+    {
+      "id": "traditional_same_contract",
+      "legs": [
+        {
+          "symbol": "YITH27",
+          "start_instrument_id": "YITH27",
+          "end_instrument_id": "YITH27",
+          "quantity": 2,
+          "multiplier_usd_per_point": "1000",
+          "start_price": "100.1000",
+          "end_price": "100.1125",
+          "costs_usd": "0"
+        },
+        {
+          "symbol": "ZTH27",
+          "start_instrument_id": "ZTH27",
+          "end_instrument_id": "ZTH27",
+          "quantity": -1,
+          "multiplier_usd_per_point": "2000",
+          "start_source_quote": {
+            "whole_points": 102,
+            "thirty_seconds": 0,
+            "eighths_of_32nd": 0
+          },
+          "end_source_quote": {
+            "whole_points": 101,
+            "thirty_seconds": 31,
+            "eighths_of_32nd": 4
+          },
+          "start_price": "102.000000",
+          "end_price": "101.984375",
+          "costs_usd": "6.25"
+        }
+      ],
+      "expected_pnl_usd": "50"
+    },
+    {
+      "id": "reverse_same_contract",
+      "legs": [
+        {
+          "symbol": "YIWH27",
+          "start_instrument_id": "YIWH27",
+          "end_instrument_id": "YIWH27",
+          "quantity": -1,
+          "multiplier_usd_per_point": "1000",
+          "start_price": "99.5000",
+          "end_price": "99.4900",
+          "costs_usd": "0"
+        },
+        {
+          "symbol": "ZFH27",
+          "start_instrument_id": "ZFH27",
+          "end_instrument_id": "ZFH27",
+          "quantity": 1,
+          "multiplier_usd_per_point": "1000",
+          "start_source_quote": {
+            "whole_points": 108,
+            "thirty_seconds": 0,
+            "eighths_of_32nd": 0
+          },
+          "end_source_quote": {
+            "whole_points": 108,
+            "thirty_seconds": 0,
+            "eighths_of_32nd": 4
+          },
+          "start_price": "108.000000",
+          "end_price": "108.015625",
+          "costs_usd": "5.625"
+        }
+      ],
+      "expected_pnl_usd": "20"
+    },
     {
       "id": "eris_roll",
       "roll_decision_utc": "2027-03-10T20:31:00Z",

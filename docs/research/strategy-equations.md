@@ -76,11 +76,11 @@ turn a source convention into a current market observation or a sizing input.
 
 | Source ID | Direct official source(s) | Verified convention | Availability boundary |
 |---|---|---|---|
-| `CME-ERIS-FAQ` | [Eris SOFR Swap Futures FAQ](https://www.cmegroup.com/markets/interest-rates/files/eris-sofr-swap-futures-faq.pdf); [Eris SOFR Swap Futures overview](https://www.cmegroup.com/markets/interest-rates/files/eris-sofr-swap-futures-overview.pdf) | One contract is USD 100,000 notional. A long receives fixed and pays compounded SOFR. The price is indexed to 100, and one price point is USD 1,000. The 2Y prefix is YIT and the 5Y prefix is YIW. | Contract convention only; current contract terms, prices, and DV01 still require validated as-of inputs. |
+| `CME-ERIS-FAQ` | [Eris SOFR Swap Futures FAQ](https://www.cmegroup.com/markets/interest-rates/files/eris-sofr-swap-futures-faq.pdf); [Eris SOFR Swap Futures overview](https://www.cmegroup.com/markets/interest-rates/files/eris-sofr-swap-futures-overview.pdf) | One contract is USD 100,000 notional. A long receives fixed and pays compounded SOFR. The price is indexed to 100, and one price point is USD 1,000. YIT has a 0.0025-point minimum increment worth USD 2.50; YIW has a 0.0100-point minimum increment worth USD 10.00. The 2Y prefix is YIT and the 5Y prefix is YIW. | Contract convention only; current contract terms, prices, and DV01 still require validated as-of inputs. |
 | `CME-SPREAD-PRIMER` | [Trading Swap Spreads with Futures: a primer for Eris/Treasury swap spreads](https://www.cmegroup.com/articles/2024/trading-swap-spreads-with-futures-a-primer-for-eristreasury-swap-spreads.html) | Buy spread means buy Eris and sell Treasury. The ETU 2Y displayed ratio is 2:1; the EWV 5Y displayed ratio is 1:1. | Published ratios are sanity checks, not the sizing authority. |
 | `CME-ETU-NOTICE` | [CME Globex notice, 2024-03-11](https://www.cmegroup.com/notices/electronic-trading/2024/03/20240311.html) | ETU is YIT versus ZT with leg quantity ratio 2:1. | Confirms the published product mapping and ratio only. |
 | `CME-EWV-NOTICE` | [CME Globex notice, 2023-11-06](https://www.cmegroup.com/notices/electronic-trading/2023/11/20231106.html) | EWV is YIW versus ZF with leg quantity ratio 1:1. | Confirms the published product mapping and ratio only. |
-| `CME-TREASURY-SPECS` | [Understand Treasuries contract specifications](https://www.cmegroup.com/education/courses/introduction-to-treasuries/understand-treasuries-contract-specifications.hideSubnav.educationIframe.html.html?hideAddThisExt=y&hideFooter=y&hideHeader=y&hideRightRail=y); [2-Year T-Note futures contract specs](https://www.cmegroup.com/markets/interest-rates/us-treasury/2-year-us-treasury-note.contractSpecs.html); [5-Year T-Note futures contract specs](https://www.cmegroup.com/markets/interest-rates/us-treasury/5-year-us-treasury-note.contractSpecs.html); [Treasury futures delivery process](https://www.cmegroup.com/content/dam/cmegroup/trading/interest-rates/files/us-treasury-futures-delivery-process.pdf) | ZT face amount/contract factor is USD 200,000/USD 2,000 per point; ZF is USD 100,000/USD 1,000 per point. Long prices fall when yields rise. Delivery and CTD conventions govern current DV01. | Current contract/CTD DV01 is required for executable sizing; contract amounts and quoted multipliers alone are insufficient. |
+| `CME-TREASURY-SPECS` | [Understand Treasuries contract specifications](https://www.cmegroup.com/education/courses/introduction-to-treasuries/understand-treasuries-contract-specifications.hideSubnav.educationIframe.html.html?hideAddThisExt=y&hideFooter=y&hideHeader=y&hideRightRail=y); [2-Year T-Note futures contract specs](https://www.cmegroup.com/markets/interest-rates/us-treasury/2-year-us-treasury-note.contractSpecs.html); [5-Year T-Note futures contract specs](https://www.cmegroup.com/markets/interest-rates/us-treasury/5-year-us-treasury-note.contractSpecs.html); [Treasury futures delivery process](https://www.cmegroup.com/content/dam/cmegroup/trading/interest-rates/files/us-treasury-futures-delivery-process.pdf) | ZT face amount/contract factor is USD 200,000/USD 2,000 per point; its futures minimum increment is 1/8 of 1/32, or 0.00390625 point and USD 7.8125. ZF is USD 100,000/USD 1,000 per point; its minimum increment is 1/4 of 1/32, or 0.0078125 point and USD 7.8125. Long prices fall when yields rise. Delivery and CTD conventions govern current DV01. | Current contract/CTD DV01 is required for executable sizing; contract amounts, ticks, and quoted multipliers alone are insufficient. |
 | `UST-CMT` | [Treasury yield curve methodology](https://home.treasury.gov/policy-issues/financing-the-government/interest-rate-statistics/treasury-yield-curve-methodology); [Interest rates FAQ](https://home.treasury.gov/policy-issues/financing-the-government/interest-rate-statistics/interest-rates-frequently-asked-questions) | CMT is a Treasury par-yield-curve estimate, not a futures yield or futures price. | It may support a maturity-matched Treasury-rate input only when its timestamp and units satisfy the stated economic contract. |
 | `NYFED-RATES` | [New York Fed reference rates](https://www.newyorkfed.org/markets/reference-rates) | SOFR, EFFR, and repo-family rates are distinct published reference rates; `EFFR-SOFR` remains a proxy for exact `L-repo`. | The exact maturity/collateral-consistent `L-repo` input is unavailable until validated; do not relabel the proxy as exact. |
 
@@ -88,6 +88,38 @@ The CME page showing `EAT` at 1:1 describes the YIA/YIT Eris-vs-Eris curve
 spread, not the `ETU` YIT/ZT Treasury spread. It therefore does not override or
 conflict with the ETU 2:1 notice. Published ratios remain sanity checks;
 current contract/CTD DV01 remains authoritative for sizing.
+
+## Source-quote normalization and tick units
+
+Eris fixture prices are decimal index points. Their exact tick values follow
+from the official minimum increments and the USD 1,000-per-point multiplier:
+
+\[
+tickUSD_{YIT}=0.0025(1000)=2.50,\qquad
+tickUSD_{YIW}=0.0100(1000)=10.00.
+\]
+
+Treasury source quotes are normalized from whole points \(W\), whole 32nds
+\(N_{32}\), and eighths of a 32nd \(N_8\) before P&L:
+
+\[
+P=W+\frac{N_{32}}{32}+\frac{N_8}{256},
+\qquad 0\leq N_{32}<32,\quad 0\leq N_8<8.
+\]
+
+For ZT, one futures tick is 1/8 of 1/32, or 1/256 = 0.00390625 point;
+at USD 2,000 per point it is USD 7.8125. For ZF, one tick is 1/4 of
+1/32, or 2/256 = 0.0078125 point; at USD 1,000 per point it is also
+USD 7.8125. These are outright futures conventions, not 2Y option or other-
+tenor increments.
+
+The traditional ZTH27 example converts `(102, 0, 0)` to 102.000000 and
+`(101, 31, 4)` to 101.984375. Its -0.015625-point move is exactly -4 ZT
+ticks. The reverse ZFH27 example converts `(108, 0, 0)` to 108.000000 and
+`(108, 0, 4)` to 108.015625. Its +0.015625-point move is exactly +2 ZF
+ticks. The YITH27 +0.0125-point move is +5 YIT ticks, and the YIWH27
+-0.0100-point move is -1 YIW tick. A malformed fractional quote or a price
+off its official tick grid blocks exact contract P&L rather than being rounded.
 
 ## Economic hypothesis
 
@@ -365,6 +397,14 @@ PnL_i=q_iM_i(P_i^{end}-P_i^{start})-C_i.
 The signed quantity carries the long/short direction. Costs are charged to the
 action that incurs them. The fixture arithmetic is:
 
+Each non-roll leg carries one immutable full expiry identity at both price
+endpoints. A root-only or continuous-series label does not prove
+same-contract P&L and is unavailable for an exact example. The synthetic
+examples use YITH27 with ZTH27 and YIWH27 with ZFH27; their start and end
+instrument IDs are equal before the price change is calculated. Roll examples
+instead require explicitly different old and new full identities with the
+timestamp boundary below.
+
 The roll clock is explicit and gap-free:
 
 \[
@@ -381,13 +421,13 @@ contribute; a later new-contract price cannot change the old-contract P&L
 saved at the roll. Close and open costs and both turnover legs are charged at
 the roll boundary.
 
-- `traditional_same_contract`: YIT contributes
-  \(2(1000)(100.1125-100.1000)=25\) USD. ZT contributes
+- `traditional_same_contract`: YITH27 contributes
+  \(2(1000)(100.1125-100.1000)=25\) USD. ZTH27 contributes:
   \((-1)(2000)(101.984375-102.000000)-6.25=25\) USD. Total: 50 USD.
   This checks both the positive Eris/negative Treasury signs and the exact
   1,000/2,000 USD-per-point multipliers.
-- `reverse_same_contract`: YIW contributes
-  \((-1)(1000)(99.4900-99.5000)=10\) USD. ZF contributes
+- `reverse_same_contract`: YIWH27 contributes
+  \((-1)(1000)(99.4900-99.5000)=10\) USD. ZFH27 contributes
   \(1(1000)(108.015625-108.000000)-5.625=10\) USD. Total: 20 USD.
 - `eris_roll`: old YITH27 P&L is
   \(2(1000)(100.1100-100.1000)=20\) USD and new YITM27 P&L is

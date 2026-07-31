@@ -266,6 +266,28 @@ def contract_pnl(
     return D(quantity) * multiplier_usd_per_point * (end_price - start_price) - costs_usd
 
 
+def treasury_fractional_quote_to_points(
+    whole_points: int, thirty_seconds: int, eighths_of_32nd: int
+) -> Decimal | None:
+    if (
+        whole_points < 0
+        or not 0 <= thirty_seconds < 32
+        or not 0 <= eighths_of_32nd < 8
+    ):
+        return None
+    return (
+        D(whole_points)
+        + D(thirty_seconds) / D("32")
+        + D(eighths_of_32nd) / D("256")
+    )
+
+
+def tick_value_usd(
+    minimum_increment_points: Decimal, multiplier_usd_per_point: Decimal
+) -> Decimal:
+    return minimum_increment_points * multiplier_usd_per_point
+
+
 def causal_roll_pnl(
     example: dict[str, object], as_of_utc: str
 ) -> dict[str, Decimal | int] | None:
@@ -523,12 +545,85 @@ class ContractPnlEquationTests(unittest.TestCase):
         cls.fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
         cls.examples = {item["id"]: item for item in cls.fixture["pnl_examples"]}
 
+    def test_treasury_fractional_quotes_normalize_to_decimal_points(self) -> None:
+        quote_fn = globals().get("treasury_fractional_quote_to_points")
+        self.assertTrue(
+            callable(quote_fn), "treasury_fractional_quote_to_points must be callable"
+        )
+        expected = {
+            "traditional_same_contract": ("ZT", "102.000000", "101.984375"),
+            "reverse_same_contract": ("ZF", "108.000000", "108.015625"),
+        }
+        for example_id, (root, start_price, end_price) in expected.items():
+            leg = next(
+                leg
+                for leg in self.examples[example_id]["legs"]
+                if str(leg["symbol"]).startswith(root)
+            )
+            with self.subTest(example=example_id, endpoint="start"):
+                source = leg["start_source_quote"]
+                self.assertEqual(
+                    quote_fn(
+                        source["whole_points"],
+                        source["thirty_seconds"],
+                        source["eighths_of_32nd"],
+                    ),
+                    D(start_price),
+                )
+            with self.subTest(example=example_id, endpoint="end"):
+                source = leg["end_source_quote"]
+                self.assertEqual(
+                    quote_fn(
+                        source["whole_points"],
+                        source["thirty_seconds"],
+                        source["eighths_of_32nd"],
+                    ),
+                    D(end_price),
+                )
+
+    def test_official_tick_grids_and_tick_values_are_exact(self) -> None:
+        tick_fn = globals().get("tick_value_usd")
+        self.assertTrue(callable(tick_fn), "tick_value_usd must be callable")
+        conventions = self.fixture["quote_conventions"]
+        for root, convention in conventions.items():
+            with self.subTest(root=root):
+                tick = D(convention["minimum_increment_points"])
+                multiplier = D(convention["multiplier_usd_per_point"])
+                self.assertEqual(
+                    tick_fn(tick, multiplier),
+                    D(convention["tick_value_usd"]),
+                )
+                for example in self.examples.values():
+                    for leg in example.get("legs", []):
+                        if str(leg["symbol"]).startswith(root):
+                            for endpoint in ("start_price", "end_price"):
+                                ticks = D(leg[endpoint]) / tick
+                                self.assertEqual(ticks, ticks.to_integral_value())
+
+    def test_same_contract_examples_use_full_immutable_expiry_ids(self) -> None:
+        for example_id in ("traditional_same_contract", "reverse_same_contract"):
+            for leg in self.examples[example_id]["legs"]:
+                with self.subTest(example=example_id, instrument=leg["symbol"]):
+                    self.assertRegex(
+                        leg["symbol"], r"^(?:YIT|YIW|ZT|ZF)[FGHJKMNQUVXZ]\d{2}$"
+                    )
+                    self.assertIsNotNone(leg.get("start_instrument_id"))
+                    self.assertIsNotNone(leg.get("end_instrument_id"))
+                    self.assertEqual(leg.get("start_instrument_id"), leg["symbol"])
+                    self.assertEqual(leg.get("end_instrument_id"), leg["symbol"])
+
     def test_traditional_and_reverse_legs_use_signed_quantities(self) -> None:
         pnl_fn = globals().get("contract_pnl")
         self.assertTrue(callable(pnl_fn), "contract_pnl must be callable")
         expected_contracts = {
-            "traditional_same_contract": [("YIT", 2, "1000"), ("ZT", -1, "2000")],
-            "reverse_same_contract": [("YIW", -1, "1000"), ("ZF", 1, "1000")],
+            "traditional_same_contract": [
+                ("YITH27", 2, "1000"),
+                ("ZTH27", -1, "2000"),
+            ],
+            "reverse_same_contract": [
+                ("YIWH27", -1, "1000"),
+                ("ZFH27", 1, "1000"),
+            ],
         }
         for example_id, expected_legs in expected_contracts.items():
             example = self.examples[example_id]
