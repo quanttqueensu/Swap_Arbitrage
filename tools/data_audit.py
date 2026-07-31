@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import csv
 import hashlib
+import subprocess
 from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -380,7 +381,14 @@ def scan_source_evidence(
         token: set() for token in tokens | {"__csv_read__", "__csv_write__"}
     }
     excluded = {".venv", "__pycache__", ".superpowers", ".worktrees"}
-    for path in sorted(repo_root.rglob("*.py")):
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.py"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    ).stdout.decode("utf-8").split("\0")
+    for relative_name in sorted(name for name in tracked if name):
+        path = repo_root / relative_name
         if any(part in excluded for part in path.relative_to(repo_root).parts):
             continue
         source = path.read_text(encoding="utf-8")
@@ -469,48 +477,57 @@ def build_lineage(
     profiles: list[ArtifactProfile],
     evidence: dict[str, tuple[SourceEvidence, ...]],
 ) -> tuple[LineageRow, ...]:
-    by_name = {Path(profile.relative_path).name: profile for profile in profiles}
-    ordered = [by_name[name] for name in PIPELINE_ORDER if name in by_name]
-    ordered.extend(
-        sorted(
-            (profile for name, profile in by_name.items() if name.startswith("swap_arb_backtest_")),
-            key=lambda profile: profile.relative_path,
-        )
+    pipeline_profiles = {
+        Path(profile.relative_path).name: profile
+        for profile in profiles
+        if Path(profile.relative_path).name in PIPELINE_ORDER
+    }
+    backtest_profiles = sorted(
+        (
+            profile
+            for profile in profiles
+            if Path(profile.relative_path).name.startswith("swap_arb_backtest_")
+        ),
+        key=lambda profile: profile.relative_path,
     )
+    ordered = [pipeline_profiles[name] for name in PIPELINE_ORDER if name in pipeline_profiles]
+    ordered.extend(backtest_profiles)
     rows: list[LineageRow] = []
     for profile in ordered:
-        artifact = Path(profile.relative_path).name
+        artifact = profile.relative_path
+        artifact_name = Path(artifact).name
         previous_name = (
             "risk_data.csv"
-            if artifact.startswith("swap_arb_backtest_")
-            else PIPELINE_ORDER[PIPELINE_ORDER.index(artifact) - 1]
-            if artifact in PIPELINE_ORDER[1:]
+            if artifact_name.startswith("swap_arb_backtest_")
+            else PIPELINE_ORDER[PIPELINE_ORDER.index(artifact_name) - 1]
+            if artifact_name in PIPELINE_ORDER[1:]
             else None
         )
-        previous_headers = set(by_name[previous_name].headers) if previous_name in by_name else set()
-        next_names = (
-            (PIPELINE_ORDER[PIPELINE_ORDER.index(artifact) + 1],)
-            if artifact in PIPELINE_ORDER[:-1]
-            else tuple(name for name in by_name if name.startswith("swap_arb_backtest_"))
-            if artifact == "risk_data.csv"
+        previous_headers = (
+            set(pipeline_profiles[previous_name].headers)
+            if previous_name in pipeline_profiles
+            else set()
+        )
+        next_profiles = (
+            (pipeline_profiles[PIPELINE_ORDER[PIPELINE_ORDER.index(artifact_name) + 1]],)
+            if artifact_name in PIPELINE_ORDER[:-1]
+            and PIPELINE_ORDER[PIPELINE_ORDER.index(artifact_name) + 1] in pipeline_profiles
+            else tuple(backtest_profiles)
+            if artifact_name == "risk_data.csv"
             else ()
         )
         for column_profile in profile.columns:
             column = column_profile.name
             copied = column in previous_headers
             locations = tuple(item.location for item in evidence.get(column, ()))
-            used_downstream = any(
-                column in by_name[name].headers for name in next_names if name in by_name
-            )
-            classification, classification_verified = _classification_for(artifact, column)
-            if copied and not used_downstream and not locations and next_names:
+            used_downstream = any(column in next_profile.headers for next_profile in next_profiles)
+            classification, classification_verified = _classification_for(artifact_name, column)
+            if copied and not used_downstream and not locations and next_profiles:
                 classification, classification_verified = "unused", True
             unit, unit_verified = _unit_for(column)
             status = (
                 "verified"
                 if classification_verified and unit_verified
-                else "candidate"
-                if copied or locations
                 else "discrepancy"
             )
             notes = list(locations)
@@ -526,13 +543,13 @@ def build_lineage(
                         f"copied from {previous_name}:{column}"
                         if copied
                         else "source field"
-                        if artifact == "raw_price_data.csv"
-                        else f"derived in {writer_for(artifact)}"
+                        if artifact_name == "raw_price_data.csv"
+                        else f"derived in {writer_for(artifact_name)}"
                     ),
-                    writer=writer_for(artifact),
+                    writer=writer_for(artifact_name),
                     consumers=tuple(
                         consumer
-                        for consumer in consumers_for(artifact)
+                        for consumer in consumers_for(artifact_name)
                         if used_downstream
                     ),
                     unit=unit,

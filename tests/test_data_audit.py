@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -214,7 +215,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-from tools.data_audit import build_lineage, scan_source_evidence
+from tools.data_audit import SourceEvidence, build_lineage, scan_source_evidence
 
 
 class LineageTests(unittest.TestCase):
@@ -227,6 +228,15 @@ class LineageTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def _git(self, *arguments: str) -> None:
+        subprocess.run(
+            ["git", *arguments],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
     def test_source_scan_records_exact_file_and_line_evidence(self) -> None:
         (self.root / "writer.py").write_text(
             'OUTPUT = "signal_data.csv"\n'
@@ -235,6 +245,8 @@ class LineageTests(unittest.TestCase):
             'frame.to_csv(OUTPUT)\n',
             encoding="utf-8",
         )
+        self._git("init", "-q")
+        self._git("add", "writer.py")
         evidence = scan_source_evidence(
             self.root,
             {"raw_price_data.csv", "signal_data.csv", "signal", "price"},
@@ -243,6 +255,20 @@ class LineageTests(unittest.TestCase):
         self.assertEqual(evidence["signal"][0].location, "writer.py:3")
         self.assertEqual(evidence["__csv_read__"][0].location, "writer.py:2")
         self.assertEqual(evidence["__csv_write__"][0].location, "writer.py:4")
+
+    def test_source_scan_uses_only_tracked_python_files(self) -> None:
+        (self.root / "tracked.py").write_text('TOKEN = "tracked"\n', encoding="utf-8")
+        (self.root / "scratch.py").write_text('TOKEN = "untracked"\n', encoding="utf-8")
+        (self.root / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
+        (self.root / "ignored.py").write_text('TOKEN = "ignored"\n', encoding="utf-8")
+        self._git("init", "-q")
+        self._git("add", "tracked.py", ".gitignore")
+
+        evidence = scan_source_evidence(self.root, {"tracked", "untracked", "ignored"})
+
+        self.assertEqual(evidence["tracked"][0].location, "tracked.py:1")
+        self.assertEqual(evidence["untracked"], ())
+        self.assertEqual(evidence["ignored"], ())
 
     def test_lineage_covers_every_ordinal_and_marks_copied_unused_columns(self) -> None:
         raw = self.root / "raw_price_data.csv"
@@ -272,3 +298,47 @@ class LineageTests(unittest.TestCase):
         mystery = next(row for row in rows if row.column == "mystery")
         self.assertEqual(mystery.status, "discrepancy")
         self.assertIn("no verified classification", mystery.evidence)
+
+    def test_unknown_derived_column_with_source_evidence_is_a_discrepancy(self) -> None:
+        path = self.root / "signal_data.csv"
+        path.write_text("date,mystery\n2026-01-01,1\n", encoding="utf-8")
+        evidence = {"mystery": (SourceEvidence("mystery", "writer.py:1", 'x = "mystery"'),)}
+
+        row = next(row for row in build_lineage([profile_csv(path, self.root)], evidence) if row.column == "mystery")
+
+        self.assertEqual(row.status, "discrepancy")
+
+    def test_copied_column_with_unknown_unit_is_a_discrepancy(self) -> None:
+        raw = self.root / "raw_price_data.csv"
+        signal = self.root / "signal_data.csv"
+        raw.write_text("date,opaque\n2026-01-01,1\n", encoding="utf-8")
+        signal.write_text("date,opaque\n2026-01-01,1\n", encoding="utf-8")
+        profiles = [profile_csv(path, self.root) for path in (raw, signal)]
+
+        row = next(row for row in build_lineage(profiles, {}) if row.artifact == "signal_data.csv" and row.column == "opaque")
+
+        self.assertEqual(row.status, "discrepancy")
+
+    def test_lineage_preserves_duplicate_backtest_basenames(self) -> None:
+        first = self.root / "first" / "swap_arb_backtest_case.csv"
+        second = self.root / "second" / "swap_arb_backtest_case.csv"
+        first.parent.mkdir()
+        second.parent.mkdir()
+        first.write_text("date,daily_pnl\n2026-01-01,1\n", encoding="utf-8")
+        second.write_text("date,daily_pnl\n2026-01-01,2\n", encoding="utf-8")
+
+        rows = build_lineage(
+            [profile_csv(path, self.root) for path in (first, second)],
+            {},
+        )
+
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(
+            {(row.artifact, row.ordinal) for row in rows},
+            {
+                ("first/swap_arb_backtest_case.csv", 0),
+                ("first/swap_arb_backtest_case.csv", 1),
+                ("second/swap_arb_backtest_case.csv", 0),
+                ("second/swap_arb_backtest_case.csv", 1),
+            },
+        )
