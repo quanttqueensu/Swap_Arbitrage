@@ -6,8 +6,12 @@ import unittest
 from pathlib import Path
 
 from tools.data_audit import (
+    KeyRule,
+    ProfileFailure,
     SourceChangedError,
     discover_artifacts,
+    profile_artifacts,
+    profile_csv,
     read_raw_header,
     sha256_file,
     validate_paths,
@@ -124,6 +128,65 @@ class AuditBoundaryTests(unittest.TestCase):
         path.write_text("value\n2\n", encoding="utf-8")
         with self.assertRaisesRegex(SourceChangedError, "source changed during audit"):
             verify_unchanged(before)
+
+
+class CsvProfilingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_profiles_headers_rows_dates_keys_missing_constants_and_duplicates(self) -> None:
+        path = self.root / "sample.csv"
+        path.write_text(
+            "date,id,value,copy,constant\n"
+            "2026-01-02,a,1,1,x\n"
+            "2026-01-01,a,,2,x\n"
+            "2026-01-03,b,3,3,x\n",
+            encoding="utf-8",
+        )
+        profile = profile_csv(path, self.root, KeyRule(("date", "id")))
+        self.assertEqual(profile.relative_path, "sample.csv")
+        self.assertEqual(profile.row_count, 3)
+        self.assertEqual((profile.start_time, profile.end_time), ("2026-01-01", "2026-01-03"))
+        self.assertEqual(profile.sort_order, "unsorted")
+        self.assertEqual(profile.duplicate_key_count, 0)
+        self.assertEqual(profile.columns[2].missing_count, 1)
+        self.assertTrue(profile.columns[4].constant)
+        self.assertEqual(profile.duplicate_column_pairs, ())
+        self.assertEqual(profile.scan_mode, "full")
+
+    def test_detects_duplicate_headers_keys_and_equal_columns_by_ordinal(self) -> None:
+        path = self.root / "duplicates.csv"
+        path.write_text(
+            "date,id,value,value\n"
+            "2026-01-01,a,1,1\n"
+            "2026-01-01,a,2,2\n",
+            encoding="utf-8",
+        )
+        profile = profile_csv(path, self.root, KeyRule(("date", "id")))
+        self.assertEqual(profile.duplicate_headers, ("value",))
+        self.assertEqual(profile.duplicate_key_count, 2)
+        self.assertEqual(profile.duplicate_column_pairs, ((2, 3),))
+
+    def test_large_file_mode_is_labelled_sampled(self) -> None:
+        path = self.root / "large.csv"
+        path.write_text("date,value\n2026-01-01,1\n2026-01-02,2\n", encoding="utf-8")
+        profile = profile_csv(path, self.root, KeyRule(("date",)), full_scan_limit_bytes=1)
+        self.assertEqual(profile.scan_mode, "sampled:first-and-last-1000-rows")
+        self.assertEqual(profile.row_count, 2)
+
+    def test_malformed_file_becomes_failure_without_losing_valid_profile(self) -> None:
+        good = self.root / "good.csv"
+        bad = self.root / "bad.csv"
+        good.write_text("date,value\n2026-01-01,1\n", encoding="utf-8")
+        bad.write_bytes(b"date,value\n\xff")
+        results = profile_artifacts([bad, good], self.root, {})
+        self.assertIsInstance(results[0], ProfileFailure)
+        self.assertEqual(results[0].relative_path, "bad.csv")
+        self.assertEqual(results[1].relative_path, "good.csv")
 
 
 if __name__ == "__main__":
