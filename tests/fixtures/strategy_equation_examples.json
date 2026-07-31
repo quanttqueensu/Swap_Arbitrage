@@ -1,0 +1,161 @@
+{
+  "schema_version": "p10.strategy-equations.v1",
+  "classification": "assumed_synthetic",
+  "funding_profiles": {
+    "flat_5_bps_60": [{"value_bps": "5", "count": 60}],
+    "flat_5_bps_40": [{"value_bps": "5", "count": 40}],
+    "flat_5_bps_39": [{"value_bps": "5", "count": 39}]
+  },
+  "gross_history_profiles": {
+    "mean_15_sd_5_252": [
+      {"value_bps": "10", "count": 123},
+      {"value_bps": "20", "count": 123},
+      {"value_bps": "7.5", "count": 1},
+      {"value_bps": "22.5", "count": 1},
+      {"value_bps": "12.5", "count": 1},
+      {"value_bps": "17.5", "count": 1},
+      {"value_bps": "15", "count": 2}
+    ],
+    "mean_0_sd_5_252": [
+      {"value_bps": "-5", "count": 123},
+      {"value_bps": "5", "count": 123},
+      {"value_bps": "-7.5", "count": 1},
+      {"value_bps": "7.5", "count": 1},
+      {"value_bps": "-2.5", "count": 1},
+      {"value_bps": "2.5", "count": 1},
+      {"value_bps": "0", "count": 2}
+    ],
+    "mean_minus_25_sd_10_252": [
+      {"value_bps": "-35", "count": 123},
+      {"value_bps": "-15", "count": 123},
+      {"value_bps": "-40", "count": 1},
+      {"value_bps": "-10", "count": 1},
+      {"value_bps": "-30", "count": 1},
+      {"value_bps": "-20", "count": 1},
+      {"value_bps": "-25", "count": 2}
+    ],
+    "mean_minus_5_sd_5_252": [
+      {"value_bps": "-10", "count": 123},
+      {"value_bps": "0", "count": 123},
+      {"value_bps": "-12.5", "count": 1},
+      {"value_bps": "2.5", "count": 1},
+      {"value_bps": "-7.5", "count": 1},
+      {"value_bps": "-2.5", "count": 1},
+      {"value_bps": "-5", "count": 2}
+    ]
+  },
+  "economic_examples": [
+    {
+      "id": "traditional_2y",
+      "maturity": "2Y",
+      "direction": 1,
+      "cms_bps": "450",
+      "cmt_bps": "420",
+      "funding_profile": "flat_5_bps_60",
+      "gross_history_profile": "mean_15_sd_5_252",
+      "target_swap_leg_dv01_usd_per_bp": "1000",
+      "round_trip_costs_usd": {
+        "swap_bid_ask": "250",
+        "treasury_bid_ask": "250",
+        "commission_exchange": "100",
+        "slippage": "200",
+        "roll": "100",
+        "financing_not_in_funding": "100"
+      },
+      "expected": {
+        "swap_spread_bps": "30",
+        "funding_expectation_bps": "5",
+        "gross_opportunity_bps": "25",
+        "round_trip_cost_usd": "1000",
+        "round_trip_cost_bps": "1",
+        "net_directional_opportunity_bps": "24",
+        "zscore": "2"
+      }
+    },
+    {
+      "id": "traditional_5y",
+      "maturity": "5Y",
+      "direction": 1,
+      "cms_bps": "430",
+      "cmt_bps": "410",
+      "funding_profile": "flat_5_bps_60",
+      "gross_history_profile": "mean_0_sd_5_252",
+      "target_swap_leg_dv01_usd_per_bp": "1000",
+      "round_trip_costs_usd": {
+        "swap_bid_ask": "600",
+        "treasury_bid_ask": "600",
+        "commission_exchange": "400",
+        "slippage": "800",
+        "roll": "400",
+        "financing_not_in_funding": "200"
+      },
+      "expected": {
+        "swap_spread_bps": "20",
+        "funding_expectation_bps": "5",
+        "gross_opportunity_bps": "15",
+        "round_trip_cost_usd": "3000",
+        "round_trip_cost_bps": "3",
+        "net_directional_opportunity_bps": "12",
+        "zscore": "3"
+      }
+    },
+    {
+      "id": "reverse_2y",
+      "maturity": "2Y",
+      "direction": -1,
+      "cms_bps": "380",
+      "cmt_bps": "420",
+      "funding_profile": "flat_5_bps_60",
+      "gross_history_profile": "mean_minus_25_sd_10_252",
+      "target_swap_leg_dv01_usd_per_bp": "1000",
+      "round_trip_costs_usd": {
+        "swap_bid_ask": "400",
+        "treasury_bid_ask": "400",
+        "commission_exchange": "200",
+        "slippage": "500",
+        "roll": "300",
+        "financing_not_in_funding": "200"
+      },
+      "expected": {
+        "swap_spread_bps": "-40",
+        "funding_expectation_bps": "5",
+        "gross_opportunity_bps": "-45",
+        "round_trip_cost_usd": "2000",
+        "round_trip_cost_bps": "2",
+        "net_directional_opportunity_bps": "43",
+        "zscore": "-2"
+      }
+    },
+    {
+      "id": "reverse_5y",
+      "maturity": "5Y",
+      "direction": -1,
+      "cms_bps": "397",
+      "cmt_bps": "410",
+      "funding_profile": "flat_5_bps_60",
+      "gross_history_profile": "mean_minus_5_sd_5_252",
+      "target_swap_leg_dv01_usd_per_bp": "1000",
+      "round_trip_costs_usd": {
+        "swap_bid_ask": "300",
+        "treasury_bid_ask": "300",
+        "commission_exchange": "150",
+        "slippage": "400",
+        "roll": "200",
+        "financing_not_in_funding": "150"
+      },
+      "expected": {
+        "swap_spread_bps": "-13",
+        "funding_expectation_bps": "5",
+        "gross_opportunity_bps": "-18",
+        "round_trip_cost_usd": "1500",
+        "round_trip_cost_bps": "1.5",
+        "net_directional_opportunity_bps": "16.5",
+        "zscore": "-2.6"
+      }
+    }
+  ],
+  "movement_boundaries": [],
+  "state_examples": [],
+  "pnl_examples": [],
+  "hedge_examples": []
+}

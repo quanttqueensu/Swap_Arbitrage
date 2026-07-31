@@ -91,13 +91,103 @@ current contract/CTD DV01 remains authoritative for sizing.
 
 ## Economic hypothesis
 
+For maturity \(m\) at decision time \(t\), with both rate inputs in basis
+points:
+
+\[
+SS_{m,t}=CMS_{m,t}-CMT_{m,t}
+\]
+
+\[
+X^{gross}_{m,t}=SS_{m,t}-\widehat{E}_{t}[\overline{FS}_{m}]
+\]
+
+\(SS\) is the fixed swap spread. Positive \(X^{gross}\) favours the
+traditional receive-fixed/short-Treasury direction; negative \(X^{gross}\)
+favours the reverse. An exact result requires exact maturity-matched swap,
+Treasury, floating-rate, and collateral-consistent repo inputs. A calculation
+from classified inputs is `derived` and keeps the input classifications as
+lineage; a missing required input makes the affected output `unavailable`.
+
 ## Causal funding expectation
+
+The funding spread is \(FS_t=L_t-repo_t\), in basis points. The frozen
+research estimator accepts only the consecutive one-business-day-lagged suffix
+available at \(t\). With \(n_t\) such observations,
+
+\[
+N_t=\min(60,n_t), \qquad N_t\geq40
+\]
+
+\[
+\widehat{FS}_{t,h}=\frac{1}{N_t}\sum_{j=1}^{N_t}FS_{t-j}
+\quad\text{for }h\in\{1,\ldots,20\}
+\]
+
+\[
+\widehat{E}_{t}[\overline{FS}_{m}]
+=\frac{1}{20}\sum_{h=1}^{20}\widehat{FS}_{t,h}
+\]
+
+It is `unavailable` before 40 consecutive lagged observations. The 20
+forecast steps are identical, so their horizon average equals the trailing
+mean exactly. Forty 5-bp observations produce 5 bp; 60 5-bp observations
+also produce 5 bp; 39 observations produce no forecast. Once the history has
+60 observations, an older 999-bp value is outside the trailing window and
+does not change the 5-bp result. This test-only arithmetic presumes the
+history was already selected causally; production calendar validation remains
+unavailable pending P11.
 
 ## Decision clock and movement trigger
 
 ## Causal z-score and state rules
 
+The causal standardized gross opportunity is:
+
+\[
+z_{m,t}=\frac{X^{gross}_{m,t}-\mu_{m,t^-}}{\sigma_{m,t^-}}
+\]
+
+where \(\mu_{m,t^-}\) and \(\sigma_{m,t^-}\) are respectively the mean and
+sample standard deviation of exactly the 252 completed observations preceding
+\(t\):
+
+\[
+\mu_{m,t^-}=\frac{1}{252}\sum_{i=1}^{252}X^{gross}_{m,t-i},
+\qquad
+\sigma_{m,t^-}=\sqrt{\frac{\sum_{i=1}^{252}
+(X^{gross}_{m,t-i}-\mu_{m,t^-})^2}{251}}
+\]
+
+The current observation is excluded. A history with any count other than 252,
+or a zero sample standard deviation, produces no z-score. Future observations
+cannot revise an already calculated historical z-score; they belong only to a
+later decision's prior window.
+
 ## Directional costs and eligibility
+
+All six round-trip cost components are explicit USD inputs: swap bid/ask,
+Treasury bid/ask, commission/exchange, slippage, roll, and financing not
+already included in the expected funding burden. Their directional buffer is:
+
+\[
+TC^d_{m,t}=\frac{
+C^{swap,d}_{m,t}+C^{Treasury,d}_{m,t}+C^{commission}_{m,t}
++C^{slippage}_{m,t}+C^{roll}_{m,t}+C^{financing}_{m,t}}
+{|DV01^{target}_{m,t}|}
+\]
+
+The numerator is USD and the denominator is USD/bp, so \(TC\) is bp. The
+same financing burden must not occur in both funding and costs. For
+\(d\in\{-1,+1\}\):
+
+\[
+X^{net,d}_{m,t}=d\,X^{gross}_{m,t}-TC^d_{m,t}
+\]
+
+For the approved 2Y/5Y research examples, the additional entry buffer is
+0 bp and eligibility is strictly \(X^{net,d}_{m,t}>0\): 0 is ineligible,
+while 0.0001 bp is eligible.
 
 ## Executable futures direction
 
@@ -106,6 +196,95 @@ current contract/CTD DV01 remains authoritative for sizing.
 ## Contract P&L, reversal, roll, and flattening
 
 ## Golden calculations
+
+Every numerical input below is synthetic and `assumed`; every shown result is
+`derived` with `assumed` lineage. The fixture's `assumed_synthetic` label is a
+schema label for that synthetic fixture, not a replacement for the exclusive
+input/result classifications above. No calculation below is an observation,
+live cost, or backtest assumption.
+
+All four examples use the 60-observation profile \(60\times5\) bp. Its
+trailing mean is \((60\times5)/60=5\) bp, and each of its 20 equal forecast
+steps is therefore 5 bp; the horizon average remains 5 bp.
+
+### Traditional 2Y (`traditional_2y`, \(d=+1\))
+
+\[
+SS=450-420=30, \qquad X^{gross}=30-5=25\ \text{bp}
+\]
+
+\[
+C=250+250+100+200+100+100=1000\ \text{USD},
+\quad TC=1000/1000=1\ \text{bp}
+\]
+
+\[
+X^{net,+1}=25-1=24\ \text{bp}
+\]
+
+The 252 previous values are \(123\times10\), \(123\times20\), 7.5,
+22.5, 12.5, 17.5, and \(2\times15\) bp. Their sum is
+\(1230+2460+30+30+30=3780\), so \(\mu=3780/252=15\) bp. Squared deviations
+total \(123\times25+123\times25+2\times56.25+2\times6.25=6275\), so the
+sample standard deviation is \(\sqrt{6275/251}=5\) bp and
+\(z=(25-15)/5=2\).
+
+### Traditional 5Y (`traditional_5y`, \(d=+1\))
+
+\[
+SS=430-410=20, \qquad X^{gross}=20-5=15\ \text{bp}
+\]
+
+\[
+C=600+600+400+800+400+200=3000\ \text{USD},
+\quad TC=3000/1000=3\ \text{bp},
+\quad X^{net,+1}=15-3=12\ \text{bp}
+\]
+
+The previous values are \(123\times-5\), \(123\times5\), -7.5, 7.5,
+-2.5, 2.5, and \(2\times0\) bp. Their sum is zero, hence \(\mu=0\).
+The squared deviations total
+\(123\times25+123\times25+2\times56.25+2\times6.25=6275\); therefore
+\(\sigma=\sqrt{6275/251}=5\) bp and \(z=(15-0)/5=3\).
+
+### Reverse 2Y (`reverse_2y`, \(d=-1\))
+
+\[
+SS=380-420=-40, \qquad X^{gross}=-40-5=-45\ \text{bp}
+\]
+
+\[
+C=400+400+200+500+300+200=2000\ \text{USD},
+\quad TC=2000/1000=2\ \text{bp},
+\quad X^{net,-1}=(-1)(-45)-2=43\ \text{bp}
+\]
+
+The previous values are \(123\times-35\), \(123\times-15\), -40, -10,
+-30, -20, and \(2\times-25\) bp. Their sum is
+\(-4305-1845-50-50-50=-6300\), so \(\mu=-6300/252=-25\) bp. Squared
+deviations total
+\(123\times100+123\times100+2\times225+2\times25=25100\), giving
+\(\sigma=\sqrt{25100/251}=10\) bp and
+\(z=(-45-(-25))/10=-2\).
+
+### Reverse 5Y (`reverse_5y`, \(d=-1\))
+
+\[
+SS=397-410=-13, \qquad X^{gross}=-13-5=-18\ \text{bp}
+\]
+
+\[
+C=300+300+150+400+200+150=1500\ \text{USD},
+\quad TC=1500/1000=1.5\ \text{bp},
+\quad X^{net,-1}=(-1)(-18)-1.5=16.5\ \text{bp}
+\]
+
+The previous values are \(123\times-10\), \(123\times0\), -12.5, 2.5,
+-7.5, -2.5, and \(2\times-5\) bp. Their sum is
+\(-1230-10-10-10=-1260\), so \(\mu=-1260/252=-5\) bp. Squared deviations
+again total \(123\times25+123\times25+2\times56.25+2\times6.25=6275\),
+so \(\sigma=\sqrt{6275/251}=5\) bp and
+\(z=(-18-(-5))/5=-2.6\).
 
 ## Availability and proxy matrix
 
