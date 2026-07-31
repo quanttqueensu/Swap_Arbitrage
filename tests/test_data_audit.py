@@ -212,3 +212,63 @@ class CsvProfilingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from tools.data_audit import build_lineage, scan_source_evidence
+
+
+class LineageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        (self.root / "tools").mkdir()
+        (self.root / "data").mkdir()
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_source_scan_records_exact_file_and_line_evidence(self) -> None:
+        (self.root / "writer.py").write_text(
+            'OUTPUT = "signal_data.csv"\n'
+            'frame = pd.read_csv("raw_price_data.csv")\n'
+            'frame["signal"] = frame["price"]\n'
+            'frame.to_csv(OUTPUT)\n',
+            encoding="utf-8",
+        )
+        evidence = scan_source_evidence(
+            self.root,
+            {"raw_price_data.csv", "signal_data.csv", "signal", "price"},
+        )
+        self.assertEqual(evidence["signal_data.csv"][0].location, "writer.py:1")
+        self.assertEqual(evidence["signal"][0].location, "writer.py:3")
+        self.assertEqual(evidence["__csv_read__"][0].location, "writer.py:2")
+        self.assertEqual(evidence["__csv_write__"][0].location, "writer.py:4")
+
+    def test_lineage_covers_every_ordinal_and_marks_copied_unused_columns(self) -> None:
+        raw = self.root / "raw_price_data.csv"
+        signal = self.root / "signal_data.csv"
+        risk = self.root / "risk_data.csv"
+        backtest = self.root / "swap_arb_backtest_case.csv"
+        raw.write_text("date,price,orphan\n2026-01-01,100,x\n", encoding="utf-8")
+        signal.write_text("date,price,orphan,signal\n2026-01-01,100,x,1\n", encoding="utf-8")
+        risk.write_text("date,price,orphan,signal,risk_allowed\n2026-01-01,100,x,1,True\n", encoding="utf-8")
+        backtest.write_text("date,signal,risk_allowed,daily_pnl\n2026-01-01,1,True,5\n", encoding="utf-8")
+        profiles = [
+            profile_csv(path, self.root)
+            for path in (raw, signal, risk, backtest)
+        ]
+        rows = build_lineage(profiles, {})
+        self.assertEqual(len(rows), 3 + 4 + 5 + 4)
+        orphan = next(row for row in rows if row.artifact == "risk_data.csv" and row.column == "orphan")
+        self.assertEqual(orphan.classification, "unused")
+        self.assertEqual(orphan.source_or_derivation, "copied from signal_data.csv:orphan")
+        pnl = next(row for row in rows if row.column == "daily_pnl")
+        self.assertEqual((pnl.classification, pnl.unit, pnl.status), ("accounting", "usd", "verified"))
+
+    def test_unknown_derived_column_is_visible_as_a_discrepancy(self) -> None:
+        path = self.root / "signal_data.csv"
+        path.write_text("date,mystery\n2026-01-01,1\n", encoding="utf-8")
+        rows = build_lineage([profile_csv(path, self.root)], {})
+        mystery = next(row for row in rows if row.column == "mystery")
+        self.assertEqual(mystery.status, "discrepancy")
+        self.assertIn("no verified classification", mystery.evidence)

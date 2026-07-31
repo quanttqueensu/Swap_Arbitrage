@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import csv
 import hashlib
 from collections import Counter, deque
@@ -64,6 +65,100 @@ class ProfileFailure:
     relative_path: str
     error_type: str
     message: str
+
+
+CLASSIFICATIONS = frozenset(
+    {"source", "canonical", "feature", "decision", "risk", "accounting", "diagnostic", "unused"}
+)
+STATUSES = frozenset({"verified", "candidate", "discrepancy"})
+PIPELINE_ORDER = (
+    "raw_price_data.csv",
+    "signal_data.csv",
+    "risk_data.csv",
+)
+
+
+@dataclass(frozen=True)
+class SourceEvidence:
+    token: str
+    location: str
+    line: str
+
+
+@dataclass(frozen=True)
+class LineageRow:
+    artifact: str
+    column: str
+    ordinal: int
+    classification: str
+    source_or_derivation: str
+    writer: str
+    consumers: tuple[str, ...]
+    unit: str
+    evidence: str
+    status: str
+
+
+WRITERS = {
+    "raw_price_data.csv": "raw_price_data.py",
+    "signal_data.csv": "signal_data.py",
+    "risk_data.csv": "risk_data.py",
+    "swap_arb_backtest_": "backtest.py",
+}
+CONSUMERS = {
+    "raw_price_data.csv": ("signal_data.py",),
+    "signal_data.csv": ("risk_data.py",),
+    "risk_data.csv": ("backtest.py",),
+}
+PURPOSES = {
+    "cme_swap_data.csv": "Eris contract price and DV01 research master",
+    "treasury_futures_data.csv": "Treasury futures contract price and DV01 research master",
+    "treasury_rates.csv": "Treasury and funding rate source table",
+    "swap_rates.csv": "Eris price and return source table",
+    "treasury_futures.csv": "Treasury futures price and return source table",
+    "raw_price_data.csv": "wide merged research input",
+    "signal_data.csv": "wide signal and proxy-decision output",
+    "risk_data.csv": "wide risk-sizing output",
+    "r2_objects.csv": "Cloudflare R2 object metadata inventory",
+}
+SOURCES = {
+    "cme_swap_data.csv": "CME/Eris public source cache",
+    "treasury_futures_data.csv": "CME or public Treasury futures source cache",
+    "treasury_rates.csv": "US Treasury and New York Fed",
+    "swap_rates.csv": "Eris public market data",
+    "treasury_futures.csv": "public continuous futures proxy",
+    "raw_price_data.csv": "derived from current source tables",
+    "signal_data.csv": "derived by signal_data.py",
+    "risk_data.csv": "derived by risk_data.py",
+    "r2_objects.csv": "Cloudflare R2 listing metadata",
+}
+UNITS = {
+    "date": "date",
+    "risk_allowed": "boolean",
+    "best_proxy_maturity": "maturity",
+}
+
+
+def writer_for(name: str) -> str:
+    if name.startswith("swap_arb_backtest_"):
+        return WRITERS["swap_arb_backtest_"]
+    return WRITERS.get(name, "none found")
+
+
+def consumers_for(name: str) -> tuple[str, ...]:
+    return CONSUMERS.get(name, ())
+
+
+def purpose_for(name: str) -> str:
+    if name.startswith("swap_arb_backtest_"):
+        return "legacy backtest result"
+    return PURPOSES.get(name, "unresolved; inspect at P20")
+
+
+def source_for(name: str) -> str:
+    if name.startswith("swap_arb_backtest_"):
+        return "derived by backtest.py"
+    return SOURCES.get(name, "unresolved; inspect at P20")
 
 
 CURRENT_KEY_RULES = {
@@ -275,3 +370,174 @@ def verify_unchanged(before: dict[Path, str]) -> None:
     if changed:
         names = ", ".join(str(path) for path in sorted(changed))
         raise SourceChangedError(f"source changed during audit: {names}")
+
+
+def scan_source_evidence(
+    repo_root: Path,
+    tokens: set[str],
+) -> dict[str, tuple[SourceEvidence, ...]]:
+    found: dict[str, set[SourceEvidence]] = {
+        token: set() for token in tokens | {"__csv_read__", "__csv_write__"}
+    }
+    excluded = {".venv", "__pycache__", ".superpowers", ".worktrees"}
+    for path in sorted(repo_root.rglob("*.py")):
+        if any(part in excluded for part in path.relative_to(repo_root).parts):
+            continue
+        source = path.read_text(encoding="utf-8")
+        lines = source.splitlines()
+        tree = ast.parse(source, filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in tokens:
+                relative = path.relative_to(repo_root).as_posix()
+                found[node.value].add(
+                    SourceEvidence(node.value, f"{relative}:{node.lineno}", lines[node.lineno - 1].strip())
+                )
+            if isinstance(node, ast.Call):
+                function_name = (
+                    node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else ""
+                )
+                evidence_token = (
+                    "__csv_read__"
+                    if function_name == "read_csv"
+                    else "__csv_write__"
+                    if function_name in {"to_csv", "save_derived_csv"}
+                    else ""
+                )
+                if evidence_token:
+                    relative = path.relative_to(repo_root).as_posix()
+                    found[evidence_token].add(
+                        SourceEvidence(
+                            evidence_token,
+                            f"{relative}:{node.lineno}",
+                            lines[node.lineno - 1].strip(),
+                        )
+                    )
+    return {
+        token: tuple(sorted(items, key=lambda item: (item.location, item.line)))
+        for token, items in found.items()
+    }
+
+
+def _unit_for(column: str) -> tuple[str, bool]:
+    if column in UNITS:
+        return UNITS[column], True
+    if column.endswith("_bps"):
+        return "basis_points", True
+    if column.endswith("_price"):
+        return "price_points", True
+    if column.endswith(("_return", "_pct")):
+        return "decimal", True
+    if "_contracts_" in column or column.startswith("prior_position_"):
+        return "contracts", True
+    if any(marker in column for marker in ("_notional_", "_pnl", "_cost", "_equity", "drawdown")):
+        return "usd", True
+    if any(marker in column for marker in ("_z", "_scale_", "_rank_", "_direction_")):
+        return "dimensionless", True
+    return "unknown", False
+
+
+def _classification_for(artifact: str, column: str) -> tuple[str, bool]:
+    if artifact == "raw_price_data.csv":
+        return "source", True
+    if artifact == "signal_data.csv":
+        if column.startswith(("proxy_signal_", "proxy_position_", "best_proxy_")):
+            return "decision", True
+        known = column == "date" or any(
+            marker in column
+            for marker in ("_price", "_return", "funding_spread_", "_residual", "_z")
+        )
+        return "feature", known
+    if artifact == "risk_data.csv":
+        return "risk", column == "date" or any(
+            marker in column
+            for marker in ("risk_", "_vol_", "_scale_", "_direction_", "_contracts_", "_notional_")
+        )
+    if artifact.startswith("swap_arb_backtest_"):
+        accounting = any(
+            marker in column
+            for marker in ("prior_position_", "_pnl", "turnover", "cost", "equity", "return", "drawdown")
+        )
+        return ("accounting", True) if accounting else ("diagnostic", column == "date")
+    return "diagnostic", False
+
+
+def build_lineage(
+    profiles: list[ArtifactProfile],
+    evidence: dict[str, tuple[SourceEvidence, ...]],
+) -> tuple[LineageRow, ...]:
+    by_name = {Path(profile.relative_path).name: profile for profile in profiles}
+    ordered = [by_name[name] for name in PIPELINE_ORDER if name in by_name]
+    ordered.extend(
+        sorted(
+            (profile for name, profile in by_name.items() if name.startswith("swap_arb_backtest_")),
+            key=lambda profile: profile.relative_path,
+        )
+    )
+    rows: list[LineageRow] = []
+    for profile in ordered:
+        artifact = Path(profile.relative_path).name
+        previous_name = (
+            "risk_data.csv"
+            if artifact.startswith("swap_arb_backtest_")
+            else PIPELINE_ORDER[PIPELINE_ORDER.index(artifact) - 1]
+            if artifact in PIPELINE_ORDER[1:]
+            else None
+        )
+        previous_headers = set(by_name[previous_name].headers) if previous_name in by_name else set()
+        next_names = (
+            (PIPELINE_ORDER[PIPELINE_ORDER.index(artifact) + 1],)
+            if artifact in PIPELINE_ORDER[:-1]
+            else tuple(name for name in by_name if name.startswith("swap_arb_backtest_"))
+            if artifact == "risk_data.csv"
+            else ()
+        )
+        for column_profile in profile.columns:
+            column = column_profile.name
+            copied = column in previous_headers
+            locations = tuple(item.location for item in evidence.get(column, ()))
+            used_downstream = any(
+                column in by_name[name].headers for name in next_names if name in by_name
+            )
+            classification, classification_verified = _classification_for(artifact, column)
+            if copied and not used_downstream and not locations and next_names:
+                classification, classification_verified = "unused", True
+            unit, unit_verified = _unit_for(column)
+            status = (
+                "verified"
+                if classification_verified and unit_verified
+                else "candidate"
+                if copied or locations
+                else "discrepancy"
+            )
+            notes = list(locations)
+            if status == "discrepancy":
+                notes.append("no verified classification or unit")
+            rows.append(
+                LineageRow(
+                    artifact=artifact,
+                    column=column,
+                    ordinal=column_profile.ordinal,
+                    classification=classification,
+                    source_or_derivation=(
+                        f"copied from {previous_name}:{column}"
+                        if copied
+                        else "source field"
+                        if artifact == "raw_price_data.csv"
+                        else f"derived in {writer_for(artifact)}"
+                    ),
+                    writer=writer_for(artifact),
+                    consumers=tuple(
+                        consumer
+                        for consumer in consumers_for(artifact)
+                        if used_downstream
+                    ),
+                    unit=unit,
+                    evidence="; ".join(notes) or "pipeline header comparison",
+                    status=status,
+                )
+            )
+    return tuple(rows)
