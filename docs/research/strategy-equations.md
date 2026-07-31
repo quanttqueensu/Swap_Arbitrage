@@ -54,13 +54,18 @@ derived: calculated only from classified inputs using a displayed equation
 unavailable: absent or unvalidated; blocks the affected exact result or executable basket
 ```
 
-Thus, an exact result is available only when all of its required inputs are
-exact. A derived result preserves the limiting classification of its inputs; a
-proxy input yields a proxy-labelled output, while an unavailable required input
-blocks the affected exact result or executable basket. `EFFR-SOFR` is a named
-proxy for exact \(L-repo\), not a replacement for that exact floating funding
-spread. Synthetic examples use `assumed` values and any calculation from them
-is `derived`, never observed.
+The classifications are mutually exclusive. Classify a raw observed input, or
+an uncalculated pass-through value, as `exact`, `proxy`, `assumed`, or
+`unavailable` as its definition requires. Classify a result produced by a
+displayed equation as `derived`, even when every input is `exact`; it must also
+display the classification of every input as lineage. If a required input is
+`unavailable`, do not produce the calculation: the affected result or
+executable basket is `unavailable`, not `derived`. A `derived` result with a
+`proxy` or `assumed` input is not an exact result or complete strategy output.
+`EFFR-SOFR` is a named `proxy` for exact \(L-repo\), not a replacement for that
+exact floating funding spread. Synthetic examples use `assumed` values and any
+calculation from them is `derived`, with `assumed` input lineage, never
+observed.
 
 ## Source ledger and convention evidence
 
