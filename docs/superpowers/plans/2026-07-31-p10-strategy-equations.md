@@ -512,7 +512,7 @@ Expected staged paths: exactly the three Task 2 files.
 
 - [ ] **Step 1: Add RED tests for exact movement and z/state boundaries**
 
-Add tests that call the not-yet-defined `movement_direction` and `transition` helpers for fixture cases. Run the focused module and expect `NameError` before adding helpers.
+Add tests that resolve `movement_direction` and `transition` with `globals().get`, assert each resolved value is callable with a message such as `movement_direction must be callable`, and only then exercise the fixture cases. Run the focused module before adding helpers and expect those deliberate callable-contract assertions to fail; a `NameError`, import error, or `TypeError` is not acceptable RED evidence.
 
 The movement fixture must contain exactly:
 
@@ -588,6 +588,8 @@ Add explicit tests at `z = 1.9999`, `2.0`, `2.0001`, `-1.9999`, `-2.0`, `-2.0001
 
 - [ ] **Step 3: Add RED P&L, reversal-cost, and roll tests**
 
+Resolve `contract_pnl` with `globals().get` and assert it is callable before exercising it. The RED run must fail that callable-contract assertion; it must not error because the helper is absent.
+
 Add these exact fixture objects:
 
 ```json
@@ -617,6 +619,8 @@ def contract_pnl(
 Assert traditional and reverse leg signs, exact CME multipliers, separate reversal charges, roll turnover, and the USD totals above.
 
 - [ ] **Step 5: Add RED hedge-rounding and residual-boundary tests**
+
+Resolve `round_half_away_positive` and `select_hedge` with `globals().get` and assert both are callable before exercising them. The RED run must fail those callable-contract assertions; it must not error because either helper is absent.
 
 Add these exact hedge fixtures for both directions where shown:
 
