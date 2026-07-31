@@ -1,14 +1,34 @@
 from __future__ import annotations
 
 import json
+import runpy
 import unittest
 from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP, getcontext, localcontext
+from decimal import (
+    Decimal,
+    InvalidOperation,
+    ROUND_FLOOR,
+    ROUND_HALF_UP,
+    getcontext,
+    localcontext,
+    setcontext,
+)
 from pathlib import Path
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "strategy_equation_examples.json"
-getcontext().prec = 50
+_DECIMAL_CONTEXT_BEFORE_TESTS = None
+
+
+def setUpModule() -> None:
+    global _DECIMAL_CONTEXT_BEFORE_TESTS
+    _DECIMAL_CONTEXT_BEFORE_TESTS = getcontext().copy()
+    getcontext().prec = 50
+
+
+def tearDownModule() -> None:
+    if _DECIMAL_CONTEXT_BEFORE_TESTS is not None:
+        setcontext(_DECIMAL_CONTEXT_BEFORE_TESTS)
 
 
 def D(value: object) -> Decimal:
@@ -761,3 +781,12 @@ class TimingAndClassificationTests(unittest.TestCase):
                 "allowed": False,
             },
         )
+
+
+class TestModuleIsolationTests(unittest.TestCase):
+    def test_loading_test_module_does_not_mutate_decimal_context(self) -> None:
+        with localcontext() as context:
+            context.prec = 28
+            precision_before = getcontext().prec
+            runpy.run_path(str(Path(__file__)))
+            self.assertEqual(getcontext().prec, precision_before)
