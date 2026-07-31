@@ -220,7 +220,13 @@ import csv
 import io
 from unittest.mock import patch
 
-from tools.data_audit import atomic_write, build_parser, run_audit
+from tools.data_audit import (
+    CURRENT_KEY_RULES,
+    atomic_write,
+    build_parser,
+    render_inventory,
+    run_audit,
+)
 
 
 class LineageTests(unittest.TestCase):
@@ -422,6 +428,14 @@ class AuditCommandTests(unittest.TestCase):
         )
         self.assertNotIn(b"\r\n", inventory.read_bytes())
         self.assertNotIn(b"\r\n", lineage.read_bytes())
+
+    def test_render_inventory_two_argument_api_uses_normalized_root_identities(self) -> None:
+        results = profile_artifacts(
+            discover_artifacts(self.working), self.working, CURRENT_KEY_RULES
+        )
+        report = render_inventory(results, {})
+        self.assertIn("- Repository root identity: `<repo-root>`", report)
+        self.assertIn("- Data root identity: `<data-root>`", report)
 
     def test_cli_parser_requires_all_audit_root_and_output_flags(self) -> None:
         help_text = build_parser().format_help()

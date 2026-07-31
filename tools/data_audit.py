@@ -626,8 +626,8 @@ def _locations_in_files(
 def render_inventory(
     results: list[ArtifactProfile | ProfileFailure],
     evidence: dict[str, tuple[SourceEvidence, ...]],
-    repo_identity: str,
-    data_identity: str,
+    repo_identity: str = "<repo-root>",
+    data_identity: str = "<data-root>",
 ) -> str:
     profiles = [item for item in results if isinstance(item, ArtifactProfile)]
     failures = [item for item in results if isinstance(item, ProfileFailure)]
