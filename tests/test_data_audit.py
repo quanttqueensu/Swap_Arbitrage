@@ -188,6 +188,27 @@ class CsvProfilingTests(unittest.TestCase):
         self.assertEqual(results[0].relative_path, "bad.csv")
         self.assertEqual(results[1].relative_path, "good.csv")
 
+    def test_empty_file_becomes_failure_without_losing_valid_profile(self) -> None:
+        empty = self.root / "empty.csv"
+        good = self.root / "good.csv"
+        empty.write_text("", encoding="utf-8")
+        good.write_text("date,value\n2026-01-01,1\n", encoding="utf-8")
+        results = profile_artifacts([good, empty], self.root, {})
+        self.assertIsInstance(results[0], ProfileFailure)
+        self.assertEqual(results[0].relative_path, "empty.csv")
+        self.assertEqual(results[0].error_type, "ValueError")
+        self.assertEqual(results[1].relative_path, "good.csv")
+
+    def test_sampled_file_rejects_malformed_width_in_unsaved_middle(self) -> None:
+        path = self.root / "sampled-malformed.csv"
+        rows = ["date,value"]
+        rows.extend(f"2026-01-{index:04d},{index}" for index in range(1, 1001))
+        rows.append("2026-01-1001")
+        rows.extend(f"2026-01-{index:04d},{index}" for index in range(1002, 2002))
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "row width differs from header width"):
+            profile_csv(path, self.root, full_scan_limit_bytes=1)
+
 
 if __name__ == "__main__":
     unittest.main()

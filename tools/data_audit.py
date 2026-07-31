@@ -148,13 +148,18 @@ def sha256_file(path: Path) -> str:
 def _read_rows(path: Path, sampled: bool) -> tuple[tuple[str, ...], list[list[str]], int]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle)
-        headers = tuple(next(reader))
+        try:
+            headers = tuple(next(reader))
+        except StopIteration as error:
+            raise ValueError("missing CSV header") from error
         head: list[list[str]] = []
         tail: deque[list[str]] = deque(maxlen=SAMPLE_ROWS_PER_EDGE)
         all_rows: list[list[str]] = []
         row_count = 0
+        has_width_mismatch = False
         for row in reader:
             row_count += 1
+            has_width_mismatch = has_width_mismatch or len(row) != len(headers)
             if sampled:
                 if row_count <= SAMPLE_ROWS_PER_EDGE:
                     head.append(row)
@@ -162,6 +167,8 @@ def _read_rows(path: Path, sampled: bool) -> tuple[tuple[str, ...], list[list[st
                     tail.append(row)
             else:
                 all_rows.append(row)
+    if has_width_mismatch:
+        raise ValueError("row width differs from header width")
     return headers, (head + list(tail) if sampled else all_rows), row_count
 
 
