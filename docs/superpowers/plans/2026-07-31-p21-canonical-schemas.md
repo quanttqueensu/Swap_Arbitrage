@@ -4,7 +4,7 @@
 
 **Goal:** Freeze reusable narrow CSV contracts and a complete, non-destructive migration preview for all 1,487 P20-audited artifacts.
 
-**Architecture:** A standard-library `data_pipeline.contracts` module owns immutable schema metadata and pure fixture validation. Human-readable schema and migration documents explain the same contracts, while tests prove metadata completeness, representative validation behavior, and exact one-rule migration coverage without changing real data.
+**Architecture:** A standard-library `data_pipeline.contracts` module owns immutable schema and migration-rule metadata plus pure fixture validation/classification. Human-readable schema and migration documents explain those records, while tests prove metadata completeness, representative validation behavior, and exact one-rule migration coverage without changing real data.
 
 **Tech Stack:** Python 3.12 standard library (`csv`, `dataclasses`, `datetime`, `decimal`, `pathlib`, `re`), `unittest`, and Markdown.
 
@@ -30,7 +30,7 @@
 - Create: `tests/test_schema_contracts.py`
 
 **Interfaces:**
-- Produces: `ColumnContract`, `CsvContract`, `SCHEMAS`, `SchemaValidationError`, and `validate_csv(contract, path)`.
+- Produces: `ColumnContract`, `CsvContract`, `MigrationRule`, `SCHEMAS`, `MIGRATION_RULES`, `SchemaValidationError`, `validate_csv(contract, path)`, and `migration_rule_for(path)`.
 
 - [ ] **Step 1: Write failing imports and contract-completeness tests**
 
@@ -119,34 +119,24 @@ Run the focused module and expect all validation tests to pass.
 
 **Files:**
 - Create: `docs/data/canonical-schemas.md`
-- Modify: `tests/test_schema_contracts.py`
 
 **Interfaces:**
 - Consumes: `SCHEMAS` and the approved equations/contracts.
-- Produces: the MG3 schema review document and catalog/document drift tests.
+- Produces: the MG3 schema review document.
 
-- [ ] **Step 1: Add failing documentation coverage tests**
-
-For every contract, require the document to contain its schema ID, version,
-path, exact ordered header, key, ordering, missing policy, frequency,
-retention, consumers, and one sample row. Also require explicit units/types
-for every column and the no-DV01-duplication rule.
-
-- [ ] **Step 2: Run RED**
-
-Expected: failure because `docs/data/canonical-schemas.md` is absent.
-
-- [ ] **Step 3: Write the schema document**
+- [ ] **Step 1: Write the schema document from the tested catalog**
 
 Explain global encoding/partition/version rules, then one section per catalog
 entry with every frozen attribute and a representative synthetic row. Record
 the P10 causal availability fields and fail-closed proxy semantics. Mark
 10Y/30Y and exact unavailable sources as unsupported rather than fabricating
-rows.
+rows. Human prose is review evidence and is not protected by brittle source-
+text assertions.
 
-- [ ] **Step 4: Run documentation GREEN**
+- [ ] **Step 2: Cross-check the document against the catalog**
 
-Run the focused module and expect catalog/document coverage to pass.
+Use a fresh read-only schema review to compare paths, headers, units, types,
+keys, ordering, policies, frequency, retention, consumers, and sample rows.
 
 ### Task 4: Complete migration preview and coverage proof
 
@@ -156,19 +146,19 @@ Run the focused module and expect catalog/document coverage to pass.
 
 **Interfaces:**
 - Consumes: `docs/data/current-inventory.md` artifact headings.
-- Produces: exact one-rule classification of all 1,487 paths.
+- Produces: tested exact one-rule classification of all 1,487 paths and its
+  human-readable preview.
 
 - [ ] **Step 1: Add failing preview tests**
 
-Parse every P20 artifact heading. Encode non-overlapping matchers for the Eris
-cache family and 13 named current artifacts. Assert 1,487 inputs, exactly one
-match each, action membership in `keep immutable source`, `regenerate`,
-`archive labelled legacy`, or `supersede after validation`, and zero present-
-tense destructive commands.
+Parse every P20 artifact heading and classify it through `MIGRATION_RULES`.
+Encode non-overlapping matchers for the Eris cache family and 13 named current
+artifacts. Assert 1,487 inputs, exactly one match each, allowed action,
+nonempty destination/row/column/recovery metadata, and `performs_action=False`.
 
 - [ ] **Step 2: Run RED**
 
-Expected: failure because `docs/data/migration-preview.md` is absent.
+Expected: failures because the migration records/classifier are absent.
 
 - [ ] **Step 3: Write the preview**
 
