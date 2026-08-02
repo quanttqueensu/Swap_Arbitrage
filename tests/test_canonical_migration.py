@@ -30,6 +30,40 @@ RATE_HEADER = [
 ]
 
 
+def _write_migration_fixture(repo: Path, relative: str, header: list[str], rows: list[list[str]]) -> None:
+    path = repo / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        writer.writerows(rows)
+
+
+def _populate_migration_repo(repo: Path) -> None:
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    _write_migration_fixture(repo, "data/treasury_rates.csv", RATE_HEADER, [
+        ["2025-12-31", *(["3"] * 6), "3.10", "3", "3.25", "3", "3", "3", "3", "3.33", "3.34"],
+        ["2026-08-01", *(["4"] * 6), "4.10", "4", "4.25", "4", "4", "4", "4", "4.33", "4.34"],
+    ])
+    _write_migration_fixture(repo, "data/cme_swap_data.csv", ["date", "ticker", "price", "dv01"], [
+        ["2025-12-31", "YITZ25", "98.75", "38.8"],
+        ["2026-08-01", "YITU26", "99.25", "39.8"],
+    ])
+    _write_migration_fixture(repo, "data/treasury_futures_data.csv", ["date", "ticker", "price", "dv01"], [
+        ["2025-12-31", "ZT=F", "107.5", "78.6"],
+        ["2026-08-01", "ZT=F", "108.5", "79.6"],
+    ])
+    _write_migration_fixture(repo, "data/swap_rates.csv", ["date", "eris_swap_2y_price", "eris_swap_2y_return", "eris_swap_5y_price", "eris_swap_5y_return"], [
+        ["2025-12-31", "98.75", "0", "97.5", "0"],
+        ["2026-08-01", "99.25", "0", "98.5", "0"],
+    ])
+    _write_migration_fixture(repo, "data/treasury_futures.csv", ["date", "treasury_futures_2y_price", "treasury_futures_2y_return", "treasury_futures_5y_price", "treasury_futures_5y_return"], [
+        ["2025-12-31", "107.5", "0", "109.25", "0"],
+        ["2026-08-01", "108.5", "0", "110.25", "0"],
+    ])
+
+
 class CanonicalizerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -305,39 +339,13 @@ class MigrationStagingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.repo = Path(self.tempdir.name) / "repo"
-        self.repo.mkdir()
-        (self.repo / ".git").mkdir()
-        self._write("data/treasury_rates.csv", RATE_HEADER, [
-            ["2025-12-31", *(["3"] * 6), "3.10", "3", "3.25", "3", "3", "3", "3", "3.33", "3.34"],
-            ["2026-08-01", *(["4"] * 6), "4.10", "4", "4.25", "4", "4", "4", "4", "4.33", "4.34"],
-        ])
-        self._write("data/cme_swap_data.csv", ["date", "ticker", "price", "dv01"], [
-            ["2025-12-31", "YITZ25", "98.75", "38.8"],
-            ["2026-08-01", "YITU26", "99.25", "39.8"],
-        ])
-        self._write("data/treasury_futures_data.csv", ["date", "ticker", "price", "dv01"], [
-            ["2025-12-31", "ZT=F", "107.5", "78.6"],
-            ["2026-08-01", "ZT=F", "108.5", "79.6"],
-        ])
-        self._write("data/swap_rates.csv", ["date", "eris_swap_2y_price", "eris_swap_2y_return", "eris_swap_5y_price", "eris_swap_5y_return"], [
-            ["2025-12-31", "98.75", "0", "97.5", "0"],
-            ["2026-08-01", "99.25", "0", "98.5", "0"],
-        ])
-        self._write("data/treasury_futures.csv", ["date", "treasury_futures_2y_price", "treasury_futures_2y_return", "treasury_futures_5y_price", "treasury_futures_5y_return"], [
-            ["2025-12-31", "107.5", "0", "109.25", "0"],
-            ["2026-08-01", "108.5", "0", "110.25", "0"],
-        ])
+        _populate_migration_repo(self.repo)
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
     def _write(self, relative: str, header: list[str], rows: list[list[str]]) -> None:
-        path = self.repo / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(header)
-            writer.writerows(rows)
+        _write_migration_fixture(self.repo, relative, header, rows)
 
     def _input_hashes(self) -> dict[str, str]:
         return {path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted((self.repo / "data").glob("*.csv"))}
@@ -486,23 +494,6 @@ class MigrationStagingTests(unittest.TestCase):
         self.assertFalse(stage.exists())
         self.assertFalse(report.exists())
 
-    def test_publication_flag_remains_disabled(self) -> None:
-        from data_pipeline.migration import MigrationError, main
-
-        stage = self.repo / "publish-disabled-stage"
-        report = self.repo / "docs/verification/publish-disabled-report.csv"
-        with self.assertRaisesRegex(MigrationError, "publication is reserved for Task 5"):
-            main([
-                "--repo-root", str(self.repo),
-                "--staging-root", str(stage),
-                "--report", str(report),
-                "--publish",
-            ])
-        self.assertFalse(stage.exists())
-        self.assertFalse(report.exists())
-        self.assertFalse((self.repo / "data/source").exists())
-        self.assertFalse((self.repo / "data/canonical").exists())
-
     def test_rejects_path_escape_symlink_input_and_nonempty_staging(self) -> None:
         from data_pipeline.migration import MigrationError, stage_migration
         with self.assertRaisesRegex(MigrationError, "escapes"):
@@ -538,6 +529,218 @@ class MigrationStagingTests(unittest.TestCase):
                 stage_migration(self.repo, self.repo / "stage", report)
             self.assertEqual(source.read_bytes(), before)
             self.assertFalse((self.repo / "stage").exists())
+
+
+class MigrationPublicationTests(unittest.TestCase):
+    """The production changes caught here are stale, undeclared, partial, or
+    non-transactional publication of migration evidence."""
+
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tempdir.name) / "repo"
+        _populate_migration_repo(self.repo)
+        self.source_hashes = self._hashes((self.repo / "data").glob("*.csv"))
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    @staticmethod
+    def _hashes(paths: object) -> dict[str, str]:
+        return {
+            path.as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(paths)
+        }
+
+    def _stage(self, name: str = "publish-stage") -> object:
+        from data_pipeline.migration import stage_migration
+        return stage_migration(
+            self.repo,
+            self.repo / name,
+            self.repo / "docs/verification" / f"{name}.csv",
+        )
+
+    def test_publication_requires_the_fresh_passing_result_and_unchanged_evidence(self) -> None:
+        from data_pipeline.migration import MigrationError, publish_migration
+
+        result = self._stage()
+        with self.assertRaisesRegex(MigrationError, "fully passing"):
+            publish_migration(replace(result, all_passed=False), self.repo)
+        with self.assertRaisesRegex(MigrationError, "fresh"):
+            publish_migration(replace(result, output_hashes={**result.output_hashes, "data/raw_price_data.csv": "0" * 64}), self.repo)
+
+        with result.report_path.open("r+", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+            rows[0]["status"] = "fail"
+            handle.seek(0)
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(rows)
+            handle.truncate()
+        with self.assertRaisesRegex(MigrationError, "report"):
+            publish_migration(result, self.repo)
+        self.assertEqual(self.source_hashes, self._hashes((self.repo / "data").glob("*.csv")))
+
+    def test_publication_rejects_changed_staged_manifest_or_source_bytes(self) -> None:
+        from data_pipeline.migration import MigrationError, publish_migration
+
+        mutations = (
+            ("staged", "data/source/rates/rates_2026.csv"),
+            ("manifest", "data/manifests/p24_inputs.csv"),
+            ("source", "../data/treasury_rates.csv"),
+        )
+        for index, (label, relative) in enumerate(mutations):
+            with self.subTest(label=label):
+                result = self._stage(f"stale-{index}")
+                target = result.staging_root / relative
+                target.write_bytes(target.read_bytes() + b"\n")
+                with self.assertRaisesRegex(MigrationError, "changed|hash|manifest|source"):
+                    publish_migration(result, self.repo)
+
+    def test_replacement_failure_rolls_back_every_destination_and_cleans_siblings(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        originals: dict[Path, bytes] = {}
+        for index, relative in enumerate(sorted(result.output_hashes)):
+            destination = self.repo / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            originals[destination] = f"old-{index}\n".encode()
+            destination.write_bytes(originals[destination])
+
+        real_link = os.link
+        installs = 0
+
+        def fail_second_install(source: object, destination: object, *args: object, **kwargs: object) -> None:
+            nonlocal installs
+            if ".p24-publish-" in Path(source).name:
+                installs += 1
+                if installs == 2:
+                    raise OSError("injected replacement failure")
+            real_link(source, destination, *args, **kwargs)
+
+        with patch.object(migration.os, "link", side_effect=fail_second_install):
+            with self.assertRaisesRegex(migration.MigrationError, "publication failed") as caught:
+                migration.publish_migration(result, self.repo)
+        self.assertNotIn("rollback was incomplete", str(caught.exception))
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+        leftovers = [path for path in self.repo.rglob("*") if ".p24-publish-" in path.name or ".p24-backup-" in path.name]
+        self.assertEqual(leftovers, [])
+
+    def test_success_publishes_only_declared_outputs_preserves_sources_and_leaves_no_siblings(self) -> None:
+        from data_pipeline.migration import publish_migration
+
+        result = self._stage()
+        stage_before = self._hashes(path for path in result.staging_root.rglob("*") if path.is_file())
+        report_before = result.report_path.read_bytes()
+        published = publish_migration(result, self.repo)
+        expected = [self.repo / relative for relative in sorted(result.output_hashes)]
+        self.assertEqual(published, expected)
+        self.assertEqual(
+            {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in expected},
+            {self.repo / relative: digest for relative, digest in sorted(result.output_hashes.items())},
+        )
+        self.assertEqual(self.source_hashes, self._hashes((self.repo / "data").glob("*.csv")))
+        self.assertEqual(stage_before, self._hashes(path for path in result.staging_root.rglob("*") if path.is_file()))
+        self.assertEqual(report_before, result.report_path.read_bytes())
+        self.assertFalse((self.repo / "data/manifests/p24_run.csv").exists())
+        leftovers = [path for path in self.repo.rglob("*") if ".p24-publish-" in path.name or ".p24-backup-" in path.name]
+        self.assertEqual(leftovers, [])
+
+    def test_cli_publish_revalidates_an_existing_passing_stage(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        migration._PUBLISHABLE_RESULTS.clear()
+        exit_code = migration.main([
+            "--repo-root", str(self.repo),
+            "--staging-root", str(result.staging_root),
+            "--report", str(result.report_path),
+            "--publish",
+        ])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            [self.repo / relative for relative in sorted(result.output_hashes)],
+            [path for path in sorted((self.repo / "data").rglob("*.csv")) if path not in [self.repo / source for source in ("data/cme_swap_data.csv", "data/swap_rates.csv", "data/treasury_futures.csv", "data/treasury_futures_data.csv", "data/treasury_rates.csv")]],
+        )
+
+    def test_destination_race_is_rejected_without_installing_any_staged_bytes(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        first_relative = sorted(result.output_hashes)[0]
+        destination = self.repo / first_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"original\n")
+        real_verify = migration._verify_publication_evidence
+        calls = 0
+
+        def race_after_preparation(*args: object, **kwargs: object) -> object:
+            nonlocal calls
+            calls += 1
+            verified = real_verify(*args, **kwargs)
+            if calls == 2:
+                destination.write_bytes(b"external-race\n")
+            return verified
+
+        with patch.object(migration, "_verify_publication_evidence", side_effect=race_after_preparation), self.assertRaisesRegex(migration.MigrationError, "destination changed"):
+            migration.publish_migration(result, self.repo)
+        self.assertEqual(destination.read_bytes(), b"external-race\n")
+        for relative in sorted(result.output_hashes)[1:]:
+            self.assertFalse((self.repo / relative).exists())
+        leftovers = [path for path in self.repo.rglob("*") if ".p24-publish-" in path.name or ".p24-backup-" in path.name]
+        self.assertEqual(leftovers, [])
+
+    def test_final_no_clobber_install_rejects_a_destination_created_after_the_last_check(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        first_relative = sorted(result.output_hashes)[0]
+        destination = self.repo / first_relative
+        real_link = os.link
+        raced = False
+
+        def create_destination_before_install(source: object, target: object, *args: object, **kwargs: object) -> None:
+            nonlocal raced
+            if not raced and ".p24-publish-" in Path(source).name:
+                raced = True
+                Path(target).write_bytes(b"late-race\n")
+            real_link(source, target, *args, **kwargs)
+
+        with patch.object(migration.os, "link", side_effect=create_destination_before_install), self.assertRaisesRegex(migration.MigrationError, "publication failed"):
+            migration.publish_migration(result, self.repo)
+        self.assertTrue(raced)
+        self.assertEqual(destination.read_bytes(), b"late-race\n")
+        leftovers = [path for path in self.repo.rglob("*") if any(marker in path.name for marker in (".p24-publish-", ".p24-backup-", ".p24-claim-"))]
+        self.assertEqual(leftovers, [])
+
+    @unittest.skipUnless(os.name == "nt", "Windows directory replacement lock")
+    def test_destination_parent_cannot_be_renamed_during_final_install(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        first_relative = sorted(result.output_hashes)[0]
+        parent = (self.repo / first_relative).parent
+        moved = parent.with_name(f"{parent.name}-raced")
+        real_link = os.link
+        attempted = False
+
+        def try_parent_replacement(source: object, target: object, *args: object, **kwargs: object) -> None:
+            nonlocal attempted
+            if not attempted and ".p24-publish-" in Path(source).name:
+                attempted = True
+                try:
+                    parent.rename(moved)
+                except OSError:
+                    pass
+                else:
+                    moved.rename(parent)
+                    raise AssertionError("destination parent was not locked against replacement")
+            real_link(source, target, *args, **kwargs)
+
+        with patch.object(migration.os, "link", side_effect=try_parent_replacement):
+            migration.publish_migration(result, self.repo)
+        self.assertTrue(attempted)
+        self.assertFalse(moved.exists())
 
 
 if __name__ == "__main__":
