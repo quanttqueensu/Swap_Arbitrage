@@ -5,7 +5,7 @@ import os
 import re
 import tempfile
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -19,6 +19,11 @@ SCHEMA_FILES = {
     "paper_positions": "positions.csv",
 }
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]+$")
+_SENSITIVE_ACCOUNT = re.compile(r"(?:^|\b)(?:DU|U)\d{3,}(?:\b|$)", re.IGNORECASE)
+_SENSITIVE_LABEL = re.compile(
+    r"(?:^|[?&,;\s])(?:host|hostname|password|credential|secret|token|client[_ -]?id)\s*[:=]",
+    re.IGNORECASE,
+)
 
 
 class PaperEventStore:
@@ -50,7 +55,7 @@ class PaperEventStore:
                 merged[key] = row
             else:
                 raise ValueError(f"conflicting duplicate key {key}")
-        ordered = sorted(merged.values(), key=lambda row: tuple(row[name] for name in contract.ordering))
+        ordered = sorted(merged.values(), key=lambda row: self._ordering_key(contract, row))
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
         try:
@@ -74,7 +79,7 @@ class PaperEventStore:
 
     @staticmethod
     def _safe_id(name: str, value: str) -> str:
-        if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
+        if not isinstance(value, str) or value in {".", ".."} or _IDENTIFIER.fullmatch(value) is None:
             raise ValueError(f"invalid {name}")
         return value
 
@@ -83,7 +88,7 @@ class PaperEventStore:
         try:
             return SCHEMA_FILES[schema_id]
         except KeyError as error:
-            raise ValueError(f"unsupported schema {schema_id}") from error
+            raise ValueError("unsupported schema") from error
 
     @staticmethod
     def _contract(schema_id: str) -> CsvContract:
@@ -109,7 +114,10 @@ class PaperEventStore:
             if not value.is_finite():
                 raise ValueError("decimal values must be finite")
             return format(value, "f")
-        return str(value)
+        text = str(value)
+        if PaperEventStore._is_sensitive(text):
+            raise ValueError("sensitive values are not permitted")
+        return text
 
     @staticmethod
     def _read_existing(contract: CsvContract, path: Path) -> dict[tuple[str, ...], dict[str, str]]:
@@ -125,3 +133,32 @@ class PaperEventStore:
     @staticmethod
     def _only_order_status_changed(old: Mapping[str, str], new: Mapping[str, str]) -> bool:
         return all(old[name] == new[name] for name in old if name != "status")
+
+    @staticmethod
+    def _is_sensitive(value: str) -> bool:
+        lowered = value.casefold()
+        return (
+            _SENSITIVE_ACCOUNT.search(value) is not None
+            or _SENSITIVE_LABEL.search(value) is not None
+            or lowered in {"host", "localhost", "password", "credential", "secret", "token", "client_id", "client id"}
+            or "://" in value
+        )
+
+    @staticmethod
+    def _ordering_key(contract: CsvContract, row: Mapping[str, str]) -> tuple[object, ...]:
+        columns = {column.name: column for column in contract.columns}
+        values: list[object] = []
+        for name in contract.ordering:
+            value = row[name]
+            scalar_type = columns[name].scalar_type
+            if scalar_type == "datetime_utc":
+                values.append(datetime.fromisoformat(value[:-1] + "+00:00"))
+            elif scalar_type == "date":
+                values.append(date.fromisoformat(value))
+            elif scalar_type == "integer":
+                values.append(int(value))
+            elif scalar_type == "decimal":
+                values.append(Decimal(value))
+            else:
+                values.append(value)
+        return tuple(values)
