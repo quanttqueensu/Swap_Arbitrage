@@ -380,6 +380,13 @@ class PaperRecorderEventTests(unittest.TestCase):
         return HostileBrokerObject()
 
     @staticmethod
+    def hostile_paper_safety_object() -> object:
+        class HostilePaperSafetyObject:
+            def __getattribute__(self, _: str) -> object:
+                raise PaperSafetyError("DU12345678 credential=secret host=127.0.0.1 client_id=30")
+        return HostilePaperSafetyObject()
+
+    @staticmethod
     def inaccessible_broker_object() -> object:
         class InaccessibleBrokerObject:
             def __getattribute__(self, _: str) -> object:
@@ -453,6 +460,23 @@ class PaperRecorderEventTests(unittest.TestCase):
                 self.assertIsNone(caught.exception.__context__)
                 rendered = "".join(traceback.format_exception(caught.exception))
                 for secret in ("DU12345678", "credential", "127.0.0.1", "client_id"):
+                    self.assertNotIn(secret, rendered)
+
+    def test_rejects_broker_raised_safety_errors_without_secret_tracebacks(self) -> None:
+        created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        for name, operation in (
+            ("order", lambda hostile: self.recorder.record_order("decision-1", self.contract(101), hostile, "Submitted", created)),
+            ("fill", lambda hostile: self.recorder.record_fill("o-1", self.contract(101), hostile, self.commission("1.20"))),
+            ("position", lambda hostile: self.recorder.record_positions([hostile], created)),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(PaperSafetyError, "broker object normalization") as caught:
+                    operation(self.hostile_paper_safety_object())
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                rendered = "".join(traceback.format_exception(caught.exception))
+                for secret in ("DU12345678", "credential", "127.0.0.1", "client_id"):
+                    self.assertNotIn(secret, str(caught.exception))
                     self.assertNotIn(secret, rendered)
 
     def test_unsafe_session_blocks_event_objects_before_access(self) -> None:

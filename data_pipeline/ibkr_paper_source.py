@@ -132,18 +132,22 @@ def _reject_broker_account(value: object, seen: set[int] | None = None) -> None:
 
 
 def _normalize_broker_object[T](normalizer: Callable[[], T]) -> T:
-    failed = False
     try:
         return normalizer()
-    except PaperSafetyError as error:
-        if error.__cause__ is None and error.__context__ is None:
-            raise
-        failed = True
     except Exception:
-        failed = True
-    if failed:
-        raise PaperSafetyError("broker object normalization failed")
-    raise AssertionError("unreachable")
+        pass
+    raise PaperSafetyError("broker object normalization failed")
+
+
+def _instrument_id_from_text(con_id: str) -> str:
+    if not con_id.isascii() or not con_id.isdecimal() or int(con_id) <= 0:
+        raise PaperSafetyError("contract must have a positive contract ID")
+    return f"IBKR:{con_id}"
+
+
+def _broker_text(value: object, field_name: str) -> str:
+    value = getattr(value, field_name, None)
+    return "" if value is None else str(value)
 
 
 class IbkrPaperRecorder:
@@ -234,90 +238,124 @@ class IbkrPaperRecorder:
         self, decision_id: str, contract: object, order: object, status: str, created_at_utc: datetime
     ) -> int:
         self.validate_session()
-        row = _normalize_broker_object(
-            lambda: self._order_row(decision_id, contract, order, status, created_at_utc)
-        )
+        values = _normalize_broker_object(lambda: self._order_values(contract, order))
+        row = self._order_row(decision_id, status, created_at_utc, values)
         return self.store.write("paper_orders", [row])
 
     def record_fill(
         self, order_ref: str, contract: object, execution: object, commission_report: object
     ) -> int:
         self.validate_session()
-        row = _normalize_broker_object(
-            lambda: self._fill_row(order_ref, contract, execution, commission_report)
-        )
+        if commission_report is None:
+            raise PaperSafetyError("commission report is required")
+        values = _normalize_broker_object(lambda: self._fill_values(contract, execution, commission_report))
+        row = self._fill_row(order_ref, values)
         return self.store.write("paper_fills", [row])
 
     def record_positions(self, position_rows: Iterable[object], observed_at_utc: datetime) -> int:
         self.validate_session()
-        rows = _normalize_broker_object(lambda: self._position_rows(position_rows, observed_at_utc))
+        timestamp_utc = _utc_text(observed_at_utc)
+        values = _normalize_broker_object(lambda: self._position_values(position_rows))
+        rows = self._position_rows(values, timestamp_utc)
         return self.store.write("paper_positions", rows)
 
     @staticmethod
-    def _order_row(
-        decision_id: str, contract: object, order: object, status: str, created_at_utc: datetime
-    ) -> dict[str, object]:
+    def _order_values(contract: object, order: object) -> dict[str, str]:
         _reject_broker_account(contract)
         _reject_broker_account(order)
-        order_ref = _nonempty_text(getattr(order, "orderRef", None), "orderRef")
+        return {
+            "con_id": _broker_text(contract, "conId"),
+            "order_ref": _broker_text(order, "orderRef"),
+            "side": _broker_text(order, "action"),
+            "quantity": _broker_text(order, "totalQuantity"),
+            "order_type": _broker_text(order, "orderType"),
+            "time_in_force": _broker_text(order, "tif"),
+            "ibkr_order_id": _broker_text(order, "orderId"),
+        }
+
+    @staticmethod
+    def _order_row(
+        decision_id: str, status: str, created_at_utc: datetime, values: dict[str, str]
+    ) -> dict[str, object]:
+        order_ref = _nonempty_text(values["order_ref"], "orderRef")
         normalized_decision_id = _nonempty_text(decision_id, "decision_id")
         normalized_status = _nonempty_text(status, "order status")
-        side, quantity = _signed_quantity(getattr(order, "action", None), getattr(order, "totalQuantity", None), "quantity")
-        broker_order_id = getattr(order, "orderId", None)
+        side, quantity = _signed_quantity(values["side"], values["quantity"], "quantity")
         try:
-            ibkr_order_id = str(broker_order_id) if int(broker_order_id or 0) > 0 else ""
+            ibkr_order_id = values["ibkr_order_id"] if int(values["ibkr_order_id"] or 0) > 0 else ""
         except (TypeError, ValueError) as error:
             raise PaperSafetyError("broker order ID must be an integer") from error
         return {
             "order_ref": order_ref,
             "decision_id": normalized_decision_id,
             "created_at_utc": _utc_text(created_at_utc),
-            "instrument_id": _instrument_id(contract),
+            "instrument_id": _instrument_id_from_text(values["con_id"]),
             "side": side,
             "quantity": quantity,
-            "order_type": _nonempty_text(getattr(order, "orderType", None), "order type"),
-            "time_in_force": _nonempty_text(getattr(order, "tif", None), "time in force"),
+            "order_type": _nonempty_text(values["order_type"], "order type"),
+            "time_in_force": _nonempty_text(values["time_in_force"], "time in force"),
             "status": normalized_status,
             "ibkr_order_id": ibkr_order_id,
         }
 
     @staticmethod
-    def _fill_row(
-        order_ref: str, contract: object, execution: object, commission_report: object
-    ) -> dict[str, object]:
+    def _fill_values(contract: object, execution: object, commission_report: object) -> dict[str, str]:
         _reject_broker_account(contract)
         _reject_broker_account(execution)
         _reject_broker_account(commission_report)
         if commission_report is None:
-            raise PaperSafetyError("commission report is required")
-        side, quantity = _signed_quantity(getattr(execution, "side", None), getattr(execution, "shares", None), "fill quantity")
+            raise ValueError("missing commission report")
         return {
-            "fill_id": _nonempty_text(getattr(execution, "execId", None), "execution ID"),
-            "order_ref": _nonempty_text(order_ref, "order_ref"),
+            "con_id": _broker_text(contract, "conId"),
+            "fill_id": _broker_text(execution, "execId"),
+            "side": _broker_text(execution, "side"),
+            "quantity": _broker_text(execution, "shares"),
             "fill_time_utc": _utc_text(getattr(execution, "time", None)),
-            "instrument_id": _instrument_id(contract),
-            "side": side,
-            "quantity": quantity,
-            "fill_price": _finite_decimal(getattr(execution, "price", None), "fill price"),
-            "commission_usd": _finite_nonnegative_decimal(getattr(commission_report, "commission", None), "commission"),
+            "fill_price": _broker_text(execution, "price"),
+            "commission_usd": _broker_text(commission_report, "commission"),
         }
 
     @staticmethod
-    def _position_rows(position_rows: Iterable[object], observed_at_utc: datetime) -> list[dict[str, object]]:
-        timestamp_utc = _utc_text(observed_at_utc)
-        normalized_rows: list[dict[str, object]] = []
-        instrument_ids: set[str] = set()
+    def _fill_row(order_ref: str, values: dict[str, str]) -> dict[str, object]:
+        side, quantity = _signed_quantity(values["side"], values["quantity"], "fill quantity")
+        return {
+            "fill_id": _nonempty_text(values["fill_id"], "execution ID"),
+            "order_ref": _nonempty_text(order_ref, "order_ref"),
+            "fill_time_utc": values["fill_time_utc"],
+            "instrument_id": _instrument_id_from_text(values["con_id"]),
+            "side": side,
+            "quantity": quantity,
+            "fill_price": _finite_decimal(values["fill_price"], "fill price"),
+            "commission_usd": _finite_nonnegative_decimal(values["commission_usd"], "commission"),
+        }
+
+    @staticmethod
+    def _position_values(position_rows: Iterable[object]) -> list[dict[str, str]]:
+        values: list[dict[str, str]] = []
         for position in position_rows:
             _reject_broker_account(position)
             contract = getattr(position, "contract", None)
             _reject_broker_account(contract)
-            instrument_id = _instrument_id(contract)
+            values.append({
+                "con_id": _broker_text(contract, "conId"),
+                "quantity": _broker_text(position, "position"),
+                "average_cost": _broker_text(position, "avgCost"),
+                "market_price": _broker_text(position, "marketPrice"),
+                "unrealized_pnl_usd": _broker_text(position, "unrealizedPNL"),
+                "realized_pnl_usd": _broker_text(position, "realizedPNL"),
+            })
+        return values
+
+    @staticmethod
+    def _position_rows(values: list[dict[str, str]], timestamp_utc: str) -> list[dict[str, object]]:
+        normalized_rows: list[dict[str, object]] = []
+        instrument_ids: set[str] = set()
+        for value in values:
+            instrument_id = _instrument_id_from_text(value["con_id"])
             if instrument_id in instrument_ids:
                 raise PaperSafetyError("duplicate instrument in position snapshot")
             instrument_ids.add(instrument_id)
-            quantity = getattr(position, "position", None)
-            if isinstance(quantity, bool):
-                raise PaperSafetyError("position quantity must be an integer")
+            quantity = value["quantity"]
             try:
                 integer_quantity = int(quantity)
             except (TypeError, ValueError) as error:
@@ -328,9 +366,9 @@ class IbkrPaperRecorder:
                 "timestamp_utc": timestamp_utc,
                 "instrument_id": instrument_id,
                 "quantity": integer_quantity,
-                "average_cost": _finite_decimal(getattr(position, "avgCost", None), "average cost"),
-                "market_price": _finite_decimal(getattr(position, "marketPrice", None), "market price"),
-                "unrealized_pnl_usd": _finite_value(getattr(position, "unrealizedPNL", None), "unrealized P&L"),
-                "realized_pnl_usd": _finite_value(getattr(position, "realizedPNL", None), "realized P&L"),
+                "average_cost": _finite_decimal(value["average_cost"], "average cost"),
+                "market_price": _finite_decimal(value["market_price"], "market price"),
+                "unrealized_pnl_usd": _finite_value(value["unrealized_pnl_usd"], "unrealized P&L"),
+                "realized_pnl_usd": _finite_value(value["realized_pnl_usd"], "realized P&L"),
             })
         return normalized_rows
