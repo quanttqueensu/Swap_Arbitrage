@@ -72,11 +72,18 @@ replaced with a proxy or zero. Dates are normalized to `YYYY-MM-DD`;
 availability timestamps use the source timing frozen by MG2/P21. A row with
 unknown timing, unit, identity, or classification blocks the partition.
 
+The Task 4 fixture-stage timing matrix is explicitly effective dated from
+`2000-01-01` through `2099-12-31`: ERIS observations at `21:00:00Z` are exact
+and available one minute later; Yahoo continuous-root observations use the same
+clock/delay and are `proxy` with label `continuous futures proxy`. This is a
+fixture-stage matrix only; an uncovered date blocks rather than being inferred.
+
 ## Staging and Reconciliation
 
 Each migration rule records its original path, staged destination, action,
 source hash, staged hash, source row count, staged row count, start/end dates,
-schema version, validation status, and recovery path. Required reconciliation
+schema version, validation status/detail, recovery path, exact key/value evidence,
+and literal first/middle/last spot evidence. Required reconciliation
 is rule-specific:
 
 - source-to-output key sets match for every emitted approved field;
@@ -86,6 +93,11 @@ is rule-specific:
   rates, DV01, units, and proxy labels;
 - two independent staging runs produce identical relative paths and bytes.
 
+Task 4 consumes exactly five source inputs (`treasury_rates`, `cme_swap_master`,
+`treasury_futures_master`, `swap_rates`, and `treasury_futures`). Eris vendor
+cache, raw-wide, signal/risk-wide, legacy backtests, and R2 inventory remain
+catalogued exclusions in this stage; no report row implies they were migrated.
+
 The publish step is enabled only after all report rows are `pass`. Existing
 canonical files are replaced atomically, so interruption leaves either the old
 or new complete file. Original wide files, caches, and legacy backtests are not
@@ -94,10 +106,14 @@ modified or archived in P24.
 ## Error Handling and Safety
 
 The command accepts explicit `--repo-root`, `--staging-root`, and `--report`
-paths. Symlinks and resolved paths outside the repository are rejected. A
-nonempty staging directory is rejected rather than cleared. Temporary files
-are confined to destination siblings. On any mismatch the command exits
-nonzero, retains the staging evidence, and performs no publication.
+paths. Reports are confined to `docs/verification` and may not overlap data,
+staging, manifests, or canonical destinations. Symlinks and resolved paths
+outside the repository are rejected. A nonempty staging directory is rejected
+rather than cleared. On failure, only a staging tree created by that invocation
+is removed so the same target is retryable; pre-existing paths are never removed.
+Temporary files are confined to staging. The command performs a second private
+shadow stage and compares path-independent bytes before returning, then removes
+the shadow evidence. No publication occurs.
 
 ## Testing
 

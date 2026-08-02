@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
+import shutil
 from dataclasses import dataclass
 from datetime import date, time, timedelta, timezone
 from pathlib import Path
@@ -17,12 +19,13 @@ from data_pipeline.canonicalize import (
     canonicalize_rates,
 )
 from data_pipeline.contracts import MIGRATION_RULES, SCHEMAS, validate_csv
-from data_pipeline.manifests import profile_file, sha256_file, write_input_manifest
+from data_pipeline.manifests import FileManifest, sha256_file, write_input_manifest
 
 
 REPORT_COLUMNS = (
-    "rule_id", "source_paths", "source_sha256", "source_key_count", "output_paths",
-    "output_sha256", "output_key_count", "status", "detail",
+    "rule_id", "action", "source_paths", "source_sha256", "source_key_count", "staged_destination",
+    "output_sha256", "output_key_count", "start_date", "end_date", "schema_version",
+    "validation_status", "recovery_path", "key_value_evidence", "spot_evidence", "status", "detail",
 )
 _SUPPORTED_RULES = frozenset({"cme_swap_master", "treasury_futures_master", "swap_rates", "treasury_futures", "treasury_rates"})
 _TIMING = {
@@ -78,6 +81,22 @@ def _repository(root: Path) -> Path:
     return root
 
 
+def _report_destination(repo: Path, report: Path, staging: Path) -> Path:
+    """Reports are evidence, never a writable escape hatch into data."""
+    destination = require_contained(repo, report)
+    verification = require_contained(repo, repo / "docs" / "verification")
+    try:
+        relative = destination.absolute().relative_to(verification.absolute())
+    except ValueError as error:
+        raise MigrationError("report must be under docs/verification") from error
+    if not relative.parts or destination == staging or staging in destination.parents:
+        raise MigrationError("report overlaps staging")
+    data = require_contained(repo, repo / "data")
+    if destination == data or data in destination.parents:
+        raise MigrationError("report overlaps data")
+    return destination
+
+
 def _discover(repo: Path) -> dict[str, Path]:
     discovered: dict[str, Path] = {}
     data = require_contained(repo, repo / "data")
@@ -106,6 +125,38 @@ def _discover(repo: Path) -> dict[str, Path]:
     return discovered
 
 
+def _snapshot_inputs(repo: Path, sources: dict[str, Path], staging: Path) -> tuple[dict[str, Path], dict[str, FileManifest], dict[str, str]]:
+    """Capture every source once; canonicalizers only ever receive these copies."""
+    snapshots = require_contained(staging, staging / ".input-snapshots")
+    snapshots.mkdir()
+    paths: dict[str, Path] = {}
+    manifests: dict[str, FileManifest] = {}
+    hashes: dict[str, str] = {}
+    for rule_id, source in sorted(sources.items()):
+        checked = require_contained(repo, source)
+        data = checked.read_bytes()
+        require_contained(repo, source)
+        digest = hashlib.sha256(data).hexdigest()
+        relative = source.absolute().relative_to(repo.absolute()).as_posix()
+        rows = list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"), newline="")))
+        dates = [row["date"] for row in rows]
+        if not rows or not dates:
+            raise MigrationError(f"source snapshot is empty: {relative}")
+        snapshot = require_contained(staging, snapshots / f"{rule_id}.csv")
+        snapshot.write_bytes(data)
+        paths[rule_id] = snapshot
+        hashes[rule_id] = digest
+        manifests[rule_id] = FileManifest(relative, digest, len(rows), min(dates), max(dates), SCHEMAS["run_inputs"].version)
+    return paths, manifests, hashes
+
+
+def _verify_snapshots(repo: Path, sources: dict[str, Path], hashes: dict[str, str]) -> None:
+    for rule_id, source in sources.items():
+        checked = require_contained(repo, source)
+        if sha256_file(checked) != hashes[rule_id]:
+            raise MigrationError(f"source changed during staging: {rule_id}")
+
+
 def _write_csv(root: Path, relative: str, schema_id: str, rows: Iterable[dict[str, str]]) -> Path:
     path = require_contained(root, root / relative)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,15 +178,27 @@ def _key_count(rows: Iterable[dict[str, str]]) -> int:
 
 
 def _report_row(rule_id: str, source: Path, outputs: dict[str, Path], output_rows: list[dict[str, str]], source_keys: int) -> dict[str, str]:
+    rule = next(rule for rule in MIGRATION_RULES if rule.rule_id == rule_id)
     hashes = ";".join(f"{path}:{sha256_file(output)}" for path, output in sorted(outputs.items()))
+    dates = [row["observation_date"] for row in output_rows]
+    key_evidence = hashlib.sha256("\n".join(sorted(repr(sorted(row.items())) for row in output_rows)).encode("utf-8")).hexdigest()
+    spots = [output_rows[0], output_rows[len(output_rows) // 2], output_rows[-1]]
     return {
         "rule_id": rule_id,
+        "action": rule.action,
         "source_paths": source.as_posix(),
         "source_sha256": sha256_file(source),
         "source_key_count": str(source_keys),
-        "output_paths": ";".join(sorted(outputs)),
+        "staged_destination": ";".join(sorted(outputs)),
         "output_sha256": hashes,
         "output_key_count": str(_key_count(output_rows)),
+        "start_date": min(dates),
+        "end_date": max(dates),
+        "schema_version": SCHEMAS["run_inputs"].version,
+        "validation_status": "pass",
+        "recovery_path": rule.recovery,
+        "key_value_evidence": key_evidence,
+        "spot_evidence": repr(spots),
         "status": "pass" if source_keys == _key_count(output_rows) else "fail",
         "detail": "exact rule-specific source/output key reconciliation",
     }
@@ -153,44 +216,66 @@ def _write_report(repo: Path, report: Path, rows: list[dict[str, str]]) -> Path:
     return destination
 
 
-def stage_migration(repo_root: Path, staging_root: Path, report_path: Path) -> MigrationResult:
+def stage_migration(repo_root: Path, staging_root: Path, report_path: Path, *, _shadow: bool = False) -> MigrationResult:
     repo = _repository(repo_root)
     staging = require_contained(repo, staging_root)
-    report = require_contained(repo, report_path)
+    report = _report_destination(repo, report_path, staging)
     if staging.exists() and any(staging.iterdir()):
         raise MigrationError(f"staging root must be empty: {staging}")
     if staging.exists() and staging.is_symlink():
         raise MigrationError(f"symlink path is not allowed: {staging}")
+    created_staging = not staging.exists()
     staging.mkdir(parents=True, exist_ok=True)
-    (staging / ".git").mkdir(exist_ok=True)  # enables manifest profiling without publication.
-    sources = _discover(repo)
+    try:
+        (staging / ".git").mkdir(exist_ok=True)  # enables manifest profiling without publication.
+        sources = _discover(repo)
+        snapshots, input_manifests, source_hashes = _snapshot_inputs(repo, sources, staging)
 
-    rates = canonicalize_rates(sources["treasury_rates"])
-    futures = canonicalize_futures(sources["cme_swap_master"], sources["treasury_futures_master"])
-    market = canonicalize_daily_market(sources["swap_rates"], sources["treasury_futures"], _TIMING)
-    rate_files = _partitions(staging, "historical_rates", "data/source/rates/rates_YYYY.csv", rates)
-    settlement_files = _partitions(staging, "historical_futures_settlements", "data/source/futures/futures_settlements_YYYY.csv", futures.settlements_by_year)
-    risk_files = _partitions(staging, "contract_risk", "data/canonical/reference/contract_risk_YYYY.csv", futures.risk_by_year)
-    market_files = _partitions(staging, "daily_market", "data/canonical/market/daily_market_YYYY.csv", market)
-    profiles = [profile_file(staging, file, SCHEMAS[schema]) for schema, files in (("historical_rates", rate_files), ("historical_futures_settlements", settlement_files), ("contract_risk", risk_files), ("daily_market", market_files)) for file in files.values()]
-    manifest = _write_csv(staging, "data/manifests/p24_inputs.csv", "run_inputs", [])
-    write_input_manifest(manifest, "p24-stage", profiles)
+        rates = canonicalize_rates(snapshots["treasury_rates"])
+        futures = canonicalize_futures(snapshots["cme_swap_master"], snapshots["treasury_futures_master"])
+        market = canonicalize_daily_market(snapshots["swap_rates"], snapshots["treasury_futures"], _TIMING)
+        rate_files = _partitions(staging, "historical_rates", "data/source/rates/rates_YYYY.csv", rates)
+        settlement_files = _partitions(staging, "historical_futures_settlements", "data/source/futures/futures_settlements_YYYY.csv", futures.settlements_by_year)
+        risk_files = _partitions(staging, "contract_risk", "data/canonical/reference/contract_risk_YYYY.csv", futures.risk_by_year)
+        market_files = _partitions(staging, "daily_market", "data/canonical/market/daily_market_YYYY.csv", market)
+        manifest = _write_csv(staging, "data/manifests/p24_inputs.csv", "run_inputs", [])
+        write_input_manifest(manifest, "p24-stage", list(input_manifests.values()))
+        _verify_snapshots(repo, sources, source_hashes)
 
-    settlement_rows = [row for rows in futures.settlements_by_year.values() for row in rows]
-    risk_rows = [row for rows in futures.risk_by_year.values() for row in rows]
-    market_rows = [row for rows in market.values() for row in rows]
-    rate_rows = [row for rows in rates.values() for row in rows]
-    rows = [
+        settlement_rows = [row for rows in futures.settlements_by_year.values() for row in rows]
+        risk_rows = [row for rows in futures.risk_by_year.values() for row in rows]
+        market_rows = [row for rows in market.values() for row in rows]
+        rate_rows = [row for rows in rates.values() for row in rows]
+        rows = [
         _report_row("cme_swap_master", sources["cme_swap_master"], {**settlement_files, **risk_files}, [row for row in settlement_rows if row["source"] == "ERIS"] + [row for row in risk_rows if row["instrument_id"].startswith("ERIS-")], 2),
         _report_row("swap_rates", sources["swap_rates"], market_files, [row for row in market_rows if row["source"] == "ERIS"], 2),
         _report_row("treasury_futures", sources["treasury_futures"], market_files, [row for row in market_rows if row["source"] == "YAHOO"], 2),
         _report_row("treasury_futures_master", sources["treasury_futures_master"], {**settlement_files, **risk_files}, [row for row in settlement_rows if row["source"] == "YAHOO"] + [row for row in risk_rows if row["instrument_id"].startswith("YAHOO-")], 2),
         _report_row("treasury_rates", sources["treasury_rates"], rate_files, rate_rows, 4),
-    ]
-    report = _write_report(repo, report, rows)
-    outputs = [*rate_files, *settlement_files, *risk_files, *market_files, "data/manifests/p24_inputs.csv"]
-    hashes = {relative: sha256_file(require_contained(staging, staging / relative)) for relative in sorted(outputs)}
-    return MigrationResult(repo, staging, report, hashes, all(row["status"] == "pass" for row in rows))
+        ]
+        report = _write_report(repo, report, rows)
+        _verify_snapshots(repo, sources, source_hashes)
+        outputs = [*rate_files, *settlement_files, *risk_files, *market_files, "data/manifests/p24_inputs.csv"]
+        hashes = {relative: sha256_file(require_contained(staging, staging / relative)) for relative in sorted(outputs)}
+        result = MigrationResult(repo, staging, report, hashes, all(row["status"] == "pass" for row in rows))
+        if not _shadow:
+            shadow = repo / ".p24-shadow-stage"
+            shadow_report = repo / "docs" / "verification" / ".p24-shadow-report.csv"
+            if shadow.exists() or shadow_report.exists():
+                raise MigrationError("shadow staging evidence path already exists")
+            try:
+                compared = stage_migration(repo, shadow, shadow_report, _shadow=True)
+                if result.output_hashes != compared.output_hashes or report.read_bytes() != shadow_report.read_bytes():
+                    raise MigrationError("independent shadow staging bytes differ")
+            finally:
+                if shadow.exists():
+                    shutil.rmtree(shadow)
+                shadow_report.unlink(missing_ok=True)
+        return result
+    except Exception:
+        if created_staging:
+            shutil.rmtree(staging)
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:

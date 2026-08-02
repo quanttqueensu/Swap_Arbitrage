@@ -336,8 +336,8 @@ class MigrationStagingTests(unittest.TestCase):
         socket.socket = no_socket
         try:
             from data_pipeline.migration import REPORT_COLUMNS, stage_migration
-            first = stage_migration(self.repo, self.repo / "stage-a", self.repo / "report-a.csv")
-            second = stage_migration(self.repo, self.repo / "stage-b", self.repo / "report-b.csv")
+            first = stage_migration(self.repo, self.repo / "stage-a", self.repo / "docs/verification/report-a.csv")
+            second = stage_migration(self.repo, self.repo / "stage-b", self.repo / "docs/verification/report-b.csv")
         finally:
             socket.socket = original_socket
         self.assertEqual(before, self._input_hashes())
@@ -366,12 +366,12 @@ class MigrationStagingTests(unittest.TestCase):
     def test_rejects_path_escape_symlink_input_and_nonempty_staging(self) -> None:
         from data_pipeline.migration import MigrationError, stage_migration
         with self.assertRaisesRegex(MigrationError, "escapes"):
-            stage_migration(self.repo, self.repo.parent / "outside", self.repo / "report.csv")
+            stage_migration(self.repo, self.repo.parent / "outside", self.repo / "docs/verification/report.csv")
         occupied = self.repo / "occupied"
         occupied.mkdir()
         (occupied / "old").write_text("old", encoding="utf-8")
         with self.assertRaisesRegex(MigrationError, "empty"):
-            stage_migration(self.repo, occupied, self.repo / "report.csv")
+            stage_migration(self.repo, occupied, self.repo / "docs/verification/report.csv")
         source = self.repo / "data/treasury_rates.csv"
         linked = self.repo / "data/linked.csv"
         try:
@@ -381,13 +381,23 @@ class MigrationStagingTests(unittest.TestCase):
         source.unlink()
         linked.rename(source)
         with self.assertRaisesRegex(MigrationError, "symlink"):
-            stage_migration(self.repo, self.repo / "stage", self.repo / "report.csv")
+            stage_migration(self.repo, self.repo / "stage", self.repo / "docs/verification/report.csv")
 
     def test_second_staging_root_under_data_is_not_discovered_as_an_input(self) -> None:
         from data_pipeline.migration import stage_migration
-        stage_migration(self.repo, self.repo / "data/stage-a", self.repo / "report-a.csv")
-        second = stage_migration(self.repo, self.repo / "data/stage-b", self.repo / "report-b.csv")
+        stage_migration(self.repo, self.repo / "data/stage-a", self.repo / "docs/verification/report-a.csv")
+        second = stage_migration(self.repo, self.repo / "data/stage-b", self.repo / "docs/verification/report-b.csv")
         self.assertTrue(second.all_passed)
+
+    def test_rejects_report_overwrite_of_sources_staging_or_nonverification_paths_before_mutation(self) -> None:
+        from data_pipeline.migration import MigrationError, stage_migration
+        source = self.repo / "data/treasury_rates.csv"
+        before = source.read_bytes()
+        for report in (source, self.repo / "stage", self.repo / "report.csv"):
+            with self.subTest(report=report), self.assertRaisesRegex(MigrationError, "report"):
+                stage_migration(self.repo, self.repo / "stage", report)
+            self.assertEqual(source.read_bytes(), before)
+            self.assertFalse((self.repo / "stage").exists())
 
 
 if __name__ == "__main__":
