@@ -616,11 +616,11 @@ Update this table only after the user explicitly approves a gate.
 
 | Gate | Status | Evidence record |
 |---|---|---|
-| MG0 | Not started | Baseline report and P00 verification |
-| MG1 | Not started | P01/P02 verification and Agent 0 setting decision |
-| MG2 | Not started | Reconciled P10/P11 package after P10-EQ checkpoint |
-| MG3 | Not started | Data inventory, schemas, and migration preview |
-| MG4 | Not started | Source-validation/recorder tests and staged migration report |
+| MG0 | Approved 2026-07-28 | Baseline report and P00 verification |
+| MG1 | Approved 2026-07-29 | P01/P02 verification; authoritative 25/week (5/day) selected and approved |
+| MG2 | Approved 2026-07-31 | P10 equation examples, source coverage, and verification |
+| MG3 | Approved 2026-08-02 | P20/P21 inventory, 19 canonical schemas, grouped cache mapping, migration preview, and verification |
+| MG4 | Not started | Adapter tests and staged migration report |
 | MG5 | Not started | Shared strategy golden/invariant evidence |
 | MG6 | Not started | Naive backtest manual reconciliation |
 | MG6A | Not started | Technical audit, approved cleanup, and onboarding documentation |
