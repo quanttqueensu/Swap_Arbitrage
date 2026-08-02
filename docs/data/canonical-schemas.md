@@ -46,26 +46,26 @@ complete executable canonical-column mapping; P20's
 
 ### `historical_rates` 1.0.0
 
-- Path: `data/source/fred/rates/rates_YYYY.csv`
+- Path: `data/source/rates/rates_YYYY.csv`
 - Header: `observation_date,source,series_id,maturity,rate_bps`
 - Types/units: `date/date`, `string/source_id`, `string/series_id`,
   `string/maturity`, `decimal/basis_points`
 - Key and ordering: `observation_date,source,series_id,maturity`
 - Frequency: daily by year
 - Retention: immutable source capture
-- Consumers: FRED adapter and canonicalizer
+- Consumers: approved rate source adapter and canonicalizer
 - Sample: `2026-07-30,UST,US-CMT,2Y,388.5`
 
 ### `historical_futures_settlements` 1.0.0
 
-- Path: `data/source/cme/futures/futures_settlements_YYYY.csv`
+- Path: `data/source/futures/futures_settlements_YYYY.csv`
 - Header: `observation_date,source,instrument_id,settlement_price,dv01_usd_per_bp`
 - Types/units: `date/date`, `string/source_id`, `string/instrument_id`,
   `decimal/price_points`, nullable `decimal/usd_per_bp`
 - Key and ordering: `observation_date,source,instrument_id`
 - Frequency: daily by year
 - Retention: immutable source capture
-- Consumers: CME Group adapter and canonicalizer
+- Consumers: approved futures source adapter and canonicalizer
 - Sample: `2026-07-30,ERIS,ERIS-YIT-202609,99.25,39.8`
 - DV01 rule: DV01 may be blank and supplied by `contract_risk`; it must not be
   duplicated in both schemas for the same instrument/date. When populated it

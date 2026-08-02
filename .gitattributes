@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# P24 records the exact published-byte digest of this CRLF manifest.
+data/manifests/p24_inputs.csv -text whitespace=cr-at-eol

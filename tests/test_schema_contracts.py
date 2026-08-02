@@ -85,27 +85,29 @@ class SchemaCatalogTests(unittest.TestCase):
     def test_historical_contracts_route_only_approved_sources(self) -> None:
         rates = SCHEMAS["historical_rates"]
         settlements = SCHEMAS["historical_futures_settlements"]
-
-        self.assertEqual(rates.path_pattern, "data/source/fred/rates/rates_YYYY.csv")
-        self.assertEqual(rates.consumers[0], "data_pipeline.fred_source")
+        self.assertEqual(rates.path_pattern, "data/source/rates/rates_YYYY.csv")
+        self.assertEqual(settlements.path_pattern, "data/source/futures/futures_settlements_YYYY.csv")
+        self.assertEqual(rates.consumers[0], "data_pipeline.rates_source")
+        self.assertEqual(settlements.consumers[0], "data_pipeline.futures_source")
+        for contract in (rates, settlements):
+            with self.subTest(schema_id=contract.schema_id):
+                header = [column.name for column in contract.columns]
+                self.assertIn("source", header)
+                self.assertIn("source", contract.unique_key)
+        expected_destinations = {
+            "eris_vendor_cache": "data/source/futures/futures_settlements_YYYY.csv",
+            "cme_swap_master": "data/source/futures/futures_settlements_YYYY.csv and data/canonical/reference/contract_risk_YYYY.csv",
+            "treasury_futures_master": "data/source/futures/futures_settlements_YYYY.csv and data/canonical/reference/contract_risk_YYYY.csv",
+            "treasury_rates": "data/source/rates/rates_YYYY.csv and data/canonical/market/daily_market_YYYY.csv",
+        }
+        destinations = {rule.rule_id: rule.destination for rule in MIGRATION_RULES}
+        for rule_id, destination in expected_destinations.items():
+            with self.subTest(rule_id=rule_id):
+                self.assertEqual(destinations[rule_id], destination)
+        self.assertFalse(any(provider in destination.lower() for destination in destinations.values() for provider in ("quantt", "cloudflare")))
         self.assertEqual(
-            settlements.path_pattern,
-            "data/source/cme/futures/futures_settlements_YYYY.csv",
-        )
-        self.assertEqual(settlements.consumers[0], "data_pipeline.cme_source")
-
-        canonical_destinations = [
-            rule.destination
-            for rule in MIGRATION_RULES
-            if rule.rule_id != "r2_inventory"
-        ]
-        self.assertFalse(
-            any("quantt" in destination.lower() for destination in canonical_destinations)
-        )
-        r2_inventory = next(rule for rule in MIGRATION_RULES if rule.rule_id == "r2_inventory")
-        self.assertEqual(
-            r2_inventory.destination,
-            "r2_objects.csv (retained in place; excluded from canonical inputs)",
+            destinations["r2_inventory"],
+            "r2_objects.csv (in place; excluded from canonical manifests)",
         )
 
 

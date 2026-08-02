@@ -82,7 +82,7 @@ git commit -m "refactor: preserve source-neutral provenance"
 
 **Interfaces:**
 - Consumes: CSV `Mapping[str, str]` rows and literal source timing metadata.
-- Produces: immutable `SourceTiming`, `canonicalize_rates(path: Path)`, `canonicalize_futures(swap_path: Path, treasury_path: Path)`, and `canonicalize_daily_market(swap_prices_path: Path, treasury_prices_path: Path, timing_rules: Mapping[str, SourceTiming])`, each returning `dict[int, list[dict[str, str]]]` keyed by year.
+- Produces: immutable effective-dated `SourceTiming`, `canonicalize_rates(path: Path) -> dict[int, list[dict[str, str]]]`, `canonicalize_futures(swap_path: Path, treasury_path: Path) -> FuturesCanonicalization`, and `canonicalize_daily_market(swap_prices_path: Path, treasury_prices_path: Path, timing_rules: Mapping[str, tuple[SourceTiming, ...]]) -> dict[int, list[dict[str, str]]]`. `FuturesCanonicalization` is immutable and exposes `settlements_by_year` and `risk_by_year`, each a `dict[int, list[dict[str, str]]]`; the named split is required because the two outputs have incompatible exact schemas.
 
 - [ ] **Step 1: Write failing literal-fixture tests**
 
@@ -116,6 +116,8 @@ class CanonicalizationError(ValueError):
 
 @dataclass(frozen=True)
 class SourceTiming:
+    effective_from: date
+    effective_to: date
     observation_time_utc: time
     availability_delay: timedelta
     source: str
@@ -159,7 +161,7 @@ git commit -m "feat: canonicalize approved market inputs"
 
 **Interfaces:**
 - Consumes: validated canonical files and their `CsvContract`.
-- Produces: `FileManifest`, `profile_file(path: Path, contract: CsvContract) -> FileManifest`, `write_input_manifest(path: Path, rows: Sequence[FileManifest]) -> str`, and `manifest_digest(rows: Sequence[FileManifest]) -> str`.
+- Produces: `FileManifest`, `profile_file(repo_root: Path, path: Path, contract: CsvContract) -> FileManifest`, `write_input_manifest(path: Path, run_id: str, rows: Sequence[FileManifest]) -> str`, and `manifest_digest(rows: Sequence[FileManifest]) -> str`.
 
 - [ ] **Step 1: Write failing manifest tests**
 
@@ -173,7 +175,7 @@ Expected: import failure because `data_pipeline.manifests` does not exist.
 
 - [ ] **Step 3: Implement manifest profiling**
 
-Call `validate_csv` before hashing. Read bytes in fixed chunks. Derive start/end from the contract's date/time columns without accepting an empty file. Serialize manifests through their approved schemas and temporary siblings.
+Call `validate_csv_bytes` on one captured immutable byte snapshot before hashing. Read source bytes in fixed chunks. Derive start/end from the contract's date/time columns without accepting an empty file. Serialize manifests through their approved schemas and temporary siblings.
 
 ```python
 @dataclass(frozen=True)
@@ -235,7 +237,7 @@ Expected: import failure because `data_pipeline.migration` does not exist.
 
 - [ ] **Step 3: Implement fail-closed staging**
 
-Add strict path resolution, supported-input discovery, fresh staging creation, partition writing, validation, manifests, rule report rows, reconciliation, and a second temporary staging comparison. The CLI must omit publication entirely unless `--publish` is passed and every report row is `pass`.
+Add strict path resolution, supported-input discovery, fresh staging creation, partition writing, validation, manifests, rule report rows, reconciliation, and a second temporary staging comparison. Task 4 must reject `--publish`; publication remains disabled until Task 5.
 
 ```python
 class MigrationError(RuntimeError):
@@ -285,11 +287,11 @@ git commit -m "feat: stage deterministic canonical migration"
 
 **Interfaces:**
 - Consumes: a passing `MigrationResult`.
-- Produces: `publish_migration(result: MigrationResult, repo_root: Path) -> list[Path]`, canonical data files, manifests, and P24 evidence.
+- Produces: `publish_migration(result: MigrationResult, repo_root: Path) -> list[Path]` and canonical data files; after publication/evidence finalization, Task 5 also produces validated `p24_run.csv` and P24 evidence. `p24_run.csv` is not a Task 4 staged output.
 
 - [ ] **Step 1: Write failing publication tests**
 
-Assert publication refuses any failed report row, preserves an existing destination when replacement fails, publishes only declared output paths, never modifies source files, and leaves no temporary sibling after success.
+Assert publication refuses any failed report row, preserves an existing destination when replacement fails, publishes only declared output paths, never modifies source files, and leaves no temporary sibling after success. Assert Task 4 has not staged `p24_run.csv`; Task 5 creates it only after publication/evidence finalization and validates it under `SCHEMAS["run_manifest"]`.
 
 - [ ] **Step 2: Run publication tests and verify RED**
 
@@ -347,7 +349,21 @@ determinism comparison, publication paths, recovery paths, network/broker/order/
 cancel counts of zero, and all review findings. Request MG4 with P23 and P24
 evidence; do not begin P30.
 
-- [ ] **Step 8: Run the full suite and commit P24**
+- [ ] **Step 8: Finalize and validate the P24 run manifest**
+
+Only after publication and Step 7 evidence are complete, create
+`data/manifests/p24_run.csv`. Validate it with `SCHEMAS["run_manifest"]` before
+atomic replacement. It must contain a real immutable code commit that exactly
+matches the code executed for publication, the exact
+digest of the published `p24_inputs.csv`, actual publication start/end
+timestamps and terminal status, plus deterministically serialized run ID,
+configuration hash, strategy version, run type, and row-count metadata. Do not
+invent placeholders for values that are not yet final. If the executed Task 5
+implementation does not yet have such a commit, commit it, rerun the real-data
+staging/publication/evidence sequence from Step 4, and only then finalize this
+manifest.
+
+- [ ] **Step 9: Run the full suite and commit P24**
 
 Run:
 

@@ -4,8 +4,8 @@
 
 P24 converts the already-approved local FRED/CME-derived artifacts into the P21
 canonical contracts, writes provenance manifests, proves the result in an
-isolated repository-local staging tree, and then publishes only validated
-recoverable canonical files. It makes no network request and adds no
+isolated repository-local staging tree, and produces a deterministic migration
+report. Task 4 does not publish canonical files. It makes no network request and adds no
 Quantt/Cloudflare dependency. Source caches and legacy results remain in place.
 
 ## Architecture
@@ -28,34 +28,43 @@ stable identity.
 inputs and outputs beneath an explicit repository root, builds a fresh staging
 tree, invokes the pure transforms, validates every file, compares source and
 output keys/counts/spot values, reruns into a second staging tree to prove byte
-determinism, and writes `migration_report.csv`. Publication copies validated
-files through temporary siblings and atomic replacement; it never deletes,
-moves, or rewrites an original.
+determinism, and writes `migration_report.csv`. Publication remains disabled
+and reserved for Task 5; Task 4 never deletes, moves, or rewrites an original.
 
 ## Inputs and Outputs
 
-The first supported migration consumes only:
+The first supported migration consumes exactly these five catalogued inputs:
 
 - `data/cme_swap_data.csv`;
 - `data/treasury_futures_data.csv`;
 - `data/treasury_rates.csv`;
-- the approved 2Y/5Y fields required from `data/swap_rates.csv` and
-  `data/treasury_futures.csv`;
-- approved Eris cache rows when they are needed to verify source-level
-  settlement lineage.
+- the approved 2Y/5Y fields required from `data/swap_rates.csv`;
+- the approved 2Y/5Y fields required from `data/treasury_futures.csv`.
 
-It writes:
+Task 4 stages only:
 
 - `data/source/rates/rates_YYYY.csv`;
 - `data/source/futures/futures_settlements_YYYY.csv`;
 - `data/canonical/reference/contract_risk_YYYY.csv`;
 - `data/canonical/market/daily_market_YYYY.csv`;
 - `data/manifests/p24_inputs.csv`;
-- `data/manifests/p24_run.csv`;
 - `docs/verification/P24-migration-report.csv` in the staged/report output.
 
-The R2 inventory remains at `r2_objects.csv` as immutable historical metadata
-and is excluded from every canonical input manifest.
+Task 4 does not create `data/manifests/p24_run.csv`: before publication and
+final evidence there is no honest immutable code commit for the code that
+performed publication, publication start/end time, or terminal status to record. Task 5 creates that file only after
+publication and evidence are complete, validates it against the registered
+`run_manifest` contract, and records the real immutable code commit that
+exactly matches the executed publication code, the exact
+`p24_inputs.csv` manifest digest, true publication timestamps/status, and
+deterministically serialized run ID, configuration, strategy, and row-count
+metadata.
+
+The other 1,482 catalogued artifacts are excluded. They include all 1,474 Eris
+vendor-cache files and the top-level `r2_objects.csv` inventory, which remains
+immutable historical metadata and is excluded from every canonical input
+manifest. Exact catalog coverage remains 1,487 artifacts: five consumed plus
+1,482 excluded.
 
 ## Conversion Rules
 
@@ -69,14 +78,24 @@ The current Treasury continuous-root and fixed-ratio values remain `proxy`,
 with nonempty proxy labels. U.S. Treasury, New York Fed, Eris, and Yahoo-derived
 rows are never relabelled as FRED or CME observations. No missing exact input is
 replaced with a proxy or zero. Dates are normalized to `YYYY-MM-DD`;
-availability timestamps use the source timing frozen by MG2/P21. A row with
+availability timestamps use a conservative P24 assumed timing matrix pending
+MG4 approval; P21 does not prove source availability. A row with
 unknown timing, unit, identity, or classification blocks the partition.
+
+The Task 4 fixture-stage timing matrix is explicitly effective dated from
+`2000-01-01` through `2099-12-31`: ERIS and Yahoo observations at `21:00:00Z`
+are assumed available one minute later. The matrix has a stable rule ID and
+digest, and its timing certainty is `assumed`. ERIS rows retain economic
+classification `exact`; Yahoo rows retain economic classification `proxy` and
+a nonempty proxy label. MG4 approval remains required, and an uncovered date
+blocks rather than being inferred.
 
 ## Staging and Reconciliation
 
 Each migration rule records its original path, staged destination, action,
 source hash, staged hash, source row count, staged row count, start/end dates,
-schema version, validation status, and recovery path. Required reconciliation
+schema version, validation status/detail, recovery path, exact key/value evidence,
+and literal first/middle/last spot evidence. Required reconciliation
 is rule-specific:
 
 - source-to-output key sets match for every emitted approved field;
@@ -86,25 +105,35 @@ is rule-specific:
   rates, DV01, units, and proxy labels;
 - two independent staging runs produce identical relative paths and bytes.
 
-The publish step is enabled only after all report rows are `pass`. Existing
-canonical files are replaced atomically, so interruption leaves either the old
-or new complete file. Original wide files, caches, and legacy backtests are not
-modified or archived in P24.
+Task 4 consumes exactly five source inputs (`treasury_rates`, `cme_swap_master`,
+`treasury_futures_master`, `swap_rates`, and `treasury_futures`). Eris vendor
+cache, raw-wide, signal/risk-wide, legacy backtests, and R2 inventory remain
+catalogued exclusions in this stage. The exclusions total 1,482 artifacts,
+including 1,474 Eris cache files and the R2 inventory; no report row implies
+they were migrated.
+
+Publication is disabled in Task 4 even when all report rows are `pass`.
+Original wide files, caches, and legacy backtests are not modified or archived
+in this task.
 
 ## Error Handling and Safety
 
 The command accepts explicit `--repo-root`, `--staging-root`, and `--report`
-paths. Symlinks and resolved paths outside the repository are rejected. A
-nonempty staging directory is rejected rather than cleared. Temporary files
-are confined to destination siblings. On any mismatch the command exits
-nonzero, retains the staging evidence, and performs no publication.
+paths. Reports are confined to `docs/verification` and may not overlap data,
+staging, manifests, or canonical destinations. Symlinks and resolved paths
+outside the repository are rejected. A nonempty staging directory is rejected
+rather than cleared. On failure, only a staging tree created by that invocation
+is removed so the same target is retryable; pre-existing paths are never removed.
+Temporary files are confined to staging. The command performs a second private
+shadow stage and compares path-independent bytes before returning, then removes
+the shadow evidence. No publication occurs.
 
 ## Testing
 
 Unit tests use small literal CSV fixtures for every transform. Integration tests
 build a temporary repository containing representative source files and prove
-deterministic staging, exact reconciliation, manifests, atomic publication,
-failure preservation, path containment, proxy labeling, and source immutability.
+deterministic staging, exact reconciliation, manifests, failure preservation,
+path containment, proxy labeling, and source immutability.
 A test monkeypatches socket operations before importing the migration modules to
 prove that the complete P24 path is offline.
 
@@ -115,4 +144,4 @@ prove that the complete P24 path is offline.
 - `data_pipeline/migration.py`
 - `tests/test_canonical_migration.py`
 - `docs/verification/P24.md`
-- staged and published canonical data plus manifests after all checks pass
+- staged canonical data plus manifests and a migration report; no publication
