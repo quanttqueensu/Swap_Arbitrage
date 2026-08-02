@@ -15,6 +15,7 @@ from data_pipeline.canonicalize import (
     canonicalize_rates,
 )
 from data_pipeline.contracts import SCHEMAS, validate_csv
+from data_pipeline.manifests import FileManifest, manifest_digest, profile_file, write_input_manifest
 
 
 RATE_HEADER = [
@@ -156,6 +157,61 @@ class CanonicalizerTests(unittest.TestCase):
         treasuries = self.fixture("valid-treasury.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "ZT=F", "108.5", "79.6"]])
         with self.assertRaises(CanonicalizationError):
             canonicalize_futures(swaps, treasuries)
+
+
+class ManifestTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def write_rows(self, name: str, schema_id: str, rows: list[list[str]]) -> Path:
+        path = self.root / name
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow([column.name for column in SCHEMAS[schema_id].columns])
+            writer.writerows(rows)
+        return path
+
+    def test_profile_hashes_validated_bytes_and_derives_date_coverage(self) -> None:
+        path = self.write_rows("rates.csv", "historical_rates", [["2026-08-01", "UST", "DGS2", "2Y", "410"]])
+
+        manifest = profile_file(path, SCHEMAS["historical_rates"])
+
+        self.assertEqual(manifest.sha256, "85452f8588bfc392267c3ffd46e9cb392f0d0df66f607d97ea2c59607fd8cde0")
+        self.assertEqual(manifest.row_count, 1)
+        self.assertEqual((manifest.start_time, manifest.end_time), ("2026-08-01", "2026-08-01"))
+        self.assertEqual(manifest.schema_version, "1.0.0")
+        self.assertEqual(manifest.path, "rates.csv")
+
+    def test_profile_rejects_empty_or_unvalidated_input(self) -> None:
+        empty = self.write_rows("empty.csv", "historical_rates", [])
+        with self.assertRaisesRegex(ValueError, "empty"):
+            profile_file(empty, SCHEMAS["historical_rates"])
+        bad = self.root / "bad.csv"
+        bad.write_text("wrong\nvalue\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "header"):
+            profile_file(bad, SCHEMAS["historical_rates"])
+
+    def test_digest_and_atomic_writer_sort_by_normalized_path(self) -> None:
+        rows = [
+            FileManifest("z\\rates.csv", "b" * 64, 2, "2026-08-02", "2026-08-03", "1.0.0"),
+            FileManifest("a/rates.csv", "a" * 64, 1, "2026-08-01", "2026-08-01", "1.0.0"),
+        ]
+        output = self.root / "p24_inputs.csv"
+
+        first = manifest_digest(rows)
+        second = write_input_manifest(output, list(reversed(rows)))
+
+        self.assertEqual(first, manifest_digest(list(reversed(rows))))
+        self.assertEqual(second, first)
+        self.assertFalse(output.with_name(f"{output.name}.tmp").exists())
+        with output.open("r", encoding="utf-8", newline="") as handle:
+            written = list(csv.DictReader(handle))
+        self.assertEqual([row["path"] for row in written], ["a/rates.csv", "z/rates.csv"])
+        self.assertEqual(validate_csv(SCHEMAS["run_inputs"], output), 2)
 
 
 if __name__ == "__main__":
