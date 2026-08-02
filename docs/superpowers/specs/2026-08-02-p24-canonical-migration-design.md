@@ -69,14 +69,14 @@ The current Treasury continuous-root and fixed-ratio values remain `proxy`,
 with nonempty proxy labels. U.S. Treasury, New York Fed, Eris, and Yahoo-derived
 rows are never relabelled as FRED or CME observations. No missing exact input is
 replaced with a proxy or zero. Dates are normalized to `YYYY-MM-DD`;
-availability timestamps use the source timing frozen by MG2/P21. A row with
+availability timestamps use a conservative P24 assumed timing matrix pending
+MG4 approval; P21 does not prove source availability. A row with
 unknown timing, unit, identity, or classification blocks the partition.
 
 The Task 4 fixture-stage timing matrix is explicitly effective dated from
-`2000-01-01` through `2099-12-31`: ERIS observations at `21:00:00Z` are exact
-and available one minute later; Yahoo continuous-root observations use the same
-clock/delay and are `proxy` with label `continuous futures proxy`. This is a
-fixture-stage matrix only; an uncovered date blocks rather than being inferred.
+`2000-01-01` through `2099-12-31`: ERIS and Yahoo observations at `21:00:00Z`
+are assumed available one minute later. These rows are classified `assumed`,
+require MG4 approval, and an uncovered date blocks rather than being inferred.
 
 ## Staging and Reconciliation
 

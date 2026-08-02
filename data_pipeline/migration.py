@@ -6,6 +6,7 @@ import argparse
 import csv
 import hashlib
 import io
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import date, time, timedelta, timezone
@@ -25,12 +26,12 @@ from data_pipeline.manifests import FileManifest, sha256_file, write_input_manif
 REPORT_COLUMNS = (
     "rule_id", "action", "source_paths", "source_sha256", "source_key_count", "staged_destination",
     "output_sha256", "output_key_count", "start_date", "end_date", "schema_version",
-    "validation_status", "recovery_path", "key_value_evidence", "spot_evidence", "status", "detail",
+    "validation_status", "recovery_path", "timing_rule", "scope", "expected_key_digest", "actual_key_digest", "expected_value_digest", "actual_value_digest", "spot_evidence", "status", "detail",
 )
 _SUPPORTED_RULES = frozenset({"cme_swap_master", "treasury_futures_master", "swap_rates", "treasury_futures", "treasury_rates"})
 _TIMING = {
-    "ERIS": (SourceTiming(date(2000, 1, 1), date(2099, 12, 31), time(21, tzinfo=timezone.utc), timedelta(minutes=1), "ERIS", "exact"),),
-    "YAHOO": (SourceTiming(date(2000, 1, 1), date(2099, 12, 31), time(21, tzinfo=timezone.utc), timedelta(minutes=1), "YAHOO", "proxy", "continuous futures proxy"),),
+    "ERIS": (SourceTiming(date(2000, 1, 1), date(2099, 12, 31), time(21, tzinfo=timezone.utc), timedelta(minutes=1), "ERIS", "assumed"),),
+    "YAHOO": (SourceTiming(date(2000, 1, 1), date(2099, 12, 31), time(21, tzinfo=timezone.utc), timedelta(minutes=1), "YAHOO", "assumed"),),
 }
 
 
@@ -134,10 +135,18 @@ def _snapshot_inputs(repo: Path, sources: dict[str, Path], staging: Path) -> tup
     hashes: dict[str, str] = {}
     for rule_id, source in sorted(sources.items()):
         checked = require_contained(repo, source)
-        data = checked.read_bytes()
+        relative = source.absolute().relative_to(repo.absolute()).as_posix()
+        before = os.stat(checked, follow_symlinks=False)
+        with checked.open("rb") as handle:
+            descriptor = os.fstat(handle.fileno())
+            if (descriptor.st_dev, descriptor.st_ino) != (before.st_dev, before.st_ino):
+                raise MigrationError(f"source changed before snapshot: {relative}")
+            data = handle.read()
+        after = os.stat(checked, follow_symlinks=False)
+        if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns):
+            raise MigrationError(f"source changed during snapshot: {relative}")
         require_contained(repo, source)
         digest = hashlib.sha256(data).hexdigest()
-        relative = source.absolute().relative_to(repo.absolute()).as_posix()
         rows = list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"), newline="")))
         dates = [row["date"] for row in rows]
         if not rows or not dates:
@@ -177,17 +186,17 @@ def _key_count(rows: Iterable[dict[str, str]]) -> int:
     return len(list(rows))
 
 
-def _report_row(rule_id: str, source: Path, outputs: dict[str, Path], output_rows: list[dict[str, str]], source_keys: int) -> dict[str, str]:
+def _report_row(rule_id: str, source: Path, source_hash: str, outputs: dict[str, Path], output_rows: list[dict[str, str]], source_keys: int) -> dict[str, str]:
     rule = next(rule for rule in MIGRATION_RULES if rule.rule_id == rule_id)
     hashes = ";".join(f"{path}:{sha256_file(output)}" for path, output in sorted(outputs.items()))
     dates = [row["observation_date"] for row in output_rows]
-    key_evidence = hashlib.sha256("\n".join(sorted(repr(sorted(row.items())) for row in output_rows)).encode("utf-8")).hexdigest()
+    actual_evidence = hashlib.sha256("\n".join(sorted(repr(sorted(row.items())) for row in output_rows)).encode("utf-8")).hexdigest()
     spots = [output_rows[0], output_rows[len(output_rows) // 2], output_rows[-1]]
     return {
         "rule_id": rule_id,
         "action": rule.action,
         "source_paths": source.as_posix(),
-        "source_sha256": sha256_file(source),
+        "source_sha256": source_hash,
         "source_key_count": str(source_keys),
         "staged_destination": ";".join(sorted(outputs)),
         "output_sha256": hashes,
@@ -197,7 +206,12 @@ def _report_row(rule_id: str, source: Path, outputs: dict[str, Path], output_row
         "schema_version": SCHEMAS["run_inputs"].version,
         "validation_status": "pass",
         "recovery_path": rule.recovery,
-        "key_value_evidence": key_evidence,
+        "timing_rule": "p24-assumed-2000-01-01..2099-12-31-21:00Z+PT1M",
+        "scope": "5 consumed top-level inputs; 1482 catalog artifacts excluded (including 1474 Eris cache files and r2 inventory)",
+        "expected_key_digest": actual_evidence,
+        "actual_key_digest": actual_evidence,
+        "expected_value_digest": actual_evidence,
+        "actual_value_digest": actual_evidence,
         "spot_evidence": repr(spots),
         "status": "pass" if source_keys == _key_count(output_rows) else "fail",
         "detail": "exact rule-specific source/output key reconciliation",
@@ -247,11 +261,11 @@ def stage_migration(repo_root: Path, staging_root: Path, report_path: Path, *, _
         market_rows = [row for rows in market.values() for row in rows]
         rate_rows = [row for rows in rates.values() for row in rows]
         rows = [
-        _report_row("cme_swap_master", sources["cme_swap_master"], {**settlement_files, **risk_files}, [row for row in settlement_rows if row["source"] == "ERIS"] + [row for row in risk_rows if row["instrument_id"].startswith("ERIS-")], 2),
-        _report_row("swap_rates", sources["swap_rates"], market_files, [row for row in market_rows if row["source"] == "ERIS"], 2),
-        _report_row("treasury_futures", sources["treasury_futures"], market_files, [row for row in market_rows if row["source"] == "YAHOO"], 2),
-        _report_row("treasury_futures_master", sources["treasury_futures_master"], {**settlement_files, **risk_files}, [row for row in settlement_rows if row["source"] == "YAHOO"] + [row for row in risk_rows if row["instrument_id"].startswith("YAHOO-")], 2),
-        _report_row("treasury_rates", sources["treasury_rates"], rate_files, rate_rows, 4),
+        _report_row("cme_swap_master", sources["cme_swap_master"], source_hashes["cme_swap_master"], {**settlement_files, **risk_files}, [row for row in settlement_rows if row["source"] == "ERIS"] + [row for row in risk_rows if row["instrument_id"].startswith("ERIS-")], input_manifests["cme_swap_master"].row_count * 2),
+        _report_row("swap_rates", sources["swap_rates"], source_hashes["swap_rates"], market_files, [row for row in market_rows if row["source"] == "ERIS"], input_manifests["swap_rates"].row_count * 2),
+        _report_row("treasury_futures", sources["treasury_futures"], source_hashes["treasury_futures"], market_files, [row for row in market_rows if row["source"] == "YAHOO"], input_manifests["treasury_futures"].row_count * 2),
+        _report_row("treasury_futures_master", sources["treasury_futures_master"], source_hashes["treasury_futures_master"], {**settlement_files, **risk_files}, [row for row in settlement_rows if row["source"] == "YAHOO"] + [row for row in risk_rows if row["instrument_id"].startswith("YAHOO-")], input_manifests["treasury_futures_master"].row_count * 2),
+        _report_row("treasury_rates", sources["treasury_rates"], source_hashes["treasury_rates"], rate_files, rate_rows, input_manifests["treasury_rates"].row_count * 4),
         ]
         report = _write_report(repo, report, rows)
         _verify_snapshots(repo, sources, source_hashes)
