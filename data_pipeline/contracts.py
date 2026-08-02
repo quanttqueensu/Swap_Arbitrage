@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -334,31 +335,42 @@ def _validate_row_rules(contract: CsvContract, raw: dict[str, str], parsed: dict
         raise SchemaValidationError(f"row {row_number}: trade direction must be -1 or +1")
 
 
+def _validate_csv_reader(contract: CsvContract, reader: csv.DictReader) -> int:
+    expected = [column.name for column in contract.columns]
+    if reader.fieldnames != expected:
+        raise SchemaValidationError(f"header must equal {expected}")
+    columns = {column.name: column for column in contract.columns}
+    seen: set[tuple[str, ...]] = set()
+    previous_order: tuple[object, ...] | None = None
+    count = 0
+    for row_number, raw in enumerate(reader, start=2):
+        count += 1
+        if None in raw or any(raw[name] is None for name in expected):
+            raise SchemaValidationError(f"row {row_number}: row width differs from header")
+        parsed = {name: _parse_value(columns[name], raw[name], row_number) for name in expected}
+        key = tuple(raw[name] for name in contract.unique_key)
+        if key in seen:
+            raise SchemaValidationError(f"row {row_number}: duplicate key {key}")
+        seen.add(key)
+        order = tuple(parsed[name] if parsed[name] is not None else "" for name in contract.ordering)
+        if previous_order is not None and order < previous_order:
+            raise SchemaValidationError(f"row {row_number}: ordering violation")
+        previous_order = order
+        _validate_row_rules(contract, raw, parsed, row_number)
+    return count
+
+
+def validate_csv_bytes(contract: CsvContract, data: bytes) -> int:
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise SchemaValidationError("CSV must be UTF-8") from error
+    return _validate_csv_reader(contract, csv.DictReader(io.StringIO(text, newline="")))
+
+
 def validate_csv(contract: CsvContract, path: Path) -> int:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        expected = [column.name for column in contract.columns]
-        if reader.fieldnames != expected:
-            raise SchemaValidationError(f"header must equal {expected}")
-        columns = {column.name: column for column in contract.columns}
-        seen: set[tuple[str, ...]] = set()
-        previous_order: tuple[object, ...] | None = None
-        count = 0
-        for row_number, raw in enumerate(reader, start=2):
-            count += 1
-            if None in raw or any(raw[name] is None for name in expected):
-                raise SchemaValidationError(f"row {row_number}: row width differs from header")
-            parsed = {name: _parse_value(columns[name], raw[name], row_number) for name in expected}
-            key = tuple(raw[name] for name in contract.unique_key)
-            if key in seen:
-                raise SchemaValidationError(f"row {row_number}: duplicate key {key}")
-            seen.add(key)
-            order = tuple(parsed[name] if parsed[name] is not None else "" for name in contract.ordering)
-            if previous_order is not None and order < previous_order:
-                raise SchemaValidationError(f"row {row_number}: ordering violation")
-            previous_order = order
-            _validate_row_rules(contract, raw, parsed, row_number)
-    return count
+        return _validate_csv_reader(contract, csv.DictReader(handle))
 
 
 def migration_rule_for(path: str) -> MigrationRule:

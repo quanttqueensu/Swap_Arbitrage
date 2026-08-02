@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from data_pipeline.contracts import SCHEMA_VERSION, SCHEMAS, CsvContract, validate_csv
+from data_pipeline.contracts import SCHEMA_VERSION, SCHEMAS, CsvContract, validate_csv, validate_csv_bytes
 
 
 _CHUNK_SIZE = 1024 * 1024
@@ -138,22 +138,7 @@ def profile_file(repo_root: Path, path: Path, contract: CsvContract) -> FileMani
     snapshot = _snapshot(source)
     if not snapshot:
         raise ValueError("cannot manifest an empty file")
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="wb", dir=source.parent, prefix=f".{source.name}.", suffix=".snapshot", delete=False) as handle:
-            temporary_name = handle.name
-            handle.write(snapshot)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary = Path(temporary_name)
-        if temporary.read_bytes() != snapshot:
-            raise ValueError("validation snapshot bytes changed before validation")
-        row_count = validate_csv(contract, temporary)
-        if temporary.read_bytes() != snapshot:
-            raise ValueError("validation snapshot bytes changed during validation")
-    finally:
-        if temporary_name is not None:
-            Path(temporary_name).unlink(missing_ok=True)
+    row_count = validate_csv_bytes(contract, snapshot)
     if row_count == 0:
         raise ValueError("cannot manifest an empty file")
     temporal_column = _temporal_column(contract)

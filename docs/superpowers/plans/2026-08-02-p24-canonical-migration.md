@@ -175,7 +175,7 @@ Expected: import failure because `data_pipeline.manifests` does not exist.
 
 - [ ] **Step 3: Implement manifest profiling**
 
-Call `validate_csv` before hashing. Read bytes in fixed chunks. Derive start/end from the contract's date/time columns without accepting an empty file. Serialize manifests through their approved schemas and temporary siblings.
+Call `validate_csv_bytes` on one captured immutable byte snapshot before hashing. Read source bytes in fixed chunks. Derive start/end from the contract's date/time columns without accepting an empty file. Serialize manifests through their approved schemas and temporary siblings.
 
 ```python
 @dataclass(frozen=True)

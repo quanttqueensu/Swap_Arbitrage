@@ -18,7 +18,7 @@ from data_pipeline.canonicalize import (
     canonicalize_futures,
     canonicalize_rates,
 )
-from data_pipeline.contracts import SCHEMAS, validate_csv
+from data_pipeline.contracts import SCHEMAS, SchemaValidationError, validate_csv, validate_csv_bytes
 from data_pipeline.manifests import FileManifest, manifest_digest, profile_file, write_input_manifest
 
 
@@ -229,8 +229,9 @@ class ManifestTests(unittest.TestCase):
             return result
 
         with patch("data_pipeline.manifests.validate_csv", side_effect=mutate_after_validation):
-            with self.assertRaisesRegex(ValueError, "snapshot"):
-                profile_file(self.root, path, SCHEMAS["historical_rates"])
+            manifest = profile_file(self.root, path, SCHEMAS["historical_rates"])
+        self.assertEqual((manifest.row_count, manifest.start_time, manifest.end_time), (1, "2026-08-01", "2026-08-01"))
+        self.assertEqual(manifest.sha256, "85452f8588bfc392267c3ffd46e9cb392f0d0df66f607d97ea2c59607fd8cde0")
 
     def test_profile_requires_exact_registered_contract_and_contained_nonsymlink_path(self) -> None:
         path = self.write_rows("rates.csv", "historical_rates", [["2026-08-01", "UST", "DGS2", "2Y", "410"]])
@@ -262,7 +263,23 @@ class ManifestTests(unittest.TestCase):
             return original_validate(contract, candidate)
 
         with patch("data_pipeline.manifests.validate_csv", side_effect=replace_validation_temp):
-            with self.assertRaisesRegex(ValueError, "snapshot"):
+            manifest = profile_file(self.root, path, SCHEMAS["historical_rates"])
+        self.assertEqual(manifest.sha256, "85452f8588bfc392267c3ffd46e9cb392f0d0df66f607d97ea2c59607fd8cde0")
+
+    def test_bytes_validator_has_path_validator_parity_and_profile_rejects_duplicate_snapshot(self) -> None:
+        path = self.write_rows(
+            "duplicate.csv",
+            "historical_rates",
+            [["2026-08-01", "UST", "DGS2", "2Y", "410"], ["2026-08-01", "UST", "DGS2", "2Y", "410"]],
+        )
+        data = path.read_bytes()
+        for validator_input in (path, data):
+            with self.subTest(validator_input=type(validator_input).__name__):
+                validator = validate_csv if isinstance(validator_input, Path) else validate_csv_bytes
+                with self.assertRaisesRegex(SchemaValidationError, "duplicate key"):
+                    validator(SCHEMAS["historical_rates"], validator_input)
+        with patch("data_pipeline.contracts.validate_csv", return_value=1):
+            with self.assertRaisesRegex(SchemaValidationError, "duplicate key"):
                 profile_file(self.root, path, SCHEMAS["historical_rates"])
 
     def test_writer_requires_valid_run_id_and_preserves_destination_on_temp_validation_failure(self) -> None:
