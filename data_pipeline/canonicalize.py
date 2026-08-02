@@ -28,6 +28,10 @@ class SourceTiming:
     def __post_init__(self) -> None:
         if type(self.effective_from) is not date or type(self.effective_to) is not date:
             raise CanonicalizationError("timing bounds must be dates")
+        if type(self.observation_time_utc) is not time:
+            raise CanonicalizationError("timing observation clock must be a time")
+        if type(self.availability_delay) is not timedelta:
+            raise CanonicalizationError("timing availability delay must be a timedelta")
         if self.effective_from > self.effective_to:
             raise CanonicalizationError("timing effective_from must not exceed effective_to")
         if self.availability_delay < timedelta():

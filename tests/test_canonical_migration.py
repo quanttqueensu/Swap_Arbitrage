@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import tempfile
 import unittest
-from datetime import date, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from data_pipeline.canonicalize import (
@@ -131,6 +131,10 @@ class CanonicalizerTests(unittest.TestCase):
             SourceTiming(date(2026, 1, 1), date(2026, 1, 1), time(21), timedelta(), "ERIS", "exact")
         with self.assertRaises(CanonicalizationError):
             SourceTiming(date(2026, 1, 1), date(2026, 1, 1), time(21, tzinfo=timezone(timedelta(hours=-4))), timedelta(), "ERIS", "exact")
+        with self.assertRaises(CanonicalizationError):
+            SourceTiming(date(2026, 1, 1), date(2026, 1, 1), datetime(2026, 1, 1, 21, tzinfo=timezone.utc), timedelta(), "ERIS", "exact")
+        with self.assertRaises(CanonicalizationError):
+            SourceTiming(date(2026, 1, 1), date(2026, 1, 1), time(21, tzinfo=timezone.utc), 1, "ERIS", "exact")
 
         swaps = self.fixture("dated-swaps.csv", ["date", "eris_swap_2y_price", "eris_swap_2y_return", "eris_swap_5y_price", "eris_swap_5y_return"], [["2026-08-01", "99.25", "0", "98.5", "0"]])
         treasuries = self.fixture("dated-treasuries.csv", ["date", "treasury_futures_2y_price", "treasury_futures_2y_return", "treasury_futures_5y_price", "treasury_futures_5y_return"], [["2026-08-01", "108.5", "0", "110.25", "0"]])
