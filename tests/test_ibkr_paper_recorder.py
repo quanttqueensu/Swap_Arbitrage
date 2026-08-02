@@ -524,6 +524,26 @@ class PaperRecorderEventTests(unittest.TestCase):
         with self.assertRaisesRegex(PaperSafetyError, "duplicate instrument"):
             self.recorder.record_positions([rows[0], rows[0]], observed)
 
+    def test_canonicalizes_contract_ids_before_reconciling_position_snapshot(self) -> None:
+        observed = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        row = SimpleNamespace(
+            contract=SimpleNamespace(conId="001"), position=1, avgCost="98", marketPrice="99", unrealizedPNL="1", realizedPNL="0"
+        )
+        self.assertEqual(self.recorder.record_positions([row], observed), 1)
+        self.assertIn("IBKR:1", self.store.path_for("paper_positions").read_text(encoding="utf-8"))
+        duplicate = SimpleNamespace(
+            contract=self.contract(1), position=1, avgCost="98", marketPrice="99", unrealizedPNL="1", realizedPNL="0"
+        )
+        with self.assertRaisesRegex(PaperSafetyError, "duplicate instrument"):
+            self.recorder.record_positions([row, duplicate], observed)
+
+    def test_rejects_noncanonical_contract_id_values(self) -> None:
+        created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        for con_id in (0, -1, True, "0", "-1", "not-an-id"):
+            with self.subTest(con_id=con_id):
+                with self.assertRaisesRegex(PaperSafetyError, "positive contract ID"):
+                    self.recorder.record_order("decision-1", SimpleNamespace(conId=con_id), self.order("o-1", "BUY", 1), "Submitted", created)
+
 
 if __name__ == "__main__":
     unittest.main()

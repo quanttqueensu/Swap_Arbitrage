@@ -150,6 +150,14 @@ def _broker_text(value: object, field_name: str) -> str:
     return "" if value is None else str(value)
 
 
+def _broker_contract_id(contract: object) -> str:
+    con_id = _broker_text(contract, "conId")
+    if not con_id.isascii() or not con_id.isdecimal():
+        return ""
+    normalized = int(con_id)
+    return str(normalized) if normalized > 0 else ""
+
+
 class IbkrPaperRecorder:
     def __init__(
         self,
@@ -264,7 +272,7 @@ class IbkrPaperRecorder:
         _reject_broker_account(contract)
         _reject_broker_account(order)
         return {
-            "con_id": _broker_text(contract, "conId"),
+            "con_id": _broker_contract_id(contract),
             "order_ref": _broker_text(order, "orderRef"),
             "side": _broker_text(order, "action"),
             "quantity": _broker_text(order, "totalQuantity"),
@@ -306,7 +314,7 @@ class IbkrPaperRecorder:
         if commission_report is None:
             raise ValueError("missing commission report")
         return {
-            "con_id": _broker_text(contract, "conId"),
+            "con_id": _broker_contract_id(contract),
             "fill_id": _broker_text(execution, "execId"),
             "side": _broker_text(execution, "side"),
             "quantity": _broker_text(execution, "shares"),
@@ -337,7 +345,7 @@ class IbkrPaperRecorder:
             contract = getattr(position, "contract", None)
             _reject_broker_account(contract)
             values.append({
-                "con_id": _broker_text(contract, "conId"),
+                "con_id": _broker_contract_id(contract),
                 "quantity": _broker_text(position, "position"),
                 "average_cost": _broker_text(position, "avgCost"),
                 "market_price": _broker_text(position, "marketPrice"),
