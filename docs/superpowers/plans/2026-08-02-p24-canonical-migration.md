@@ -82,7 +82,7 @@ git commit -m "refactor: preserve source-neutral provenance"
 
 **Interfaces:**
 - Consumes: CSV `Mapping[str, str]` rows and literal source timing metadata.
-- Produces: immutable `SourceTiming`, `canonicalize_rates(path: Path)`, `canonicalize_futures(swap_path: Path, treasury_path: Path)`, and `canonicalize_daily_market(swap_prices_path: Path, treasury_prices_path: Path, timing_rules: Mapping[str, SourceTiming])`, each returning `dict[int, list[dict[str, str]]]` keyed by year.
+- Produces: immutable effective-dated `SourceTiming`, `canonicalize_rates(path: Path) -> dict[int, list[dict[str, str]]]`, `canonicalize_futures(swap_path: Path, treasury_path: Path) -> FuturesCanonicalization`, and `canonicalize_daily_market(swap_prices_path: Path, treasury_prices_path: Path, timing_rules: Mapping[str, tuple[SourceTiming, ...]]) -> dict[int, list[dict[str, str]]]`. `FuturesCanonicalization` is immutable and exposes `settlements_by_year` and `risk_by_year`, each a `dict[int, list[dict[str, str]]]`; the named split is required because the two outputs have incompatible exact schemas.
 
 - [ ] **Step 1: Write failing literal-fixture tests**
 
@@ -116,6 +116,8 @@ class CanonicalizationError(ValueError):
 
 @dataclass(frozen=True)
 class SourceTiming:
+    effective_from: date
+    effective_to: date
     observation_time_utc: time
     availability_delay: timedelta
     source: str

@@ -3,11 +3,12 @@ from __future__ import annotations
 import csv
 import tempfile
 import unittest
-from datetime import time, timedelta
+from datetime import date, time, timedelta, timezone
 from pathlib import Path
 
 from data_pipeline.canonicalize import (
     CanonicalizationError,
+    FuturesCanonicalization,
     SourceTiming,
     canonicalize_daily_market,
     canonicalize_futures,
@@ -63,10 +64,12 @@ class CanonicalizerTests(unittest.TestCase):
         self.assertEqual(validate_csv(SCHEMAS["historical_rates"], self.write_partition("rates.csv", partitions[2026], "historical_rates")), 4)
 
     def test_futures_build_expiry_aware_eris_ids_blank_settlement_dv01_and_proxy_risk(self) -> None:
-        swaps = self.fixture("cme_swap_data.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "YIU26", "99.25", "39.8"]])
+        swaps = self.fixture("cme_swap_data.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "YITU26", "99.25", "39.8"]])
         treasuries = self.fixture("treasury_futures_data.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "ZT=F", "108.5", "79.6"]])
 
-        settlements, risk = canonicalize_futures(swaps, treasuries)
+        result = canonicalize_futures(swaps, treasuries)
+        self.assertIsInstance(result, FuturesCanonicalization)
+        settlements, risk = result.settlements_by_year, result.risk_by_year
 
         self.assertEqual(settlements[2026], [
             {"observation_date": "2026-08-01", "source": "ERIS", "instrument_id": "ERIS-YIT-202609", "settlement_price": "99.25", "dv01_usd_per_bp": ""},
@@ -83,8 +86,8 @@ class CanonicalizerTests(unittest.TestCase):
         swaps = self.fixture("swap_rates.csv", ["date", "eris_swap_2y_price", "eris_swap_2y_return", "eris_swap_5y_price", "eris_swap_5y_return"], [["2026-08-01", "99.25", "0", "98.5", "0"]])
         treasuries = self.fixture("treasury_futures.csv", ["date", "treasury_futures_2y_price", "treasury_futures_2y_return", "treasury_futures_5y_price", "treasury_futures_5y_return"], [["2026-08-01", "108.5", "0", "110.25", "0"]])
         timing = {
-            "ERIS": SourceTiming(time(21), timedelta(minutes=1), "ERIS", "exact"),
-            "YAHOO": SourceTiming(time(21), timedelta(minutes=1), "YAHOO", "proxy", "continuous futures proxy"),
+            "ERIS": (SourceTiming(date(2026, 1, 1), date(2026, 12, 31), time(21, tzinfo=timezone.utc), timedelta(minutes=1), "ERIS", "exact"),),
+            "YAHOO": (SourceTiming(date(2026, 1, 1), date(2026, 12, 31), time(21, tzinfo=timezone.utc), timedelta(minutes=1), "YAHOO", "proxy", "continuous futures proxy"),),
         }
 
         partitions = canonicalize_daily_market(swaps, treasuries, timing)
@@ -110,7 +113,7 @@ class CanonicalizerTests(unittest.TestCase):
                 with self.assertRaises(CanonicalizationError):
                     canonicalize_rates(self.fixture(f"{name}.csv", header, rows))
 
-        swaps = self.fixture("bad-swap.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "YIU26", "0", "39.8"]])
+        swaps = self.fixture("bad-swap.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "YITU26", "0", "39.8"]])
         treasuries = self.fixture("ok-treasury.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "ZT=F", "108.5", "79.6"]])
         with self.assertRaises(CanonicalizationError):
             canonicalize_futures(swaps, treasuries)
@@ -118,6 +121,37 @@ class CanonicalizerTests(unittest.TestCase):
         prices = self.fixture("bad-prices.csv", ["date", "eris_swap_2y_price", "eris_swap_2y_return", "eris_swap_5y_price", "eris_swap_5y_return"], [["2026-08-01", "99.25", "0", "98.5", "0"]])
         with self.assertRaises(CanonicalizationError):
             canonicalize_daily_market(prices, prices, {})
+
+    def test_timing_rules_are_utc_effective_dated_and_fail_closed_for_gaps_or_overlaps(self) -> None:
+        with self.assertRaises(CanonicalizationError):
+            SourceTiming(date(2026, 1, 2), date(2026, 1, 1), time(21, tzinfo=timezone.utc), timedelta(), "ERIS", "exact")
+        with self.assertRaises(CanonicalizationError):
+            SourceTiming(date(2026, 1, 1), date(2026, 1, 1), time(21, tzinfo=timezone.utc), timedelta(seconds=-1), "ERIS", "exact")
+        with self.assertRaises(CanonicalizationError):
+            SourceTiming(date(2026, 1, 1), date(2026, 1, 1), time(21), timedelta(), "ERIS", "exact")
+        with self.assertRaises(CanonicalizationError):
+            SourceTiming(date(2026, 1, 1), date(2026, 1, 1), time(21, tzinfo=timezone(timedelta(hours=-4))), timedelta(), "ERIS", "exact")
+
+        swaps = self.fixture("dated-swaps.csv", ["date", "eris_swap_2y_price", "eris_swap_2y_return", "eris_swap_5y_price", "eris_swap_5y_return"], [["2026-08-01", "99.25", "0", "98.5", "0"]])
+        treasuries = self.fixture("dated-treasuries.csv", ["date", "treasury_futures_2y_price", "treasury_futures_2y_return", "treasury_futures_5y_price", "treasury_futures_5y_return"], [["2026-08-01", "108.5", "0", "110.25", "0"]])
+        rule = SourceTiming(date(2026, 1, 1), date(2026, 7, 31), time(21, tzinfo=timezone.utc), timedelta(), "ERIS", "exact")
+        yahoo = SourceTiming(date(2026, 1, 1), date(2026, 12, 31), time(21, tzinfo=timezone.utc), timedelta(), "YAHOO", "proxy", "continuous futures proxy")
+        with self.assertRaises(CanonicalizationError):
+            canonicalize_daily_market(swaps, treasuries, {"ERIS": (rule,), "YAHOO": (yahoo,)})
+        overlap = SourceTiming(date(2026, 8, 1), date(2026, 12, 31), time(21, tzinfo=timezone.utc), timedelta(), "ERIS", "exact")
+        with self.assertRaises(CanonicalizationError):
+            canonicalize_daily_market(swaps, treasuries, {"ERIS": (overlap, overlap), "YAHOO": (yahoo,)})
+
+    def test_rejects_noncanonical_dates_and_undocumented_eris_shorthand(self) -> None:
+        for bad_date in ("20260801", "2026-W31-6"):
+            with self.subTest(bad_date=bad_date):
+                row = [bad_date, *("4" for _ in range(15))]
+                with self.assertRaises(CanonicalizationError):
+                    canonicalize_rates(self.fixture(f"{bad_date}.csv", RATE_HEADER, [row]))
+        swaps = self.fixture("short-eris.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "YIU26", "99.25", "39.8"]])
+        treasuries = self.fixture("valid-treasury.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "ZT=F", "108.5", "79.6"]])
+        with self.assertRaises(CanonicalizationError):
+            canonicalize_futures(swaps, treasuries)
 
 
 if __name__ == "__main__":
