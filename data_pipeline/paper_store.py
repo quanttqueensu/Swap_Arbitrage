@@ -25,7 +25,7 @@ _SENSITIVE_LABEL = re.compile(
     r"(?:^|[?&,;\s])(?:host|hostname|password|credential|secret|token|client[_ -]?id)\s*[:=]",
     re.IGNORECASE,
 )
-_HOST_MARKER = re.compile(r"(?:host|gateway|broker|ibgateway|tws)", re.IGNORECASE)
+_LOWER_BARE_HOST = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$")
 _HOSTNAME = re.compile(r"^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*)+$")
 
 
@@ -49,7 +49,7 @@ class PaperEventStore:
         fieldnames = [column.name for column in contract.columns]
         merged = self._read_existing(contract, path)
         for source in rows:
-            row = self._serialize_row(fieldnames, source)
+            row = self._serialize_row(contract, source)
             key = tuple(row[name] for name in contract.unique_key)
             existing = merged.get(key)
             if existing is None or existing == row:
@@ -99,13 +99,14 @@ class PaperEventStore:
         return SCHEMAS[schema_id]
 
     @staticmethod
-    def _serialize_row(fieldnames: list[str], source: Mapping[str, object]) -> dict[str, str]:
+    def _serialize_row(contract: CsvContract, source: Mapping[str, object]) -> dict[str, str]:
+        fieldnames = [column.name for column in contract.columns]
         if set(source) != set(fieldnames):
             raise ValueError("row fields must equal the schema header")
-        return {name: PaperEventStore._serialize_scalar(source[name]) for name in fieldnames}
+        return {name: PaperEventStore._serialize_scalar(name, source[name]) for name in fieldnames}
 
     @staticmethod
-    def _serialize_scalar(value: object) -> str:
+    def _serialize_scalar(field_name: str, value: object) -> str:
         if value is None:
             return ""
         if isinstance(value, datetime):
@@ -118,7 +119,7 @@ class PaperEventStore:
                 raise ValueError("decimal values must be finite")
             return format(value, "f")
         text = str(value)
-        if PaperEventStore._is_sensitive(text):
+        if PaperEventStore._is_sensitive(field_name, text):
             raise ValueError("sensitive values are not permitted")
         return text
 
@@ -138,21 +139,27 @@ class PaperEventStore:
         return all(old[name] == new[name] for name in old if name != "status")
 
     @staticmethod
-    def _is_sensitive(value: str) -> bool:
+    def _is_sensitive(field_name: str, value: str) -> bool:
         lowered = value.casefold()
+        return (
+            _SENSITIVE_ACCOUNT.search(value) is not None
+            or _SENSITIVE_LABEL.search(value) is not None
+            or lowered in {"host", "localhost", "password", "credential", "secret", "token", "client_id", "client id"}
+            or "://" in value
+            or (field_name == "instrument_id" and PaperEventStore._is_endpoint(value))
+        )
+
+    @staticmethod
+    def _is_endpoint(value: str) -> bool:
         try:
             ipaddress.ip_address(value)
             return True
         except ValueError:
             pass
-        return (
-            _SENSITIVE_ACCOUNT.search(value) is not None
-            or _SENSITIVE_LABEL.search(value) is not None
-            or _HOST_MARKER.search(value) is not None
-            or _HOSTNAME.fullmatch(value) is not None
-            or lowered in {"host", "localhost", "password", "credential", "secret", "token", "client_id", "client id"}
-            or "://" in value
-        )
+        host, separator, port = value.rpartition(":")
+        if separator and port.isdigit() and host:
+            return PaperEventStore._is_endpoint(host)
+        return value.casefold() == "localhost" or _HOSTNAME.fullmatch(value) is not None or _LOWER_BARE_HOST.fullmatch(value) is not None
 
     @staticmethod
     def _ordering_key(contract: CsvContract, row: Mapping[str, str]) -> tuple[object, ...]:
