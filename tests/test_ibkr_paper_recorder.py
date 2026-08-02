@@ -372,6 +372,20 @@ class PaperRecorderEventTests(unittest.TestCase):
     def commission(value: str) -> SimpleNamespace:
         return SimpleNamespace(commission=value)
 
+    @staticmethod
+    def hostile_broker_object() -> object:
+        class HostileBrokerObject:
+            def __getattribute__(self, _: str) -> object:
+                raise RuntimeError("DU12345678 credential=secret host=127.0.0.1 client_id=30")
+        return HostileBrokerObject()
+
+    @staticmethod
+    def inaccessible_broker_object() -> object:
+        class InaccessibleBrokerObject:
+            def __getattribute__(self, _: str) -> object:
+                raise AssertionError("broker object accessed before session validation")
+        return InaccessibleBrokerObject()
+
     def test_records_signed_orders_and_reconciles_status_only(self) -> None:
         created = datetime(2026, 8, 2, 11, 0, tzinfo=timezone(timedelta(hours=-4)))
         self.assertEqual(
@@ -424,6 +438,50 @@ class PaperRecorderEventTests(unittest.TestCase):
             self.recorder.record_fill("o-1", self.contract(101), self.execution("e-2", 1), self.commission("-0.01"))
         with self.assertRaisesRegex(PaperSafetyError, "commission report"):
             self.recorder.record_fill("o-1", self.contract(101), self.execution("e-2", 1), None)
+
+    def test_rejects_broker_property_failures_without_secret_tracebacks(self) -> None:
+        created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        for name, operation in (
+            ("order", lambda hostile: self.recorder.record_order("decision-1", self.contract(101), hostile, "Submitted", created)),
+            ("fill", lambda hostile: self.recorder.record_fill("o-1", self.contract(101), hostile, self.commission("1.20"))),
+            ("position", lambda hostile: self.recorder.record_positions([hostile], created)),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(PaperSafetyError, "broker object normalization") as caught:
+                    operation(self.hostile_broker_object())
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                rendered = "".join(traceback.format_exception(caught.exception))
+                for secret in ("DU12345678", "credential", "127.0.0.1", "client_id"):
+                    self.assertNotIn(secret, rendered)
+
+    def test_unsafe_session_blocks_event_objects_before_access(self) -> None:
+        unsafe = IbkrPaperRecorder(
+            FakeIB(),
+            PaperSessionConfig("127.0.0.1", 7496, 30, "DU12345678", "paper-primary"),
+            self.store,
+        )
+        created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        for name, operation in (
+            ("order", lambda sentinel: unsafe.record_order("decision-1", sentinel, sentinel, "Submitted", created)),
+            ("fill", lambda sentinel: unsafe.record_fill("o-1", sentinel, sentinel, sentinel)),
+            ("position", lambda sentinel: unsafe.record_positions(sentinel, created)),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(PaperSafetyError, "paper port"):
+                    operation(self.inaccessible_broker_object())
+        self.assertEqual(unsafe.ib.is_connected_calls, 0)
+        self.assertEqual(unsafe.ib.managed_account_calls, 0)
+
+    def test_rejects_replacing_an_acknowledged_broker_order_id(self) -> None:
+        created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        self.recorder.record_order("decision-1", self.contract(101), self.order("o-1", "BUY", 2, 77), "Submitted", created)
+        self.assertEqual(
+            self.recorder.record_order("decision-1", self.contract(101), self.order("o-1", "BUY", 2, 77), "Filled", created),
+            1,
+        )
+        with self.assertRaisesRegex(ValueError, "conflicting duplicate key"):
+            self.recorder.record_order("decision-1", self.contract(101), self.order("o-1", "BUY", 2, 88), "Filled", created)
 
     def test_records_one_timestamp_position_snapshot_and_rejects_duplicates(self) -> None:
         observed = datetime(2026, 8, 2, 11, 0, tzinfo=timezone(timedelta(hours=-4)))

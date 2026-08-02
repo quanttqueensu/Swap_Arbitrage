@@ -136,7 +136,11 @@ class PaperEventStore:
 
     @staticmethod
     def _only_order_fields_changed(old: Mapping[str, str], new: Mapping[str, str]) -> bool:
-        return all(old[name] == new[name] for name in old if name not in {"status", "ibkr_order_id"})
+        if not all(old[name] == new[name] for name in old if name not in {"status", "ibkr_order_id"}):
+            return False
+        old_order_id = old["ibkr_order_id"]
+        new_order_id = new["ibkr_order_id"]
+        return old_order_id == new_order_id or (not old_order_id and bool(new_order_id))
 
     @staticmethod
     def _is_sensitive(field_name: str, value: str) -> bool:
