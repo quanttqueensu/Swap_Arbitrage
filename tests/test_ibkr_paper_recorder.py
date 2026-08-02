@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import socket
 import tempfile
+import traceback
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -172,15 +173,24 @@ class PaperEventStoreTests(unittest.TestCase):
 
 
 class FakeIB:
-    def __init__(self, *, connected: bool = True, accounts: tuple[str, ...] = ("DU12345678",)) -> None:
+    def __init__(
+        self,
+        *,
+        connected: bool = True,
+        accounts: tuple[str, ...] = ("DU12345678",),
+        failure: Exception | None = None,
+    ) -> None:
         self.connected = connected
         self.accounts = accounts
+        self.failure = failure
         self.market_data_requests: list[tuple[object, str, bool, bool]] = []
         self.is_connected_calls = 0
         self.managed_account_calls = 0
 
     def isConnected(self) -> bool:
         self.is_connected_calls += 1
+        if self.failure is not None:
+            raise self.failure
         return self.connected
 
     def managedAccounts(self) -> tuple[str, ...]:
@@ -223,6 +233,7 @@ class PaperRecorderQuoteTests(unittest.TestCase):
             ({"host": "192.0.2.1"}, "paper host"),
             ({"port": 7496}, "paper port"),
             ({"client_id": 0}, "client ID"),
+            ({"client_id": 31}, "client ID"),
             ({"paper_only": False}, "paper-only"),
             ({"live_trading_enabled": True}, "live trading"),
             ({"account_id": "U12345678"}, "DU paper account"),
@@ -237,6 +248,28 @@ class PaperRecorderQuoteTests(unittest.TestCase):
                 self.assertEqual(recorder.ib.is_connected_calls, 0)
                 self.assertEqual(recorder.ib.managed_account_calls, 0)
                 self.assertEqual(recorder.ib.market_data_requests, [])
+
+    def test_broker_failures_and_malicious_aliases_never_leak_to_traceback(self) -> None:
+        account_id = "DU12345678"
+        alias = "DU_ALIAS host=127.0.0.1 client_id=30"
+        recorder = self.recorder_for(account_id=account_id, account_alias=alias)
+        recorder.ib.failure = RuntimeError(f"broker rejected {account_id}; {alias}")
+        with self.assertRaisesRegex(PaperSafetyError, "broker session validation") as caught:
+            recorder.request_quotes([self.contract(101)])
+        rendered = "".join(traceback.format_exception(caught.exception))
+        for sensitive in (account_id, alias, "127.0.0.1", "client_id=30"):
+            with self.subTest(sensitive=sensitive):
+                self.assertNotIn(sensitive, rendered)
+        self.assertEqual(recorder.ib.market_data_requests, [])
+
+    def test_unsafe_record_quote_blocks_before_any_broker_call(self) -> None:
+        recorder = self.recorder_for(port=7496)
+        ticker = SimpleNamespace(bid=99, ask=100, bidSize=1, askSize=1)
+        with self.assertRaisesRegex(PaperSafetyError, "paper port"):
+            recorder.record_quote(self.contract(101), ticker, datetime.now(timezone.utc))
+        self.assertEqual(recorder.ib.is_connected_calls, 0)
+        self.assertEqual(recorder.ib.managed_account_calls, 0)
+        self.assertEqual(recorder.ib.market_data_requests, [])
 
     def test_disconnected_and_account_mismatch_block_quote_requests(self) -> None:
         disconnected = self.recorder_for()
@@ -288,7 +321,14 @@ class PaperRecorderQuoteTests(unittest.TestCase):
             (datetime(2026, 8, 2, 15, 0, 1, tzinfo=timezone.utc), SimpleNamespace(bid=99, ask=100, bidSize=1, askSize=1), "stale"),
             (now, SimpleNamespace(bid=float("nan"), ask=100, bidSize=1, askSize=1), "finite"),
             (now, SimpleNamespace(bid=0, ask=100, bidSize=1, askSize=1), "positive"),
+            (now, SimpleNamespace(bid=99, ask=float("nan"), bidSize=1, askSize=1), "finite"),
+            (now, SimpleNamespace(bid=99, ask=0, bidSize=1, askSize=1), "positive"),
+            (now, SimpleNamespace(bid=99, ask=100, bidSize=float("inf"), askSize=1), "finite"),
+            (now, SimpleNamespace(bid=99, ask=100, bidSize=0, askSize=1), "positive"),
+            (now, SimpleNamespace(bid=99, ask=100, bidSize=1, askSize=float("inf")), "finite"),
+            (now, SimpleNamespace(bid=99, ask=100, bidSize=1, askSize=0), "positive"),
             (now, SimpleNamespace(bid=101, ask=100, bidSize=1, askSize=1), "crossed"),
+            (datetime(2026, 8, 2, 15, 0), SimpleNamespace(bid=99, ask=100, bidSize=1, askSize=1), "timezone"),
         )
         for observed, ticker, message in cases:
             with self.subTest(message=message):

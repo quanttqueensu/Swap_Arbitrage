@@ -73,8 +73,8 @@ class IbkrPaperRecorder:
             raise PaperSafetyError("unsafe paper host")
         if isinstance(self.config.port, bool) or not isinstance(self.config.port, int) or self.config.port != 7497:
             raise PaperSafetyError("unsafe paper port")
-        if isinstance(self.config.client_id, bool) or not isinstance(self.config.client_id, int) or self.config.client_id <= 0:
-            raise PaperSafetyError("positive client ID is required")
+        if self.config.client_id != 30:
+            raise PaperSafetyError("paper client ID is required")
         if self.config.paper_only is not True:
             raise PaperSafetyError("paper-only mode is required")
         if self.config.live_trading_enabled is not False:
@@ -92,16 +92,12 @@ class IbkrPaperRecorder:
         try:
             connected = self.ib.isConnected()
             accounts = tuple(self.ib.managedAccounts()) if connected else ()
-        except Exception as error:
-            raise PaperSafetyError(
-                f"{self.config.account_alias}: broker session validation failed: {_redact(error)}"
-            ) from error
+        except Exception:
+            raise PaperSafetyError("broker session validation failed") from None
         if not connected:
-            raise PaperSafetyError(f"{self.config.account_alias}: IBKR paper session is not connected")
+            raise PaperSafetyError("IBKR paper session is not connected")
         if self.config.account_id not in accounts:
-            raise PaperSafetyError(
-                f"{self.config.account_alias}: configured managed account {_redact(self.config.account_id)} is unavailable"
-            )
+            raise PaperSafetyError("configured managed account is unavailable")
 
     def request_quotes(self, contracts: list[object]) -> list[object]:
         self.validate_session()
