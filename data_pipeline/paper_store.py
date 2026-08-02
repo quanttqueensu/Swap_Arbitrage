@@ -54,7 +54,7 @@ class PaperEventStore:
             existing = merged.get(key)
             if existing is None or existing == row:
                 merged[key] = row
-            elif schema_id == "paper_orders" and self._only_order_status_changed(existing, row):
+            elif schema_id == "paper_orders" and self._only_order_fields_changed(existing, row):
                 merged[key] = row
             else:
                 raise ValueError("conflicting duplicate key")
@@ -135,8 +135,8 @@ class PaperEventStore:
             }
 
     @staticmethod
-    def _only_order_status_changed(old: Mapping[str, str], new: Mapping[str, str]) -> bool:
-        return all(old[name] == new[name] for name in old if name != "status")
+    def _only_order_fields_changed(old: Mapping[str, str], new: Mapping[str, str]) -> bool:
+        return all(old[name] == new[name] for name in old if name not in {"status", "ibkr_order_id"})
 
     @staticmethod
     def _is_sensitive(field_name: str, value: str) -> bool:

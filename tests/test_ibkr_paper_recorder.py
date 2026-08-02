@@ -338,5 +338,110 @@ class PaperRecorderQuoteTests(unittest.TestCase):
                     recorder.record_quote(self.contract(101), ticker, observed)
 
 
+class PaperRecorderEventTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.store = PaperEventStore(Path(self.tempdir.name), "agent_0", "run-1")
+        config = PaperSessionConfig("127.0.0.1", 7497, 30, "DU12345678", "paper-primary")
+        self.recorder = IbkrPaperRecorder(FakeIB(), config, self.store)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    @staticmethod
+    def contract(con_id: int) -> SimpleNamespace:
+        return SimpleNamespace(conId=con_id)
+
+    @staticmethod
+    def order(order_ref: str, side: str, quantity: int, order_id: object = None) -> SimpleNamespace:
+        return SimpleNamespace(
+            orderRef=order_ref, action=side, totalQuantity=quantity, orderType="MKT", tif="DAY", orderId=order_id
+        )
+
+    @staticmethod
+    def execution(execution_id: str, quantity: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            execId=execution_id,
+            side="BUY",
+            shares=quantity,
+            price="99.25",
+            time=datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc),
+        )
+
+    @staticmethod
+    def commission(value: str) -> SimpleNamespace:
+        return SimpleNamespace(commission=value)
+
+    def test_records_signed_orders_and_reconciles_status_only(self) -> None:
+        created = datetime(2026, 8, 2, 11, 0, tzinfo=timezone(timedelta(hours=-4)))
+        self.assertEqual(
+            self.recorder.record_order("decision-1", self.contract(101), self.order("o-buy", "BUY", 2), "Submitted", created),
+            1,
+        )
+        self.assertEqual(
+            self.recorder.record_order("decision-1", self.contract(101), self.order("o-buy", "BUY", 2, 77), "Filled", created),
+            1,
+        )
+        self.assertEqual(
+            self.recorder.record_order("decision-2", self.contract(202), self.order("o-sell", "SELL", 3), "Submitted", created),
+            2,
+        )
+        self.assertEqual(
+            self.store.path_for("paper_orders").read_text(encoding="utf-8").splitlines()[1:],
+            [
+                "o-buy,decision-1,2026-08-02T15:00:00Z,IBKR:101,BUY,2,MKT,DAY,Filled,77",
+                "o-sell,decision-2,2026-08-02T15:00:00Z,IBKR:202,SELL,-3,MKT,DAY,Submitted,",
+            ],
+        )
+
+    def test_rejects_order_mutation_and_missing_required_order_fields(self) -> None:
+        created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        self.recorder.record_order("decision-1", self.contract(101), self.order("o-1", "BUY", 2), "Submitted", created)
+        with self.assertRaisesRegex(ValueError, "conflicting duplicate key"):
+            self.recorder.record_order("decision-1", self.contract(101), self.order("o-1", "BUY", 3), "Filled", created)
+        for decision_id, order, status in (
+            ("", self.order("o-2", "BUY", 1), "Submitted"),
+            ("decision-2", self.order("", "BUY", 1), "Submitted"),
+            ("decision-2", SimpleNamespace(orderRef="o-2", action="BUY", totalQuantity=1, orderType="", tif="DAY", orderId=None), "Submitted"),
+            ("decision-2", SimpleNamespace(orderRef="o-2", action="BUY", totalQuantity=1, orderType="MKT", tif="", orderId=None), "Submitted"),
+            ("decision-2", self.order("o-2", "BUY", 1), ""),
+        ):
+            with self.subTest(decision_id=decision_id, status=status):
+                with self.assertRaisesRegex(PaperSafetyError, "nonempty"):
+                    self.recorder.record_order(decision_id, self.contract(101), order, status, created)
+
+    def test_duplicate_fill_callback_is_idempotent_and_partial_fills_are_distinct(self) -> None:
+        first = self.recorder.record_fill("o-1", self.contract(101), self.execution("e-1", 1), self.commission("1.20"))
+        second = self.recorder.record_fill("o-1", self.contract(101), self.execution("e-1", 1), self.commission("1.20"))
+        third = self.recorder.record_fill("o-1", self.contract(101), self.execution("e-2", 1), self.commission("0"))
+        self.assertEqual((first, second, third), (1, 1, 2))
+
+    def test_rejects_conflicting_execution_and_invalid_commission(self) -> None:
+        self.recorder.record_fill("o-1", self.contract(101), self.execution("e-1", 1), self.commission("1.20"))
+        with self.assertRaisesRegex(ValueError, "conflicting duplicate key"):
+            self.recorder.record_fill("o-1", self.contract(101), self.execution("e-1", 2), self.commission("1.20"))
+        with self.assertRaisesRegex(PaperSafetyError, "nonnegative"):
+            self.recorder.record_fill("o-1", self.contract(101), self.execution("e-2", 1), self.commission("-0.01"))
+        with self.assertRaisesRegex(PaperSafetyError, "commission report"):
+            self.recorder.record_fill("o-1", self.contract(101), self.execution("e-2", 1), None)
+
+    def test_records_one_timestamp_position_snapshot_and_rejects_duplicates(self) -> None:
+        observed = datetime(2026, 8, 2, 11, 0, tzinfo=timezone(timedelta(hours=-4)))
+        rows = [
+            SimpleNamespace(contract=self.contract(101), position=2, avgCost="98.5", marketPrice="99", unrealizedPNL="1", realizedPNL="0"),
+            SimpleNamespace(contract=self.contract(202), position=-1, avgCost="101", marketPrice="100", unrealizedPNL="-1", realizedPNL="2"),
+        ]
+        self.assertEqual(self.recorder.record_positions(rows, observed), 2)
+        self.assertEqual(
+            self.store.path_for("paper_positions").read_text(encoding="utf-8").splitlines()[1:],
+            [
+                "2026-08-02T15:00:00Z,IBKR:101,2,98.5,99,1,0",
+                "2026-08-02T15:00:00Z,IBKR:202,-1,101,100,-1,2",
+            ],
+        )
+        with self.assertRaisesRegex(PaperSafetyError, "duplicate instrument"):
+            self.recorder.record_positions([rows[0], rows[0]], observed)
+
+
 if __name__ == "__main__":
     unittest.main()
