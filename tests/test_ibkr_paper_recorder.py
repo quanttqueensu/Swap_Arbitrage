@@ -592,6 +592,47 @@ class PaperRecorderEventTests(unittest.TestCase):
                 for marker in ("DU12345678", "credential", "127.0.0.1", "client_id"):
                     self.assertNotIn(marker, rendered)
 
+    def test_sanitizes_plain_secret_strings_in_every_broker_numeric_field(self) -> None:
+        secret = "credential=TOPSECRET host=127.0.0.1 client_id=30"
+        created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        self.recorder.clock = lambda: created
+        operations: list[tuple[str, object]] = []
+
+        for field in ("bid", "ask", "bidSize", "askSize"):
+            ticker = SimpleNamespace(bid=99, ask=100, bidSize=1, askSize=1)
+            setattr(ticker, field, secret)
+            operations.append((f"quote.{field}", lambda ticker=ticker: self.recorder.record_quote(self.contract(101), ticker, created)))
+
+        for field in ("totalQuantity", "orderId"):
+            order = self.order("o-1", "BUY", 1)
+            setattr(order, field, secret)
+            operations.append((f"order.{field}", lambda order=order: self.recorder.record_order("decision-1", self.contract(101), order, "Submitted", created)))
+
+        for field in ("shares", "price"):
+            execution = self.execution(f"e-{field}", 1)
+            setattr(execution, field, secret)
+            operations.append((f"execution.{field}", lambda execution=execution: self.recorder.record_fill("o-1", self.contract(101), execution, self.commission("0"))))
+        operations.append(("commission", lambda: self.recorder.record_fill("o-1", self.contract(101), self.execution("e-commission", 1), self.commission(secret))))
+
+        for field in ("position", "avgCost", "marketPrice", "unrealizedPNL", "realizedPNL"):
+            position = SimpleNamespace(
+                contract=self.contract(101), position=1, avgCost=98, marketPrice=99,
+                unrealizedPNL=1, realizedPNL=0,
+            )
+            setattr(position, field, secret)
+            operations.append((f"position.{field}", lambda position=position: self.recorder.record_positions([position], created)))
+
+        for name, operation in operations:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(PaperSafetyError, "broker object normalization") as caught:
+                    operation()
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                rendered = "".join(traceback.format_exception(caught.exception))
+                for marker in ("TOPSECRET", "127.0.0.1", "client_id"):
+                    self.assertNotIn(marker, str(caught.exception))
+                    self.assertNotIn(marker, rendered)
+
     def test_configured_account_cannot_enter_any_recorder_row(self) -> None:
         account_id = self.recorder.config.account_id
         created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)

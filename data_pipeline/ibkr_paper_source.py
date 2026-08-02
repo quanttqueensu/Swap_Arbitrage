@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from collections.abc import Callable, Iterable
 from typing import Any
 import re
@@ -47,38 +47,26 @@ def _utc_text(value: datetime) -> str:
     return utc_value.isoformat(timespec="microseconds").replace("+00:00", "Z").replace(".000000Z", "Z")
 
 
-def _finite_decimal(value: object, field_name: str) -> Decimal:
-    try:
-        decimal_value = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError) as error:
-        raise PaperSafetyError(f"{field_name} must be finite") from error
-    if not decimal_value.is_finite():
+def _finite_decimal(value: Decimal, field_name: str) -> Decimal:
+    if not value.is_finite():
         raise PaperSafetyError(f"{field_name} must be finite")
-    if decimal_value <= 0:
+    if value <= 0:
         raise PaperSafetyError(f"{field_name} must be positive")
-    return decimal_value
+    return value
 
 
-def _finite_nonnegative_decimal(value: object, field_name: str) -> Decimal:
-    try:
-        decimal_value = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError) as error:
-        raise PaperSafetyError(f"{field_name} must be finite") from error
-    if not decimal_value.is_finite():
+def _finite_nonnegative_decimal(value: Decimal, field_name: str) -> Decimal:
+    if not value.is_finite():
         raise PaperSafetyError(f"{field_name} must be finite")
-    if decimal_value < 0:
+    if value < 0:
         raise PaperSafetyError(f"{field_name} must be nonnegative")
-    return decimal_value
+    return value
 
 
-def _finite_value(value: object, field_name: str) -> Decimal:
-    try:
-        decimal_value = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError) as error:
-        raise PaperSafetyError(f"{field_name} must be finite") from error
-    if not decimal_value.is_finite():
+def _finite_value(value: Decimal, field_name: str) -> Decimal:
+    if not value.is_finite():
         raise PaperSafetyError(f"{field_name} must be finite")
-    return decimal_value
+    return value
 
 
 def _nonempty_text(value: object, field_name: str) -> str:
@@ -88,19 +76,13 @@ def _nonempty_text(value: object, field_name: str) -> str:
     return text
 
 
-def _signed_quantity(side: object, quantity: object, field_name: str) -> tuple[str, int]:
+def _signed_quantity(side: object, quantity: int, field_name: str) -> tuple[str, int]:
     normalized_side = _nonempty_text(side, "side").upper()
     if normalized_side not in {"BUY", "SELL"}:
         raise PaperSafetyError("side must be BUY or SELL")
-    if isinstance(quantity, bool):
+    if quantity <= 0:
         raise PaperSafetyError(f"{field_name} must be a positive integer")
-    try:
-        unsigned_quantity = int(quantity)
-    except (TypeError, ValueError) as error:
-        raise PaperSafetyError(f"{field_name} must be a positive integer") from error
-    if unsigned_quantity <= 0 or str(quantity).strip() not in {str(unsigned_quantity), f"+{unsigned_quantity}"}:
-        raise PaperSafetyError(f"{field_name} must be a positive integer")
-    return normalized_side, unsigned_quantity if normalized_side == "BUY" else -unsigned_quantity
+    return normalized_side, quantity if normalized_side == "BUY" else -quantity
 
 
 def _reject_broker_account(value: object, seen: set[int] | None = None) -> None:
@@ -160,6 +142,20 @@ def _instrument_id_from_int(con_id: int | None) -> str:
 def _broker_text(value: object, field_name: str) -> str:
     value = getattr(value, field_name, None)
     return "" if value is None else str(value)
+
+
+def _broker_integer(value: object, field_name: str, *, nullable: bool = False) -> int:
+    text = _broker_text(value, field_name).strip()
+    if nullable and not text:
+        return 0
+    integer = int(text)
+    if text not in {str(integer), f"+{integer}"}:
+        raise ValueError("noncanonical integer")
+    return integer
+
+
+def _broker_decimal(value: object, field_name: str) -> Decimal:
+    return Decimal(_broker_text(value, field_name))
 
 
 def _broker_contract_id(contract: object) -> str:
@@ -297,10 +293,10 @@ class IbkrPaperRecorder:
         _reject_broker_account(ticker)
         return {
             "con_id": _strict_broker_contract_id(contract),
-            "bid_price": _broker_text(ticker, "bid"),
-            "ask_price": _broker_text(ticker, "ask"),
-            "bid_size": _broker_text(ticker, "bidSize"),
-            "ask_size": _broker_text(ticker, "askSize"),
+            "bid_price": _broker_decimal(ticker, "bid"),
+            "ask_price": _broker_decimal(ticker, "ask"),
+            "bid_size": _broker_decimal(ticker, "bidSize"),
+            "ask_size": _broker_decimal(ticker, "askSize"),
         }
 
     def _reject_configured_account(self, rows: Iterable[dict[str, object]]) -> None:
@@ -309,31 +305,29 @@ class IbkrPaperRecorder:
             raise PaperSafetyError("configured account values are not permitted")
 
     @staticmethod
-    def _order_values(contract: object, order: object) -> dict[str, str]:
+    def _order_values(contract: object, order: object) -> dict[str, object]:
         _reject_broker_account(contract)
         _reject_broker_account(order)
         return {
             "con_id": _broker_contract_id(contract),
             "order_ref": _broker_text(order, "orderRef"),
             "side": _broker_text(order, "action"),
-            "quantity": _broker_text(order, "totalQuantity"),
+            "quantity": _broker_integer(order, "totalQuantity"),
             "order_type": _broker_text(order, "orderType"),
             "time_in_force": _broker_text(order, "tif"),
-            "ibkr_order_id": _broker_text(order, "orderId"),
+            "ibkr_order_id": _broker_integer(order, "orderId", nullable=True),
         }
 
     @staticmethod
     def _order_row(
-        decision_id: str, status: str, created_at_utc: datetime, values: dict[str, str]
+        decision_id: str, status: str, created_at_utc: datetime, values: dict[str, object]
     ) -> dict[str, object]:
         order_ref = _nonempty_text(values["order_ref"], "orderRef")
         normalized_decision_id = _nonempty_text(decision_id, "decision_id")
         normalized_status = _nonempty_text(status, "order status")
         side, quantity = _signed_quantity(values["side"], values["quantity"], "quantity")
-        try:
-            ibkr_order_id = values["ibkr_order_id"] if int(values["ibkr_order_id"] or 0) > 0 else ""
-        except (TypeError, ValueError) as error:
-            raise PaperSafetyError("broker order ID must be an integer") from error
+        broker_order_id = values["ibkr_order_id"]
+        ibkr_order_id = str(broker_order_id) if broker_order_id > 0 else ""
         return {
             "order_ref": order_ref,
             "decision_id": normalized_decision_id,
@@ -348,7 +342,7 @@ class IbkrPaperRecorder:
         }
 
     @staticmethod
-    def _fill_values(contract: object, execution: object, commission_report: object) -> dict[str, str]:
+    def _fill_values(contract: object, execution: object, commission_report: object) -> dict[str, object]:
         _reject_broker_account(contract)
         _reject_broker_account(execution)
         _reject_broker_account(commission_report)
@@ -358,14 +352,14 @@ class IbkrPaperRecorder:
             "con_id": _broker_contract_id(contract),
             "fill_id": _broker_text(execution, "execId"),
             "side": _broker_text(execution, "side"),
-            "quantity": _broker_text(execution, "shares"),
+            "quantity": _broker_integer(execution, "shares"),
             "fill_time_utc": _utc_text(getattr(execution, "time", None)),
-            "fill_price": _broker_text(execution, "price"),
-            "commission_usd": _broker_text(commission_report, "commission"),
+            "fill_price": _broker_decimal(execution, "price"),
+            "commission_usd": _broker_decimal(commission_report, "commission"),
         }
 
     @staticmethod
-    def _fill_row(order_ref: str, values: dict[str, str]) -> dict[str, object]:
+    def _fill_row(order_ref: str, values: dict[str, object]) -> dict[str, object]:
         normalized_side = {"BOT": "BUY", "SLD": "SELL"}.get(values["side"].upper(), values["side"])
         side, quantity = _signed_quantity(normalized_side, values["quantity"], "fill quantity")
         return {
@@ -380,24 +374,24 @@ class IbkrPaperRecorder:
         }
 
     @staticmethod
-    def _position_values(position_rows: Iterable[object]) -> list[dict[str, str]]:
-        values: list[dict[str, str]] = []
+    def _position_values(position_rows: Iterable[object]) -> list[dict[str, object]]:
+        values: list[dict[str, object]] = []
         for position in position_rows:
             _reject_broker_account(position)
             contract = getattr(position, "contract", None)
             _reject_broker_account(contract)
             values.append({
                 "con_id": _broker_contract_id(contract),
-                "quantity": _broker_text(position, "position"),
-                "average_cost": _broker_text(position, "avgCost"),
-                "market_price": _broker_text(position, "marketPrice"),
-                "unrealized_pnl_usd": _broker_text(position, "unrealizedPNL"),
-                "realized_pnl_usd": _broker_text(position, "realizedPNL"),
+                "quantity": _broker_integer(position, "position"),
+                "average_cost": _broker_decimal(position, "avgCost"),
+                "market_price": _broker_decimal(position, "marketPrice"),
+                "unrealized_pnl_usd": _broker_decimal(position, "unrealizedPNL"),
+                "realized_pnl_usd": _broker_decimal(position, "realizedPNL"),
             })
         return values
 
     @staticmethod
-    def _position_rows(values: list[dict[str, str]], timestamp_utc: str) -> list[dict[str, object]]:
+    def _position_rows(values: list[dict[str, object]], timestamp_utc: str) -> list[dict[str, object]]:
         normalized_rows: list[dict[str, object]] = []
         instrument_ids: set[str] = set()
         for value in values:
@@ -405,13 +399,7 @@ class IbkrPaperRecorder:
             if instrument_id in instrument_ids:
                 raise PaperSafetyError("duplicate instrument in position snapshot")
             instrument_ids.add(instrument_id)
-            quantity = value["quantity"]
-            try:
-                integer_quantity = int(quantity)
-            except (TypeError, ValueError) as error:
-                raise PaperSafetyError("position quantity must be an integer") from error
-            if str(quantity).strip() not in {str(integer_quantity), f"+{integer_quantity}"}:
-                raise PaperSafetyError("position quantity must be an integer")
+            integer_quantity = value["quantity"]
             normalized_rows.append({
                 "timestamp_utc": timestamp_utc,
                 "instrument_id": instrument_id,
