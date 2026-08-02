@@ -127,6 +127,8 @@ def canonicalize_rates(path: Path) -> dict[int, list[dict[str, str]]]:
             raise CanonicalizationError(f"duplicate rate date {observed}")
         dates.add(observed)
         for column, (source, series_id, maturity) in RATE_COLUMNS.items():
+            if row[column] == "":
+                continue
             result.append({"observation_date": observed, "source": source, "series_id": series_id, "maturity": maturity, "rate_bps": percent_to_bps(row[column])})
     return _partition(result, ("observation_date", "source", "series_id", "maturity"))
 

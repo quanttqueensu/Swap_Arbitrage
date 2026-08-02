@@ -552,6 +552,8 @@ def _expected_lineage(rule_id: str, data: bytes) -> list[_LineageRecord]:
             observed = source_row["date"]
             year = _iso_date(observed, rule_id).year
             for column, source, series_id, maturity in columns:
+                if source_row[column] == "":
+                    continue
                 output = {
                     "observation_date": observed,
                     "source": source,

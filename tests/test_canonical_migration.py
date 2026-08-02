@@ -104,6 +104,19 @@ class CanonicalizerTests(unittest.TestCase):
         self.assertEqual({row["source"] for row in partitions[2026]}, {"UST", "NYFED"})
         self.assertEqual(validate_csv(SCHEMAS["historical_rates"], self.write_partition("rates.csv", partitions[2026], "historical_rates")), 4)
 
+    def test_rates_emit_only_present_consumed_series_without_zero_or_proxy(self) -> None:
+        path = self.fixture(
+            "rates-with-absences.csv",
+            RATE_HEADER,
+            [["2026-08-01", *(["4"] * 6), "", "4", "4.25", "4", "4", "4", "4", "", "4.34"]],
+        )
+        partitions = canonicalize_rates(path)
+        self.assertEqual(partitions[2026], [
+            {"observation_date": "2026-08-01", "source": "NYFED", "series_id": "EFFR", "maturity": "ON", "rate_bps": "434"},
+            {"observation_date": "2026-08-01", "source": "UST", "series_id": "DGS5", "maturity": "5Y", "rate_bps": "425"},
+        ])
+        self.assertFalse(any(row["rate_bps"] == "0" for row in partitions[2026]))
+
     def test_futures_build_expiry_aware_eris_ids_blank_settlement_dv01_and_proxy_risk(self) -> None:
         swaps = self.fixture("cme_swap_data.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "YITU26", "99.25", "39.8"]])
         treasuries = self.fixture("treasury_futures_data.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "ZT=F", "108.5", "79.6"]])
@@ -145,7 +158,6 @@ class CanonicalizerTests(unittest.TestCase):
         cases = [
             ("unknown", [*RATE_HEADER, "extra"], [["2026-08-01", *(["4"] * 15), "x"]]),
             ("duplicate", RATE_HEADER, [["2026-08-01", *(["4"] * 15)], ["2026-08-01", *(["4"] * 15)]]),
-            ("missing", RATE_HEADER, [["2026-08-01", "4", "4", "4", "4", "4", "4", "", "4", "4", "4", "4", "4", "4", "4", "4"]]),
             ("nonfinite", RATE_HEADER, [["2026-08-01", "4", "4", "4", "4", "4", "4", "NaN", "4", "4", "4", "4", "4", "4", "4", "4"]]),
             ("nonpositive", RATE_HEADER, [["2026-08-01", "4", "4", "4", "4", "4", "4", "0", "4", "4", "4", "4", "4", "4", "4", "4"]]),
         ]
@@ -468,6 +480,25 @@ class MigrationStagingTests(unittest.TestCase):
                     for row in failed
                 ))
                 self.assertTrue(stage.is_dir())
+
+    def test_staging_reconciles_only_present_rate_series(self) -> None:
+        from data_pipeline.migration import stage_migration
+
+        source = self.repo / "data/treasury_rates.csv"
+        with source.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        rows[0]["dgs2"] = ""
+        with source.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=RATE_HEADER, lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(rows)
+        result = stage_migration(self.repo, self.repo / "present-stage", self.repo / "docs/verification/present-report.csv")
+        self.assertTrue(result.all_passed)
+        report = {row["rule_id"]: row for row in self._read_report(result.report_path)}
+        self.assertEqual((report["treasury_rates"]["source_key_count"], report["treasury_rates"]["output_key_count"]), ("7", "7"))
+        with (result.staging_root / "data/source/rates/rates_2025.csv").open(encoding="utf-8", newline="") as handle:
+            staged = list(csv.DictReader(handle))
+        self.assertFalse(any(row["observation_date"] == "2025-12-31" and row["series_id"] == "DGS2" for row in staged))
 
     def test_descriptor_path_race_fails_and_removes_new_stage(self) -> None:
         from data_pipeline.migration import MigrationError, stage_migration
