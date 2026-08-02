@@ -134,14 +134,16 @@ class PaperEventStoreTests(unittest.TestCase):
 
     def test_rejects_exact_endpoint_in_unrestricted_order_status(self) -> None:
         store = PaperEventStore(self.root, "agent_0", "run-1")
-        row = {
-            "order_ref": "order-1", "decision_id": "decision-1", "created_at_utc": "2026-08-02T15:00:00Z",
-            "instrument_id": "IBKR:1", "side": "BUY", "quantity": 2, "order_type": "MKT",
-            "time_in_force": "DAY", "status": "127.0.0.1:7497", "ibkr_order_id": "",
-        }
-        with self.assertRaisesRegex(ValueError, "sensitive") as caught:
-            store.write("paper_orders", [row])
-        self.assertNotIn("127.0.0.1:7497", str(caught.exception))
+        for endpoint in ("127.0.0.1:7497", "localhost:7497", "node-01:7497"):
+            with self.subTest(endpoint=endpoint):
+                row = {
+                    "order_ref": "order-1", "decision_id": "decision-1", "created_at_utc": "2026-08-02T15:00:00Z",
+                    "instrument_id": "IBKR:1", "side": "BUY", "quantity": 2, "order_type": "MKT",
+                    "time_in_force": "DAY", "status": endpoint, "ibkr_order_id": "",
+                }
+                with self.assertRaisesRegex(ValueError, "sensitive") as caught:
+                    store.write("paper_orders", [row])
+                self.assertNotIn(endpoint, str(caught.exception))
 
     def test_accepts_ambiguous_bare_host_like_order_reference(self) -> None:
         store = PaperEventStore(self.root, "agent_0", "run-1")

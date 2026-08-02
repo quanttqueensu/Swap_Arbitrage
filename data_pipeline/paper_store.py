@@ -163,7 +163,7 @@ class PaperEventStore:
                 ipaddress.ip_address(host)
                 return True
             except ValueError:
-                return _HOSTNAME.fullmatch(host) is not None
+                return _HOSTNAME.fullmatch(host) is not None or PaperEventStore._is_ambiguous_bare_host(host)
         return _HOSTNAME.fullmatch(value) is not None
 
     @staticmethod
