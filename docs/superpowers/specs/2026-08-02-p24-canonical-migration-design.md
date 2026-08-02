@@ -41,15 +41,24 @@ The first supported migration consumes exactly these five catalogued inputs:
 - the approved 2Y/5Y fields required from `data/swap_rates.csv`;
 - the approved 2Y/5Y fields required from `data/treasury_futures.csv`.
 
-It writes:
+Task 4 stages only:
 
 - `data/source/rates/rates_YYYY.csv`;
 - `data/source/futures/futures_settlements_YYYY.csv`;
 - `data/canonical/reference/contract_risk_YYYY.csv`;
 - `data/canonical/market/daily_market_YYYY.csv`;
 - `data/manifests/p24_inputs.csv`;
-- `data/manifests/p24_run.csv`;
 - `docs/verification/P24-migration-report.csv` in the staged/report output.
+
+Task 4 does not create `data/manifests/p24_run.csv`: before publication and
+final evidence there is no honest immutable code commit for the code that
+performed publication, publication start/end time, or terminal status to record. Task 5 creates that file only after
+publication and evidence are complete, validates it against the registered
+`run_manifest` contract, and records the real immutable code commit that
+exactly matches the executed publication code, the exact
+`p24_inputs.csv` manifest digest, true publication timestamps/status, and
+deterministically serialized run ID, configuration, strategy, and row-count
+metadata.
 
 The other 1,482 catalogued artifacts are excluded. They include all 1,474 Eris
 vendor-cache files and the top-level `r2_objects.csv` inventory, which remains

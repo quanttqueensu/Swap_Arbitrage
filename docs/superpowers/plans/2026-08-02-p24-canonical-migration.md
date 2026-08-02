@@ -287,11 +287,11 @@ git commit -m "feat: stage deterministic canonical migration"
 
 **Interfaces:**
 - Consumes: a passing `MigrationResult`.
-- Produces: `publish_migration(result: MigrationResult, repo_root: Path) -> list[Path]`, canonical data files, manifests, and P24 evidence.
+- Produces: `publish_migration(result: MigrationResult, repo_root: Path) -> list[Path]` and canonical data files; after publication/evidence finalization, Task 5 also produces validated `p24_run.csv` and P24 evidence. `p24_run.csv` is not a Task 4 staged output.
 
 - [ ] **Step 1: Write failing publication tests**
 
-Assert publication refuses any failed report row, preserves an existing destination when replacement fails, publishes only declared output paths, never modifies source files, and leaves no temporary sibling after success.
+Assert publication refuses any failed report row, preserves an existing destination when replacement fails, publishes only declared output paths, never modifies source files, and leaves no temporary sibling after success. Assert Task 4 has not staged `p24_run.csv`; Task 5 creates it only after publication/evidence finalization and validates it under `SCHEMAS["run_manifest"]`.
 
 - [ ] **Step 2: Run publication tests and verify RED**
 
@@ -349,7 +349,21 @@ determinism comparison, publication paths, recovery paths, network/broker/order/
 cancel counts of zero, and all review findings. Request MG4 with P23 and P24
 evidence; do not begin P30.
 
-- [ ] **Step 8: Run the full suite and commit P24**
+- [ ] **Step 8: Finalize and validate the P24 run manifest**
+
+Only after publication and Step 7 evidence are complete, create
+`data/manifests/p24_run.csv`. Validate it with `SCHEMAS["run_manifest"]` before
+atomic replacement. It must contain a real immutable code commit that exactly
+matches the code executed for publication, the exact
+digest of the published `p24_inputs.csv`, actual publication start/end
+timestamps and terminal status, plus deterministically serialized run ID,
+configuration hash, strategy version, run type, and row-count metadata. Do not
+invent placeholders for values that are not yet final. If the executed Task 5
+implementation does not yet have such a commit, commit it, rerun the real-data
+staging/publication/evidence sequence from Step 4, and only then finalize this
+manifest.
+
+- [ ] **Step 9: Run the full suite and commit P24**
 
 Run:
 
