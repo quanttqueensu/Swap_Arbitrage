@@ -1,4 +1,4 @@
-.venv/
+﻿.venv/
 venv/
 nenv/
 __pycache__/
@@ -12,3 +12,5 @@ agents/*/logs/
 agents/*/state/*.json
 agents/*/orders/*.csv
 docs
+.env
+r2_objects.csv

@@ -13,7 +13,7 @@ requires the later consolidation prompt; no rule below schedules it.
 
 | Rule | Matched P20 artifacts | Future action | Staged destination | Before -> after expectation | Prerequisite and recovery |
 |---|---:|---|---|---|---|
-| `eris_vendor_cache` | 1,474 `data/cache/eris_sofr_settlements_v3/*.csv` files | keep immutable source | `data/source/quantt/futures/futures_settlements_YYYY.csv` | Each 64-column vendor file remains byte-identical. Approved 2Y/5Y IDs match `^(?:YIT\|YIW)[HMUZ]\d{2}$`. Parse the observation date only from `^Eris_Instruments_(\d{8})_Settles\.csv$` as `YYYYMMDD`; `EvaluationDate` must equal it. Block the complete file on duplicate `(EvaluationDate,Symbol)`. Per file, emitted keys equal exactly the matching unique source keys and emitted count equals that key-set size. | Validate both vendor schema variants; recover from untouched cache plus P20 SHA-256 |
+| `eris_vendor_cache` | 1,474 `data/cache/eris_sofr_settlements_v3/*.csv` files | keep immutable source | `data/source/cme/futures/futures_settlements_YYYY.csv` | Each 64-column vendor file remains byte-identical. Approved 2Y/5Y IDs match `^(?:YIT\|YIW)[HMUZ]\d{2}$`. Parse the observation date only from `^Eris_Instruments_(\d{8})_Settles\.csv$` as `YYYYMMDD`; `EvaluationDate` must equal it. Block the complete file on duplicate `(EvaluationDate,Symbol)`. Per file, emitted keys equal exactly the matching unique source keys and emitted count equals that key-set size. | Validate both vendor schema variants; recover from untouched cache plus P20 SHA-256 |
 | `cme_swap_master` | 1 `data/cme_swap_data.csv` | regenerate | settlement and `contract_risk_YYYY.csv` | 2,948 rows split by year; 4 columns map to settlement/risk contracts without silent row loss | Reconcile year totals, dates, prices, DV01, and tickers; retain current file |
 | `treasury_futures_master` | 1 `data/treasury_futures_data.csv` | regenerate | settlement and `contract_risk_YYYY.csv` | 2,942 rows split by year; 4 columns retain explicit proxy lineage | Validate contract identity and DV01 method; retain current file |
 | `swap_rates` | 1 `data/swap_rates.csv` | regenerate | `daily_market_YYYY.csv` | 1,474 dates expand from 5 wide columns to long consumed price rows; returns are later features | Reconcile every nonmissing price; retain current file |
@@ -23,20 +23,18 @@ requires the later consolidation prompt; no rule below schedules it.
 | `signal_wide` | 1 `data/signal_data.csv` | supersede after validation | run `decisions.csv` | 1,471 proxy dates remain reproducible as legacy evidence; 40 columns become market inputs plus narrow decisions | Shared strategy parity must pass; restore/continue current file |
 | `risk_wide` | 1 `data/risk_data.csv` | supersede after validation | run `decisions.csv` and `positions.csv` | 1,471 proxy dates remain reproducible; 72 columns become narrow risk decisions and positions | Risk/sizing parity must pass; restore/continue current file |
 | `legacy_backtests` | 4 `data/swap_arb_backtest_*.csv` files | archive labelled legacy | `data/results/legacy_proxy/<original_filename>` | Preserve exact respective 2,148, 1,471, 756, and 753 rows and original 85/99-column shapes | Replacement reports and hashes must reconcile; recover by moving exact named file back |
-| `r2_inventory` | 1 `r2_objects.csv` | keep immutable source | `data/source/quantt/inventory/r2_objects.csv` | Preserve all 2,117 rows and 9 metadata columns; never use as market input | Validate copied inventory hash if later staged; recover from untouched manifest |
+| `r2_inventory` | 1 `r2_objects.csv` | keep immutable source | Retain in place; no canonical destination | Preserve all 2,117 rows and 9 metadata columns as historical metadata; never use as market input | Verify the existing hash if referenced; recover from untouched manifest |
 
 Coverage total: `1,474 + 13 = 1,487` artifacts. The executable coverage test
 rejects an unknown path and rejects zero or multiple matching rules.
 
 ## Staging order after MG3
 
-1. P22 reads only approved source objects and writes new source/canonical
-   partitions beside manifests.
-2. P23 proves paper telemetry schemas with fake brokers only.
-3. P24 stages every approved conversion under a new repository-local staging
-   directory and compares hashes, row counts, date ranges, keys, and spot
-   values.
-4. The user reviews staging at MG4. Approval can authorize recoverable writes
+1. P23 proves paper telemetry schemas with fake brokers only.
+2. P24 stages every approved FRED/CME/local conversion under a new
+   repository-local staging directory and compares hashes, row counts, date
+   ranges, keys, and spot values.
+3. The user reviews staging at MG4. Approval can authorize recoverable writes
    and moves listed here; it never authorizes deletion of caches or legacy
    results.
 

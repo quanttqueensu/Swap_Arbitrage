@@ -24,6 +24,8 @@ only the complete and naive-complete strategies receive portfolio backtests.
 - `PROMPT_PLAYBOOK.md`: small, copy-paste prompts executed in order.
 - `VERIFICATION_GATES.md`: automated evidence, manual sign-offs, sub-agent
   reviews, and agent promotion rules.
+- `docs/TECHNICAL_DOCUMENTATION.md`: the living onboarding entry point created
+  after the naive backtest and maintained by every later phase.
 
 ## Permanent project constraints
 
@@ -46,9 +48,10 @@ only the complete and naive-complete strategies receive portfolio backtests.
    execution.
 6. All research features must be causal. A decision can use only information
    observable by its decision timestamp.
-7. Quantt/Cloudflare is the preferred historical source. IBKR is the paper
-   execution and later paper-market-data source. Source fallbacks must be
-   labelled and must never silently replace a requested field.
+7. FRED and CME Group are the approved historical research sources. IBKR is
+   the paper execution and later paper-market-data source. Every source must
+   retain explicit provenance, and no fallback may silently replace a requested
+   field. Quantt/Cloudflare is not a planned dependency.
 8. Research-ready and paper-run datasets are narrow CSV files with explicit
    schemas, unique keys, deterministic ordering, units, source identifiers,
    and no duplicate or unused columns.
@@ -68,12 +71,12 @@ not a criticism and not evidence that the strategy succeeds or fails.
 | Runtime | `.venv` points to a missing Windows Store Python; no dependency manifest exists | No test result is currently reproducible from a clean machine |
 | Tests | `tests/test_dv01_pipeline.py` contains 28 research-pipeline tests | The data/risk/backtest path has meaningful tests, but the only agent has none |
 | Agent 0 | Paper-only IBKR implementation exists under `agents/agent_0/` | Preserve its safety controls while establishing a tested baseline |
-| Agent 0 settings | The 2026-07-26 baseline prose incorrectly described code's 5 orders/day as 50/week; runtime was 5/day across five weekdays (25/week), while historical design/plan proposals said 100 and 250/week. On 2026-07-29 the user selected 5/day = 25/week as authoritative. | P02 preserves the characterized runtime, corrects current prose, and retains the other values only in clearly superseded historical records. Verification and final reviews passed; MG1 is approved effective 2026-07-29. |
+| Agent 0 settings | Code and `SETTINGS.md` use 5 orders/day (50/week); an older design says 20/day (100/week); an older plan says 50/day (250/week) | Resolve the authoritative setting explicitly; do not infer it from old prose |
 | Hypothesis | Defines `CMS - CMT`, expected funding spread, excess spread, z-score, DV01 matching, volatility scaling, and maturity ranking | This is the economic target that later agents and full backtests should approach |
 | Current signal | Uses rolling residuals of Eris swap-futures prices against Treasury-futures prices | This is a useful proxy experiment, not yet the stated excess-spread strategy |
 | Maturities | Code supports 2Y and 5Y; hypothesis also names 10Y and 30Y | Treat 10Y/30Y as a later expansion after 2Y/5Y correctness is proven |
 | Historical data | Current top-level derived CSVs range from 4 to 99 columns; cache contains 1,474 Eris files and public-rate/vendor files | Define narrow dataset contracts and separate source, canonical, and result data |
-| Quantt/R2 | `r2_database_names.py` inventories objects to `r2_objects.csv` | Object discovery exists; selective ingestion, schema validation, and lineage do not |
+| Legacy R2 inventory | `r2_database_names.py` inventories objects to `r2_objects.csv` | Retain it only as historical metadata; do not build a Quantt/Cloudflare ingestion dependency |
 | Backtest | Uses contract price changes and supports configurable costs, but both cost defaults are zero | Separate naive fixed assumptions from realistic bid/ask, commissions, roll, and slippage |
 | Treasury master | Public continuous symbols and proxy DV01 are explicitly labelled research limitations | Do not promote realistic results until executable contract and CTD assumptions are validated |
 | Working tree | Existing user changes include `.gitignore`, deletion of `cloudflare_r2_test.py`, and untracked `r2_database_names.py` | Every task must preserve these unrelated changes |
@@ -95,8 +98,8 @@ strategy/
 
 data_pipeline/
   contracts.py              CSV schemas, units, unique keys, and validation
-  quantt_source.py          selective historical reads from Quantt/Cloudflare
-  public_sources.py         explicitly labelled research fallbacks
+  fred_source.py            approved historical rates and publication metadata
+  cme_source.py             approved futures settlements and contract metadata
   ibkr_paper_source.py      paper quote, order, fill, and position capture
   canonicalize.py           source-specific data to canonical narrow CSVs
   manifests.py              row counts, time ranges, hashes, and provenance
@@ -143,10 +146,16 @@ Economic equations --> Required data matrix --> Canonical data
         +------------------+-------------------+
                            v
                     Shared strategy core
+                            |
+                            v
+                     Naive backtest
+                            |
+                            v
+                 Audit and technical docs
                       /             \
                      v               v
-          Complete-strategy      Shared paper-agent
-             backtests              platform
+          Realistic backtest    Shared paper-agent
+                                   platform
                      \               /
                       v             v
                     Evidence and attribution
@@ -156,7 +165,9 @@ The data contracts depend on the equations because fields should exist only
 when the strategy, accounting, risk controls, or audit trail actually consumes
 them. Agents depend on the shared strategy core so later signals are not copied
 into agent-specific files. Both backtests and agents depend on canonical data
-and the same strategy decisions.
+and the same strategy decisions. The naive backtest is the first end-to-end
+checkpoint; its audit and technical-documentation phase must complete before
+realistic execution or the shared paper-agent platform adds complexity.
 
 ## Phase roadmap
 
@@ -189,7 +200,9 @@ resolved without changing Agent 0 behavior accidentally.
 directions, and hand-worked examples before requesting more data or coding new
 signals.
 
-**Execute:** Prompts `P10` and `P11`.
+**Execute:** Prompt `P10`, obtain its provisional equation checkpoint, then
+execute `P11`. `MG2` is requested only after both prompts and any resulting
+equation/source reconciliation are complete.
 
 **Deliverables:**
 
@@ -197,18 +210,51 @@ signals.
   cost-buffer, z-score, entry, exit, and reverse-trade equations.
 - Exact DV01 hedge and futures-basket P&L equations.
 - Quote-convention and sign table for each instrument.
-- Causal decision clock and observation-lag rules.
+- A frozen parameter table covering the funding horizon/weights, z-score
+  window and statistical convention, entry/exit thresholds, stale-data rules,
+  reversal semantics, hedge rounding/tie-breaking, residual-DV01 tolerance,
+  cost-normalization denominator, scaling formulas, ranking/tie-breaking, and
+  the causal decision/fill clock.
 - Two hand-calculated golden examples per direction and one flattening example.
-- Field-by-field source coverage matrix for Quantt, public research sources,
-  and IBKR paper data.
+- Machine-readable golden fixtures and passing specification-validation tests;
+  Phase 1 must not leave intentionally failing strategy-implementation tests.
+- Field-by-field source coverage matrix for FRED, CME Group, and IBKR paper
+  data.
 - Explicit classification of every input as observed, derived, assumption, or
   unavailable.
+- Effective date, observation time, publication time, revision/vintage policy,
+  availability lag, timezone, and stale threshold for every consumed field.
+- A frozen `strategy_spec_version` referenced by both Phase 1 verification
+  records.
 
-**Manual gate:** `MG2`. The user must approve equations, signs, units, and
-examples before implementation.
+The initial executable-validation scope is 2Y and 5Y using the exact approved
+Eris and Treasury instruments. Phase 1 records 10Y and 30Y source and
+instrument candidates, but they are not required to pass executable golden
+tests and cannot enter the supported universe before `P35`.
 
-**Exit criteria:** Two independent reviewers can reproduce every hand
-calculation and agree which trade direction each example produces.
+**Execution sequence:**
+
+1. Confirm `MG1` is signed; otherwise stop without beginning `P10`.
+2. Freeze the 2Y/5Y instrument mappings, quote conventions, and causal
+   observation/decision/fill clock.
+3. Freeze the equations and complete parameter table.
+4. Create the machine-readable golden cases and passing specification tests.
+5. Complete two independent numerical/sign reviews plus the causality review,
+   then request `P10-EQ`.
+6. Execute `P11` and review the source-coverage matrix.
+7. Reconcile any source-driven changes through `P10` and `P10-EQ`, then request
+   final `MG2`.
+
+**Manual gate:** `P10-EQ` is a provisional checkpoint for the equation package,
+not a project gate. `MG2` is the final Phase 1 gate; the user must approve the
+reconciled equations, signs, units, parameters, examples, timestamp rules, and
+source coverage before implementation.
+
+**Exit criteria:** Two independent numerical/sign reviewers reproduce every
+hand calculation and agree which trade direction each example produces; a
+separate causality reviewer approves timestamps and lags; every consumed field
+has source coverage or an explicit unavailable/proxy classification; and the
+repository's approved test command remains green.
 
 ### Phase 2: Inventory and contract the data
 
@@ -233,16 +279,19 @@ validated before moving existing files.
 **Exit criteria:** Every canonical column has one reason to exist, one unit, one
 source or derivation, one unique key, and at least one named consumer.
 
-### Phase 3: Build canonical Quantt and IBKR-paper ingestion
+### Phase 3: Build canonical data and IBKR-paper ingestion
 
-**Purpose:** Produce narrow, validated CSVs through source adapters without
-leaking source-specific details into strategy code.
+**Purpose:** Produce narrow, validated CSVs from the approved FRED, CME Group,
+and IBKR inputs without leaking source-specific details into strategy code.
 
-**Execute:** Prompts `P22`, `P23`, and `P24`.
+**Execute:** Prompts `P23` and `P24`. Prompt `P22` is retired; no
+Quantt/Cloudflare ingestion integration will be built.
 
 **Deliverables:**
 
-- Selective, read-only Quantt/Cloudflare historical ingestion.
+- Validated use of the already-approved FRED and CME Group historical inputs;
+  any future source gap requires a separate reviewed change rather than a
+  Cloudflare fallback.
 - IBKR paper quote/order/fill/position recorder with paper-account enforcement.
 - Deterministic canonicalization and manifest generation.
 - Schema, uniqueness, ordering, timezone, unit, coverage, and freshness checks.
@@ -302,7 +351,98 @@ bid/ask, commission, slippage, and funding assumptions.
 golden scenarios; results are labelled “naive” and never presented as
 executable evidence.
 
-### Phase 6: Build and challenge the realistic complete-strategy backtest
+### Phase 6: Audit, simplify, and document the technical foundation
+
+**Purpose:** Use the working naive backtest as the first end-to-end checkpoint
+for auditing the entire project, resolving avoidable complexity and mess, and
+creating one newcomer-oriented technical reference before realistic execution
+and paper-agent work add more surface area.
+
+**Execute:** Prompt `P40A`, obtain the authorization checkpoint in `MG6A`, then
+execute `P40B` and complete `MG6A`.
+
+**Audit scope:**
+
+- Review source code, tests, configuration, schemas, scripts, documentation,
+  package/dependency requirements, and the intended repository structure.
+- Trace the canonical data, strategy, risk, accounting, backtest, and planned
+  IBKR-paper paths end to end.
+- Check API requirements and common complex syntax against the pinned or
+  installed version and primary vendor documentation. This includes
+  FRED and CME Group source access, IBKR paper connection and account
+  enforcement, contract qualification, requests, callbacks, order lifecycle,
+  reconciliation, and failure handling.
+- Recheck mathematical components against `PROJECT_CONTRACTS.md`, approved
+  golden examples, units, signs, timing, and accounting identities.
+- Inspect how a contributor installs dependencies, runs tests, builds
+  canonical inputs, runs backtests, interprets outputs, and diagnoses common
+  failures.
+- Exclude `.git/`, virtual environments, worktrees, generated caches, vendor
+  data, and immutable result artifacts from line-by-line cleanup. Their
+  interfaces, manifests, retention rules, and placement remain in scope.
+
+**Deliverables:**
+
+- `docs/audits/technical-foundation-audit.md`, containing a repository map and
+  a ranked findings ledger. Every finding records an ID, category, severity,
+  exact evidence, impact, recommended action, validation method, and
+  disposition.
+- Findings covering correctness or ambiguity, clarification, simplicity,
+  measured optimization, project structure, dependencies and APIs, technical
+  specifications, complex syntax/conventions, mathematics, testing, and
+  documentation. Each material ambiguity records the exact question,
+  competing interpretations, recommended decision, and affected behavior; it
+  is not silently resolved.
+- A proposed target tree and exact lists of structural rewrites and deletion
+  candidates, including reason, affected consumers, risk, recovery method, and
+  required verification.
+- Low-risk behavior-preserving cleanup: useful comments that explain
+  non-obvious reasons or invariants, terminology and documentation corrections,
+  naming cleanup, and small simplifications. Do not add comments that merely
+  restate code.
+- Only user-approved deletions and structural rewrites. Characterization tests
+  must protect existing behavior before a behavior-sensitive rewrite.
+- Performance changes supported by a reproducible benchmark or complexity
+  measurement; speculative optimization is recorded and deferred.
+- `docs/TECHNICAL_DOCUMENTATION.md`, written in layered language for a capable
+  new contributor with no repository or swap-arbitrage context. It is the
+  single onboarding entry point and summarizes:
+  - project purpose, scope, vocabulary, and permanent paper-only boundary;
+  - architecture, directory map, component responsibilities, and data flow;
+  - environment setup, dependencies, secrets, API requirements, and source
+    versions;
+  - canonical data contracts, provenance, validation, and generated artifacts;
+  - strategy, risk, cost, portfolio, and backtest execution flows;
+  - mathematical notation, equations, units, signs, timing, assumptions, and
+    links to the authoritative contracts and golden examples;
+  - verified commands for tests, data refresh, naive and later realistic
+    backtests, and paper-agent dry runs as those commands become available;
+  - common IBKR paper call patterns, lifecycle rules, safety constraints,
+    failure modes, troubleshooting, and a glossary.
+- A documentation-maintenance rule: every later phase updates the aggregate
+  file when it changes architecture, interfaces, dependencies, APIs,
+  specifications, equations, commands, or operational behavior. Volatile API
+  facts record the relevant package/API version, primary source, and
+  last-verified date.
+
+**Manual gate:** `MG6A` has two checkpoints. After `P40A`, the user reviews the
+ranked findings and explicitly approves, rejects, or defers every proposed
+deletion and structural rewrite and answers or defers each material
+clarification question. That authorization permits `P40B`; it does not
+authorize unlisted structural work or inferred product decisions. After
+`P40B`, the user reviews the actual cleanup diff, dispositions, verification
+evidence, and aggregate technical documentation before the gate is marked
+complete.
+
+**Exit criteria:** Every audit finding is fixed, accepted, or deferred with a
+reason; no unapproved deletion or structural rewrite occurred; behavior and
+paper-only protections remain intact; focused and full checks pass; every
+documented command available at this phase has been executed successfully; API
+and mathematical claims trace to an approved source; and a newcomer can follow
+`docs/TECHNICAL_DOCUMENTATION.md` from setup through a verified naive backtest
+without relying on historical chat.
+
+### Phase 7: Build and challenge the realistic complete-strategy backtest
 
 **Purpose:** Replace fixed assumptions with time-varying observable bid/ask,
 fees, slippage, funding, contract rolls, and liquidity where validated data
@@ -327,7 +467,7 @@ exists.
 limitations are explicit. A positive result remains a research finding, not
 proof of alpha.
 
-### Phase 7: Create a reusable paper-agent platform and freeze Agent 0
+### Phase 8: Create a reusable paper-agent platform and freeze Agent 0
 
 **Purpose:** Separate common paper execution, telemetry, and safety from agent
 policy, then preserve Agent 0 as the random control.
@@ -351,7 +491,7 @@ paper run; no agent prompt submits orders automatically during development.
 every decision is attributable to one run, and a repeated random seed produces
 the same planned decisions.
 
-### Phase 8: Run the incremental agent ladder
+### Phase 9: Run the incremental agent ladder
 
 **Purpose:** Attribute changes in paper behavior and outcomes to one new
 component at a time.
@@ -385,7 +525,7 @@ completed run manifest, reviewed output, and signed promotion record.
 **Exit criteria:** Each agent has reproducible code, config, tests, manifests,
 and an evidence report comparing it with its immediate predecessor.
 
-### Phase 9: Evaluate incremental evidence and reconcile research tracks
+### Phase 10: Evaluate incremental evidence and reconcile research tracks
 
 **Purpose:** Decide what has been learned without conflating backtest evidence,
 paper fills, execution quality, and random chance.
@@ -408,7 +548,7 @@ paper fills, execution quality, and random chance.
 **Exit criteria:** The final research summary can be reproduced from immutable
 run manifests and does not claim more than the evidence supports.
 
-### Phase 10: Consolidate the repository
+### Phase 11: Consolidate the repository
 
 **Purpose:** Remove superseded code and artifacts only after the replacement
 path is accepted.
@@ -427,7 +567,8 @@ path is accepted.
 **Manual gate:** Final repository review before deletion or archival.
 
 **Exit criteria:** A new contributor can reproduce the research workflow from
-the four master documents without reading historical chat.
+`docs/TECHNICAL_DOCUMENTATION.md` and its linked authoritative master
+documents without reading historical chat.
 
 ## Project-level definition of done
 
@@ -436,17 +577,20 @@ The project has reached its intended outcome when:
 1. Every pathway is permanently paper-only.
 2. The economic hypothesis and executable implementation have approved
    equations, units, signs, and causal timestamps.
-3. Quantt and IBKR paper adapters produce narrow, validated, provenance-rich
-   CSVs.
+3. FRED and CME Group inputs plus the IBKR paper recorder produce narrow,
+   validated, provenance-rich CSVs.
 4. The same pure strategy core is used by complete-strategy backtests and later
    paper agents.
 5. Naive and realistic complete-strategy backtests reconcile and report
    limitations.
-6. Agent 0 through the final hypothesis agent each add one auditable behavior.
-7. Every paper run has immutable configuration, inputs, decisions, orders,
+6. The post-naive whole-project audit has no unresolved high-severity finding,
+   every cleanup action has an explicit disposition, and the living aggregate
+   technical documentation is current and reproducible.
+7. Agent 0 through the final hypothesis agent each add one auditable behavior.
+8. Every paper run has immutable configuration, inputs, decisions, orders,
    fills, positions, errors, and summary evidence.
-8. Manual and sub-agent reviews are recorded at crucial gates.
-9. Results distinguish operational reliability, risk reduction, execution
+9. Manual and sub-agent reviews are recorded at crucial gates.
+10. Results distinguish operational reliability, risk reduction, execution
    quality, and genuine incremental signal evidence.
-10. The final conclusion may be positive, negative, or inconclusive; all three
+11. The final conclusion may be positive, negative, or inconclusive; all three
     are valid outcomes when supported by reproducible evidence.

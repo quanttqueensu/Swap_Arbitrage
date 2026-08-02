@@ -128,17 +128,17 @@ def _schema(
 
 SCHEMAS = {
     "historical_rates": _schema(
-        "historical_rates", "data/source/quantt/rates/rates_YYYY.csv",
+        "historical_rates", "data/source/fred/rates/rates_YYYY.csv",
         ("observation_date|date|date", "source|string|source_id", "series_id|string|series_id", "maturity|string|maturity", "rate_bps|decimal|basis_points"),
         ("observation_date", "source", "series_id", "maturity"),
         ("observation_date", "source", "series_id", "maturity"), "daily by year", "immutable source capture",
-        ("data_pipeline.quantt_source", "data_pipeline.canonicalize"),
+        ("data_pipeline.fred_source", "data_pipeline.canonicalize"),
     ),
     "historical_futures_settlements": _schema(
-        "historical_futures_settlements", "data/source/quantt/futures/futures_settlements_YYYY.csv",
+        "historical_futures_settlements", "data/source/cme/futures/futures_settlements_YYYY.csv",
         ("observation_date|date|date", "source|string|source_id", "instrument_id|string|instrument_id", "settlement_price|decimal|price_points", "dv01_usd_per_bp|decimal|usd_per_bp|nullable"),
         ("observation_date", "source", "instrument_id"), ("observation_date", "source", "instrument_id"), "daily by year", "immutable source capture",
-        ("data_pipeline.quantt_source", "data_pipeline.canonicalize"), ("positive_dv01_if_present",),
+        ("data_pipeline.cme_source", "data_pipeline.canonicalize"), ("positive_dv01_if_present",),
     ),
     "contract_reference": _schema(
         "contract_reference", "data/canonical/reference/contracts.csv",
@@ -248,17 +248,17 @@ SCHEMAS = {
 
 
 MIGRATION_RULES = (
-    MigrationRule("eris_vendor_cache", r"data/cache/eris_sofr_settlements_v3/[^/]+\.csv", "keep immutable source", "data/source/quantt/futures/futures_settlements_YYYY.csv", "one output row per unique approved instrument/date key; source rows remain unchanged", "64 vendor columns to 4-5 consumed source columns", "use untouched cache file and its P20 SHA-256", f"Symbol matches {APPROVED_ERIS_SYMBOL_PATTERN}; filename matches {ERIS_SETTLEMENT_FILENAME_PATTERN}; EvaluationDate equals the parsed YYYYMMDD date; block the complete file on a duplicate (EvaluationDate,Symbol) key", "for every file, output keys equal exactly the unique allowed (EvaluationDate,Symbol) keys and output count equals that key-set size"),
-    MigrationRule("cme_swap_master", r"data/cme_swap_data\.csv", "regenerate", "data/source/quantt/futures/futures_settlements_YYYY.csv and data/canonical/reference/contract_risk_YYYY.csv", "2,948 source rows split by year without silent loss", "4 current columns mapped to settlement and risk contracts", "retain current file until staged hashes and spot checks pass"),
-    MigrationRule("treasury_futures_master", r"data/treasury_futures_data\.csv", "regenerate", "data/source/quantt/futures/futures_settlements_YYYY.csv and data/canonical/reference/contract_risk_YYYY.csv", "2,942 proxy rows retained with explicit proxy lineage", "4 current columns mapped to settlement and risk contracts", "retain current file until staged hashes and spot checks pass"),
+    MigrationRule("eris_vendor_cache", r"data/cache/eris_sofr_settlements_v3/[^/]+\.csv", "keep immutable source", "data/source/cme/futures/futures_settlements_YYYY.csv", "one output row per unique approved instrument/date key; source rows remain unchanged", "64 vendor columns to 4-5 consumed source columns", "use untouched cache file and its P20 SHA-256", f"Symbol matches {APPROVED_ERIS_SYMBOL_PATTERN}; filename matches {ERIS_SETTLEMENT_FILENAME_PATTERN}; EvaluationDate equals the parsed YYYYMMDD date; block the complete file on a duplicate (EvaluationDate,Symbol) key", "for every file, output keys equal exactly the unique allowed (EvaluationDate,Symbol) keys and output count equals that key-set size"),
+    MigrationRule("cme_swap_master", r"data/cme_swap_data\.csv", "regenerate", "data/source/cme/futures/futures_settlements_YYYY.csv and data/canonical/reference/contract_risk_YYYY.csv", "2,948 source rows split by year without silent loss", "4 current columns mapped to settlement and risk contracts", "retain current file until staged hashes and spot checks pass"),
+    MigrationRule("treasury_futures_master", r"data/treasury_futures_data\.csv", "regenerate", "data/source/cme/futures/futures_settlements_YYYY.csv and data/canonical/reference/contract_risk_YYYY.csv", "2,942 proxy rows retained with explicit proxy lineage", "4 current columns mapped to settlement and risk contracts", "retain current file until staged hashes and spot checks pass"),
     MigrationRule("swap_rates", r"data/swap_rates\.csv", "regenerate", "data/canonical/market/daily_market_YYYY.csv", "1,474 dates expand to long consumed price observations", "5 wide columns become long market rows; returns are recomputed features", "retain current file until staged row reconciliation passes"),
     MigrationRule("treasury_futures", r"data/treasury_futures\.csv", "regenerate", "data/canonical/market/daily_market_YYYY.csv", "1,471 dates expand to long proxy price observations", "5 wide columns become long market rows; returns are recomputed features", "retain current file until staged row reconciliation passes"),
-    MigrationRule("treasury_rates", r"data/treasury_rates\.csv", "regenerate", "data/source/quantt/rates/rates_YYYY.csv and data/canonical/market/daily_market_YYYY.csv", "2,143 dates expand to one long row per present consumed series", "16 wide columns become 5-column source and 10-column canonical rows", "retain current file until staged row and value spot checks pass"),
+    MigrationRule("treasury_rates", r"data/treasury_rates\.csv", "regenerate", "data/source/fred/rates/rates_YYYY.csv and data/canonical/market/daily_market_YYYY.csv", "2,143 dates expand to one long row per present consumed series", "16 wide columns become 5-column source and 10-column canonical rows", "retain current file until staged row and value spot checks pass"),
     MigrationRule("raw_wide", r"data/raw_price_data\.csv", "supersede after validation", "data/canonical/market/daily_market_YYYY.csv", "2,154 dates reconstructed by keyed long observations", "24 copied columns replaced by narrow long rows", "restore or continue using untouched current file"),
     MigrationRule("signal_wide", r"data/signal_data\.csv", "supersede after validation", "data/results/backtests/run_id/decisions.csv", "1,471 historical proxy dates remain reproducible as legacy evidence", "40 copied/feature columns replaced by market inputs plus decision rows", "restore or continue using untouched current file"),
     MigrationRule("risk_wide", r"data/risk_data\.csv", "supersede after validation", "data/results/backtests/run_id/positions.csv and decisions.csv", "1,471 historical proxy dates remain reproducible as legacy evidence", "72 copied/risk columns replaced by narrow decision and position rows", "restore or continue using untouched current file"),
     MigrationRule("legacy_backtests", r"data/swap_arb_backtest_.+\.csv", "archive labelled legacy", "data/results/legacy_proxy/<original_filename>", "preserve each original row count: 2,148; 1,471; 756; or 753", "retain original 85/99-column shape under explicit legacy-proxy label", "move archived file back by exact original name; P20 hash proves identity"),
-    MigrationRule("r2_inventory", r"r2_objects\.csv", "keep immutable source", "data/source/quantt/inventory/r2_objects.csv", "preserve all 2,117 metadata rows", "retain 9 inventory columns; never treat as market input", "use untouched top-level manifest and its P20 SHA-256"),
+    MigrationRule("r2_inventory", r"r2_objects\.csv", "keep immutable source", "r2_objects.csv (retained in place; excluded from canonical inputs)", "preserve all 2,117 metadata rows", "retain 9 inventory columns; never treat as market input", "use untouched top-level manifest and its P20 SHA-256"),
 )
 
 

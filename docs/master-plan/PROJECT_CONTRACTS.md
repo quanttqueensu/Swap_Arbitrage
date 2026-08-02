@@ -26,6 +26,11 @@ file responsibilities, data schemas, and invariants used by every phase in
   hypothesis exactly. Proxy results must retain the word “proxy.”
 - **Decision timestamp:** The instant at which all features used by a decision
   are observable. An order cannot fill before this timestamp.
+- **Strategy specification version:** The immutable
+  `strategy_spec_version` assigned to one MG2-approved equation, parameter,
+  timestamp, source-interpretation, and golden-fixture package. Downstream
+  configurations and run manifests copy this identifier into
+  `strategy_version`.
 
 ## Units and sign conventions
 
@@ -118,12 +123,16 @@ C^{swap,d}_{m,t}
 + C^{roll}_{m,t}
 + C^{financing}_{m,t}
 }{
-|DV01^{target}_{m,t}|
+|DV01^{cost\ base}_{m,t}|
 }
 \]
 
 where \(d \in \{-1,+1\}\) is trade direction and numerator terms are US
 dollars. Because DV01 is dollars per basis point, the quotient is basis points.
+The Phase 1 parameter table freezes whether \(DV01^{cost\ base}\) is target
+swap-leg DV01 or the actual rounded swap-leg DV01, and the same convention
+must be used in eligibility, golden examples, backtests, and paper decisions.
+Nonpositive cost-base DV01 blocks the calculation.
 Naive mode uses frozen constants. Realistic mode uses observed bid/ask and
 approved fee/funding inputs. \(C^{financing}\) includes only carrying costs not
 already represented in the expected floating funding spread; the same cost
@@ -171,6 +180,36 @@ The inequalities above are the economic signal convention. Implementation
 cannot proceed until the economic direction and each quoted instrument
 direction agree in golden tests.
 
+### Phase 1 specification freeze
+
+`strategy-equations.md` and its machine-readable golden fixtures share one
+immutable `strategy_spec_version`. Before final MG2 approval they freeze:
+
+1. The 2Y and 5Y economic-to-executable instrument mappings, quote conventions,
+   multipliers, rate-sensitivity signs, and roll interpretation. The 10Y and
+   30Y mappings remain candidates until P35 approves their complete coverage.
+2. Funding forecast horizon, weights, estimator, warm-up, missing-value rule,
+   and decision-time availability.
+3. Z-score lookback, minimum observations, inclusion boundary, missing-value
+   rule, standard-deviation convention, zero-variance behavior, and exact
+   entry/exit inequalities.
+4. Economic entry buffers, stale-data rules, exit conditions, direct-reversal
+   ordering, and the distinction between risk flattening and signal exit.
+5. Signal observation time, decision time, earliest eligible fill time,
+   timezone, holiday/calendar rule, and source publication/revision lags.
+6. Integer hedge candidate search, rounding convention, deterministic
+   tie-breaking, residual-DV01 tolerance, and invalid/zero-DV01 behavior.
+7. Cost-base DV01 convention, one-way versus round-trip cost scope, entry/exit
+   and reversal turnover, financing boundaries, and missing-cost behavior.
+8. Volatility, signal-strength, and liquidity scale formulas, including
+   lookbacks, bounds, warm-up, and missing-input behavior.
+9. Cross-maturity ranking score, eligibility ordering, capacity behavior, and
+   deterministic tie-breaking.
+
+No later implementation prompt may choose one of these values or conventions
+implicitly. A change follows the change-control contract and creates a new
+`strategy_spec_version`.
+
 ## Executable futures basket equations
 
 The economic signal and the executable hedge are separate objects. Do not
@@ -205,10 +244,10 @@ DV01^{net} = q_S \delta_S + q_T \delta_T
 DV01^{gross} = |q_S \delta_S| + |q_T \delta_T|
 \]
 
-The rounding policy chooses the integer pair that minimizes
-\(|DV01^{net}|\) while respecting approved contract, gross-DV01, liquidity, and
-margin limits. A trade is blocked when residual net DV01 exceeds its approved
-limit.
+The Phase 1 rounding policy defines a bounded candidate search and deterministic
+tie-breaking for the integer pair that minimizes \(|DV01^{net}|\) while
+respecting approved contract, gross-DV01, liquidity, and margin limits. A trade
+is blocked when residual net DV01 exceeds its approved limit.
 
 Basket mark-to-market is:
 
@@ -355,6 +394,9 @@ them into paper orders. Strategy modules do not know which adapter is active.
   and route paper orders.
 - `agents/agent_N/policy.py`: only the incremental behavior specific to that
   agent.
+- `docs/TECHNICAL_DOCUMENTATION.md`: living newcomer-oriented summary and
+  verified runbook; it links to, but never overrides, the authoritative
+  equations, schemas, gates, and prompt contracts.
 
 ## Canonical directory and CSV contracts
 
@@ -366,7 +408,7 @@ no implicit index.
 ### Historical rates
 
 Path:
-`data/source/quantt/rates/rates_YYYY.csv`
+`data/source/fred/rates/rates_YYYY.csv`
 
 Columns:
 
@@ -380,7 +422,7 @@ Unique key:
 ### Historical futures settlements
 
 Path:
-`data/source/quantt/futures/futures_settlements_YYYY.csv`
+`data/source/cme/futures/futures_settlements_YYYY.csv`
 
 Columns:
 
@@ -587,6 +629,66 @@ Every writer validates before replacing its output:
 - Reruns are idempotent with respect to deterministic order references.
 - Emergency and scheduled flattening are explicit operations and are tested
   with fakes before a paper run.
+
+## Technical-audit and documentation contract
+
+The post-naive audit is a full-project review of maintained source code, tests,
+configuration, schemas, scripts, dependencies, APIs, specifications,
+mathematics, structure, and documentation. Generated caches, vendor data,
+virtual environments, worktrees, and immutable run artifacts are not
+line-by-line cleanup targets, but their interfaces, manifests, retention, and
+placement remain in scope.
+
+The audit ledger gives every finding:
+
+1. A stable ID, category, and severity.
+2. Exact file/line, command, or primary-source evidence.
+3. Impact and the smallest recommended action.
+4. A validation method and recovery method when deletion is proposed.
+5. A disposition of safe automatic cleanup, approval-required deletion or
+   structural rewrite, documentation-only, fixed, accepted, rejected, or
+   deferred with reason.
+
+A material ambiguity also records its exact clarification question, competing
+interpretations, recommended answer, affected behavior, and consequence of
+deferral. The audit does not silently choose an interpretation.
+
+No deletion or structural rewrite occurs before its exact action is approved
+at `MG6A`. Behavior-sensitive rewrites begin with characterization or failing
+tests. Comments explain non-obvious intent, invariants, units, timing, safety,
+or API constraints and do not narrate obvious syntax. A performance
+optimization requires a reproducible before/after benchmark or complexity
+measurement; unmeasured ideas remain labelled speculative.
+
+`docs/TECHNICAL_DOCUMENTATION.md` is the single onboarding entry point for a
+technically capable contributor who has no prior repository or
+swap-arbitrage-domain context. It uses a quick-start-first, layered structure
+and summarizes:
+
+- purpose, vocabulary, scope, and the permanent paper-only boundary;
+- architecture, directory map, component ownership, and end-to-end data flow;
+- environment, dependencies, secrets, APIs, and source versions;
+- canonical data, provenance, validation, and generated artifacts;
+- strategy, risk, cost, portfolio, backtest, and paper-agent flows;
+- equations, notation, units, signs, timestamps, assumptions, and links to
+  authoritative contracts and golden examples;
+- verified commands, outputs, failure modes, troubleshooting, and a glossary;
+  and
+- common IBKR paper call patterns, order lifecycle, reconciliation, and safety
+  rules.
+
+The aggregate document does not redefine an equation, schema, safety rule, or
+gate. It names and links the authoritative source. Every command described as
+currently available is executed successfully during documentation
+verification; planned commands are clearly marked unavailable and are not
+presented as runnable. Volatile API facts include the relevant package/API
+version, primary source, and last-verified date. Secrets, account identifiers,
+and production-routing examples never appear.
+
+Every later phase updates the aggregate document in the same change whenever
+it modifies architecture, file responsibility, dependencies, APIs,
+specifications, equations, schemas, commands, outputs, or operating
+procedures.
 
 ## Change-control contract
 

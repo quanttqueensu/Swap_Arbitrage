@@ -23,9 +23,9 @@ values, key, ordering, and the table-local rules below. Cross-table contract
 validity (an instrument's validity interval covering an observation) and the
 decision cutoff (no source observation or publication after the consuming
 decision) require reference/snapshot context and are explicitly deferred to
-P22-P24 writer/integration validators. Those later writers must enforce them
-before atomic replacement. Manifest hashes and coverage are also required at
-P22-P24.
+P23-P24 recorder/writer/integration validators. Those later writers must
+enforce them before atomic replacement. Manifest hashes and coverage are also
+required at P23-P24.
 Secrets, credentials, account identifiers, and unused vendor columns are
 forbidden.
 
@@ -46,26 +46,26 @@ complete executable canonical-column mapping; P20's
 
 ### `historical_rates` 1.0.0
 
-- Path: `data/source/quantt/rates/rates_YYYY.csv`
+- Path: `data/source/fred/rates/rates_YYYY.csv`
 - Header: `observation_date,source,series_id,maturity,rate_bps`
 - Types/units: `date/date`, `string/source_id`, `string/series_id`,
   `string/maturity`, `decimal/basis_points`
 - Key and ordering: `observation_date,source,series_id,maturity`
 - Frequency: daily by year
 - Retention: immutable source capture
-- Consumers: Quantt adapter and canonicalizer
+- Consumers: FRED adapter and canonicalizer
 - Sample: `2026-07-30,UST,US-CMT,2Y,388.5`
 
 ### `historical_futures_settlements` 1.0.0
 
-- Path: `data/source/quantt/futures/futures_settlements_YYYY.csv`
+- Path: `data/source/cme/futures/futures_settlements_YYYY.csv`
 - Header: `observation_date,source,instrument_id,settlement_price,dv01_usd_per_bp`
 - Types/units: `date/date`, `string/source_id`, `string/instrument_id`,
   `decimal/price_points`, nullable `decimal/usd_per_bp`
 - Key and ordering: `observation_date,source,instrument_id`
 - Frequency: daily by year
 - Retention: immutable source capture
-- Consumers: Quantt adapter and canonicalizer
+- Consumers: CME Group adapter and canonicalizer
 - Sample: `2026-07-30,ERIS,ERIS-YIT-202609,99.25,39.8`
 - DV01 rule: DV01 may be blank and supplied by `contract_risk`; it must not be
   duplicated in both schemas for the same instrument/date. When populated it
@@ -281,5 +281,5 @@ This freeze defines shapes and validation, not source availability. Exact 2Y
 and 5Y CMS, collateral-consistent repo, the production business calendar,
 forward funding, and validated 10Y/30Y inputs remain unavailable. Existing
 continuous Treasury futures and EFFR-SOFR remain explicitly labelled proxies.
-P22-P24 must prove source meaning, row conversions, atomic writes, manifests,
+P23-P24 must prove source meaning, row conversions, atomic writes, manifests,
 and deterministic staging before these schemas contain canonical project data.

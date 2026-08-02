@@ -31,6 +31,10 @@ Every worker must:
   read-only source check;
 - never submit an IBKR order during development or automated tests;
 - prefer pure, focused functions and existing dependencies;
+- after P40B creates `docs/TECHNICAL_DOCUMENTATION.md`, update it in the same
+  change whenever the prompt changes architecture, interfaces, dependencies,
+  APIs, specifications, equations, schemas, commands, outputs, or operations,
+  and rerun every affected documented command;
 - run focused tests, the repository suite, self-checks, and `git diff --check`;
 - request a requirements review and then a code/data-quality review from fresh
   sub-agents when multi-agent support is available;
@@ -124,14 +128,6 @@ absent. Run focused agent tests, the full suite, compilation, and diff checks.
 Stop at MG1 with no broker connection and no order submission.
 ```
 
-**Resolution note (2026-07-29):** Task 1 established that the implementation
-already generated five orders on each of five weekdays (25/week). The user
-selected that existing 5/day = 25/week behavior as authoritative and gave
-MG1 approval. Task 2 aligned current prose/tests and labelled the 100/250
-proposals as superseded history without changing runtime behavior. Task 2
-verification and all required reviews passed; MG1 is approved effective
-2026-07-29. P10 remains unstarted.
-
 ## Phase 1 prompts
 
 ### P10 — Validate the economic and executable equations
@@ -145,52 +141,89 @@ definitions, roll behavior, and the economic swap-spread interpretation against
 authoritative primary sources for the exact Eris and Treasury instruments.
 Clearly separate the cash-market hypothesis CMS-CMT from an executable futures
 basket. Do not claim that subtracting futures prices measures a swap spread.
+Fully validate the 2Y and 5Y executable mappings first. Record 10Y and 30Y
+instrument candidates and limitations, but do not require their executable
+golden tests or call them supported before P35.
 
 Create docs/research/strategy-equations.md containing:
+- a frozen strategy_spec_version and a parameter table;
 - every equation with units and observation timestamps;
 - traditional and reverse leg-direction tables;
 - exact conversion between source quotes, rate/spread values, contract P&L,
   costs, and DV01-neutral quantities;
 - the approved causal funding expectation estimator;
 - the approved decision interval used by Agent 2's 5 bp trigger;
+- the funding horizon and weights; z-score lookback, minimum observations,
+  missing-observation rule, standard-deviation convention, and entry/exit
+  thresholds; economic entry buffer; stale-data rules; exit and direct-reversal
+  inequalities; signal decision time and earliest permissible fill time;
+  integer hedge search range, rounding and deterministic tie-breaking;
+  residual-DV01 tolerance; target-versus-rounded DV01 cost denominator;
+  volatility, signal-strength, and liquidity scale formulas; and
+  cross-maturity ranking score and deterministic tie-breaking;
 - two numerical hand-worked examples in each direction;
 - one entry, exit, reversal, roll, and risk-flatten example;
-- a list of unavailable inputs and the labels required for proxies.
+- a list of unavailable inputs and the labels required for proxies; and
+- primary-source citations with URL, document title/version or publication
+  date when available, and access date.
 
-Add tests containing the numerical examples before implementing any new
-strategy code. Ask a financial-equations reviewer to recompute every example
-independently and a causality reviewer to inspect timestamps and lags. Stop at
-MG2 for user approval of equations, signs, units, estimator, and examples. Do
-not implement signals in this prompt.
+Store the numerical cases in
+tests/fixtures/strategy_equation_cases.json. Add
+tests/test_strategy_equation_spec.py to validate fixture completeness, units,
+directions, arithmetic, symmetry, turnover, timestamps, and the parameter-table
+reference without importing production strategy code. These specification
+tests must pass; do not commit intentionally failing implementation tests
+between Phase 1 and P31. P31 will load the same fixtures when it writes the
+failing production-function tests.
+
+Ask two independent financial-equations/sign reviewers to recompute every
+example and a separate causality reviewer to inspect timestamps, publication
+lags, revisions, and earliest fill times. Resolve their findings and stop at
+the provisional P10-EQ checkpoint for user approval of the equation package.
+P10-EQ authorizes P11 only; it is not MG2 and does not authorize strategy
+implementation. Do not implement signals in this prompt.
 ```
 
 ### P11 — Map each required field to an approved source
 
 ```text
-Execute only master-plan prompt P11 after the P10 equations are approved.
+Execute only master-plan prompt P11 after the provisional P10-EQ checkpoint is
+approved.
 
 From the approved equations, build
 docs/research/data-source-coverage-matrix.md. Include one row per required
-field: semantic name, unit, frequency, decision-time availability, history
-needed, primary Quantt object/dataset, IBKR paper field when applicable,
-public fallback, observed/derived/assumed/unavailable classification, license
-or access restriction, validation rule, and exact strategy/accounting consumer.
+field: semantic name, unit, frequency, effective date, source observation time,
+publication time, decision-time availability, availability lag, timezone,
+revision/vintage policy, stale threshold, history needed, primary FRED series
+or CME Group dataset, IBKR paper field when applicable, approved fallback,
+observed/derived/assumed/unavailable classification, proxy label, license or
+access restriction, validation rule, and exact strategy/accounting consumer.
 
-Use the existing R2 inventory only to find candidates. Any Cloudflare call must
-be read-only and list metadata or inspect a narrowly selected sample; never
-download the full bucket. Do not expose credentials or unrelated object names
-in committed output. Use authoritative source documentation for field meaning.
+Treat the existing R2 inventory as historical metadata only. Do not call
+Cloudflare or plan a Quantt/R2 dependency. Use authoritative FRED, CME Group,
+and IBKR documentation for field meaning, publication timing, revisions,
+contract conventions, and access limits.
 
-Explicitly resolve whether Quantt supplies maturity-matched swap rates,
-Treasury yields, repo, bid/ask, contract metadata, and DV01. Mark EFFR-SOFR,
-continuous futures roots, fixed hedge ratios, and price regressions as proxies
-where appropriate.
+Explicitly resolve whether the approved FRED, CME Group, and IBKR inputs supply
+maturity-matched swap rates, Treasury yields, repo, bid/ask, contract metadata,
+and DV01. Mark EFFR-SOFR, continuous futures roots, fixed hedge ratios, and
+price regressions as proxies where appropriate. Fully assess 2Y and 5Y. Record
+10Y and 30Y as candidates
+with exact blockers until P35; their absence does not invalidate a complete
+2Y/5Y Phase 1 package.
 
 Ask a data-source reviewer to verify sample fields against source docs and a
 strategy reviewer to prove every equation input has a matrix row. Stop at MG2
-if any source choice changes an approved equation; otherwise report which
-complete-strategy tests are possible with current data and which remain
-blocked.
+if the matrix and equations remain consistent. If a source fact changes an
+equation, parameter, sign, unit, timestamp rule, or proxy interpretation,
+return to P10: update the equation document, parameter table, machine-readable
+fixtures, and passing specification tests; repeat the affected independent
+reviews and obtain a new P10-EQ checkpoint before completing P11.
+
+Request final MG2 only when the reconciled equation package and source matrix
+share the same strategy_spec_version. Report which complete-strategy tests are
+possible with current data and which remain blocked. MG2 approval authorizes
+Phase 2; it does not authorize strategy implementation.
 ```
 
 ## Phase 2 prompts
@@ -246,32 +279,6 @@ or deletion.
 
 ## Phase 3 prompts
 
-### P22 — Implement selective Quantt/Cloudflare ingestion
-
-```text
-Execute only master-plan prompt P22 after MG3 approves the schemas and
-migration preview.
-
-Implement a focused read-only Quantt/Cloudflare source adapter for only the
-approved datasets in the source-coverage matrix. Reuse the existing R2 access
-method when sound, but separate inventory from ingestion. Make bucket, object
-key, expected schema, date range, and destination explicit inputs. Support
-pagination and streaming or bounded reads. Never scan or download unrelated
-objects during normal ingestion.
-
-Write source CSVs and manifests through schema validators using temporary files
-and atomic replacement. Include source key, etag/version when available,
-sha256, rows, coverage, and schema version. Preserve credential names in
-environment variables and ensure values cannot appear in logs or exceptions.
-
-Write tests first with fake S3/R2 clients covering pagination, missing objects,
-wrong schema, duplicate keys, date filtering, deterministic ordering, atomic
-failure, and credential redaction. Then run a narrow read-only sample pull
-only if the user has approved network access. Ask a source-adapter reviewer and
-a secret-safety reviewer to inspect the implementation. Stop at MG4 with
-representative source and canonical samples; do not build signals.
-```
-
 ### P23 — Implement the IBKR paper data recorder
 
 ```text
@@ -291,20 +298,23 @@ development path is dry-run and cannot submit an order.
 
 Ask a broker-safety reviewer to trace every path that could submit or cancel
 and a data reviewer to compare CSV output with the approved schema. Run only
-fake-broker tests. Stop at MG4. The user, not the development agent, performs
-any later IBKR paper connectivity check.
+fake-broker tests. Hand the reviewed evidence to P24; do not request MG4 until
+P24's staged migration is also ready. The user, not the development agent,
+performs any later IBKR paper connectivity check.
 ```
 
 ### P24 — Migrate data through a verified dry run
 
 ```text
-Execute only master-plan prompt P24 after MG4 approves both source adapters.
+Execute only master-plan prompt P24 after MG3 approves the schemas and
+migration preview and P23 passes its fake-broker safety and schema reviews.
 
 Implement canonicalization, manifest generation, and the approved migration
-from P21. First run the entire migration into a new staging directory. Compare
-source and staged row counts, time coverage, unique keys, hashes, schema
-versions, and numerical spot checks. Demonstrate that rerunning unchanged input
-is deterministic.
+from P21 using only the approved FRED, CME Group, IBKR, and existing local
+source artifacts. Do not add Quantt/Cloudflare ingestion. First run the entire
+migration into a new staging directory. Compare source and staged row counts,
+time coverage, unique keys, hashes, schema versions, and numerical spot checks.
+Demonstrate that rerunning unchanged input is deterministic.
 
 Generate a machine-readable migration report showing every original path,
 staged replacement, action, validation result, and recovery path. Stop and
@@ -346,14 +356,17 @@ examples and no behavior migration.
 ### P31 — Implement spread, funding, cost-buffer, and basket equations
 
 ```text
-Execute only master-plan prompt P31 after P30 and the P10 equations are
-approved.
+Execute only master-plan prompt P31 after P30 and the referenced
+strategy_spec_version has final MG2 approval.
 
-Write failing tests from every hand-worked P10 example. Implement pure
-functions in strategy/spread.py for unit conversion, fixed swap spread,
-funding spread, causal expected funding, gross excess spread, directional cost
-buffer, net opportunity, DV01 hedge quantities, residual DV01, and basket P&L.
-Use exact approved sign and rounding conventions.
+Load every hand-worked case from
+tests/fixtures/strategy_equation_cases.json and write failing
+production-function tests without changing the approved fixture values.
+Implement pure functions in strategy/spread.py for unit conversion, fixed swap
+spread, funding spread, causal expected funding, gross excess spread,
+directional cost buffer, net opportunity, DV01 hedge quantities, residual
+DV01, and basket P&L. Use the exact approved strategy_spec_version, sign,
+cost-base, and rounding conventions.
 
 Add property tests or systematic table tests for symmetry of traditional and
 reverse directions, unit conversion, zero/negative invalid DV01, rounding
@@ -451,7 +464,7 @@ maturity. Stop at MG5 with the approved maturity-scope record. Do not begin a
 backtest in this prompt.
 ```
 
-## Phase 5 and 6 prompts
+## Phase 5 prompt
 
 ### P40 — Build the naive complete-strategy backtest
 
@@ -477,10 +490,110 @@ after tests pass. Stop at MG6 and present every trade, cost, and position in
 that window for manual reconciliation.
 ```
 
+## Phase 6 prompts
+
+### P40A — Audit the technical foundation
+
+```text
+Execute only master-plan prompt P40A after the naive golden run passes MG6.
+Read all four master-plan documents and preserve unrelated work.
+
+Review the whole project without changing implementation, tests,
+configuration, data, or existing documentation. The only file this prompt may
+create or update is docs/audits/technical-foundation-audit.md. Exclude .git/,
+virtual environments, worktrees, generated caches, vendor data, and immutable
+results from line-by-line cleanup, while reviewing their interfaces,
+manifests, retention rules, and placement.
+
+Map the actual repository against the target project shape. Trace setup,
+dependencies, canonical data, strategy decisions, risk, costs, accounting,
+naive-backtest execution, outputs, tests, and the planned IBKR-paper path.
+Review correctness and ambiguity, clarification opportunities, unnecessary
+complexity, duplication, dead or misplaced code, project boundaries,
+dependency/API requirements, technical specifications, complex syntax and
+conventions, mathematical units/signs/timing, test gaps, documentation gaps,
+and reproducibility.
+
+For FRED, CME Group, IBKR, and other external APIs, verify requirements and
+common call patterns against primary vendor documentation and the pinned or
+installed package/API version. Record the source, version, and verification
+date. Do not connect to external market-data services or IBKR, do not submit or
+cancel any order, and do not reveal credentials. Reconcile mathematical claims with
+PROJECT_CONTRACTS.md, approved golden examples, and accounting identities.
+
+Write a ranked findings ledger. Every finding must have a stable ID, category,
+severity, exact file/line or command evidence, impact, smallest recommended
+action, validation method, and one proposed disposition: safe automatic
+cleanup, approval-required deletion/structural rewrite, documentation-only, or
+defer with reason. Include a proposed target tree and exact deletion/rewrite
+lists with affected consumers, risks, recovery methods, and verification.
+For every material ambiguity, include the exact clarification question,
+competing interpretations, recommended answer, affected components, and
+consequence of deferral; do not infer the answer.
+Optimization findings require a reproducible benchmark or complexity
+measurement; label unmeasured ideas speculative and defer them.
+
+Ask a repository-structure reviewer, a dependency/API reviewer, a
+mathematics/accounting reviewer, and an onboarding-documentation reviewer to
+challenge the audit read-only. Resolve evidence errors in the report, then stop
+at the MG6A authorization checkpoint. The user must approve, reject, or defer
+every proposed deletion and structural rewrite and answer or defer every
+material clarification question before P40B begins.
+```
+
+### P40B — Apply approved cleanup and create the technical documentation
+
+```text
+Execute only master-plan prompt P40B after the MG6A authorization checkpoint
+records a disposition for every P40A deletion and structural rewrite.
+
+Create characterization or focused failing tests before every
+behavior-sensitive rewrite. Apply the audit's safe automatic cleanup and only
+the exact deletions and structural rewrites approved at MG6A. Do not expand the
+approved list or infer an answer to a deferred clarification. Comments must
+explain a non-obvious reason, invariant, unit, timing rule, safety rule, or API
+constraint; do not restate code. Preserve public behavior unless the approved
+finding explicitly changes a contract.
+Apply a performance optimization only when its pre-change benchmark is
+reproducible, then rerun the same benchmark and report the comparison.
+
+Update each audit finding to fixed, accepted, rejected, or deferred with a
+reason and evidence. Search for all consumers before moving, rewriting, or
+removing anything, repair references, and record the recovery method for every
+deletion. Preserve paper-only enforcement and do not connect to external
+systems or transmit broker orders.
+
+Create docs/TECHNICAL_DOCUMENTATION.md as the single onboarding entry point
+for a capable contributor with no repository or swap-arbitrage context. Use
+layered language: a concise quick start followed by progressively deeper
+reference sections. Cover project purpose and vocabulary, paper-only
+boundaries, architecture and directory map, component ownership and data flow,
+environment setup, dependencies, secrets, API requirements and versions,
+canonical data and provenance, strategy/risk/cost/portfolio flow, backtest
+execution and outputs, mathematical notation/equations/units/signs/timing,
+verified commands, IBKR paper call patterns and lifecycle, safety and failure
+handling, testing, troubleshooting, and a glossary. Summarize and link to
+authoritative contracts rather than creating a conflicting source of truth.
+Record primary sources, package/API versions, and last-verified dates for
+volatile API facts.
+
+Run every command documented as available at this phase, focused tests, the
+full approved suite, schema and documentation checks, broken-reference
+searches, secret checks, git diff --check, and git status --short. Ask fresh
+repository-quality, mathematics/accounting, broker-safety, and newcomer
+onboarding reviewers to inspect the final diff and reproduce representative
+instructions. Stop at the MG6A completion sign-off with the audit dispositions,
+approved-versus-actual cleanup comparison, verification evidence, and
+technical documentation.
+```
+
+## Phase 7 prompts
+
 ### P41 — Add the realistic complete-strategy scenario
 
 ```text
-Execute only master-plan prompt P41 after the naive golden run passes MG6.
+Execute only master-plan prompt P41 after the naive golden run passes MG6 and
+the technical-foundation audit and remediation complete MG6A.
 
 Define a realistic assumptions object using the approved observed bid/ask,
 fees, funding, slippage, liquidity, contract, and roll fields. Write failing
@@ -521,7 +634,7 @@ list alternative explanations. Stop at MG7. Do not alter the strategy in
 response to results inside this prompt.
 ```
 
-## Phase 7 prompts
+## Phase 8 prompts
 
 ### P50 — Extract the shared paper-agent platform
 
@@ -565,7 +678,7 @@ reviewer to inspect paper-only routing. Stop at MG8. The user decides whether
 and when to start the external Agent 0 paper run.
 ```
 
-## Phase 8 agent prompts
+## Phase 9 agent prompts
 
 Every agent prompt follows the same experiment sequence:
 
@@ -592,7 +705,7 @@ reason codes from strategy/risk_signals.py. Tests must show no flatten when
 already flat, correct signed close quantity, no accidental reversal, idempotent
 retries, and new entries blocked while an urgent flatten is incomplete.
 
-Follow the Phase 8 experiment sequence. Ask a position-risk specialist to
+Follow the Phase 9 experiment sequence. Ask a position-risk specialist to
 review edge cases. Stop at MG9; do not start IBKR or submit paper orders.
 ```
 
@@ -609,7 +722,7 @@ incompatible price-point subtraction.
 
 Tests must cover exactly 4.99, 5.00, and 5.01 bp moves in both directions,
 warm-up, stale/missing observations, repeated observations, causal timestamps,
-and future-data perturbation. Follow the Phase 8 experiment sequence and ask a
+and future-data perturbation. Follow the Phase 9 experiment sequence and ask a
 market-data/units specialist to review the trigger. Stop at MG9.
 ```
 
@@ -624,7 +737,7 @@ unchanged. Tests must cover contract signs, integer rounding, residual DV01,
 caps, missing DV01, one-leg rejection, partial fills, hedge repair, roll
 contracts, and the rule that invalid hedges create no new risk.
 
-Follow the Phase 8 experiment sequence. Ask a DV01 and execution specialist to
+Follow the Phase 9 experiment sequence. Ask a DV01 and execution specialist to
 review hedge direction and legging risk. Stop at MG9.
 ```
 
@@ -640,7 +753,7 @@ flattening, and all safety controls.
 
 Tests must cover units, positive/negative direction, threshold boundaries,
 maturity mismatch, unavailable rate inputs, source freshness, and hand-worked
-equation examples. Follow the Phase 8 experiment sequence. Ask an economic-
+equation examples. Follow the Phase 9 experiment sequence. Ask an economic-
 equations specialist to review. Stop at MG9.
 ```
 
@@ -655,7 +768,7 @@ funding estimator warm-up, timestamps, units, positive/negative funding,
 missing repo/reference fields, proxy labelling, and cases where funding changes
 eligibility without changing the raw spread.
 
-Follow the Phase 8 experiment sequence. Ask a funding-data specialist and a
+Follow the Phase 9 experiment sequence. Ask a funding-data specialist and a
 causality reviewer to inspect the estimator. Stop at MG9.
 ```
 
@@ -670,7 +783,7 @@ hedging, flattening, and base sizing. Tests must cover warm-up, zero variance,
 entry boundaries, state persistence, exit, reversal turnover, missing values,
 and future-data perturbation.
 
-Follow the Phase 8 experiment sequence. Ask a time-series and lookahead
+Follow the Phase 9 experiment sequence. Ask a time-series and lookahead
 specialist to review rolling calculations and state transitions. Stop at MG9.
 ```
 
@@ -686,7 +799,7 @@ scale boundaries, calm/stressed inputs, causal lookbacks, gross/net DV01,
 contract caps, session loss/drawdown, monotonicity of tighter limits, and
 flattening after a breach.
 
-Follow the Phase 8 experiment sequence. Ask a portfolio-risk specialist to
+Follow the Phase 9 experiment sequence. Ask a portfolio-risk specialist to
 review. Stop at MG9.
 ```
 
@@ -702,7 +815,7 @@ not change the economic signal. Missing required data blocks new risk.
 
 Tests must cover directional spread cost, cost-buffer boundary, stale/crossed
 quotes, low size, missing fees, roll windows, conservative fallback, and the
-rule that worse costs cannot create an eligible trade. Follow the Phase 8
+rule that worse costs cannot create an eligible trade. Follow the Phase 9
 experiment sequence. Ask an execution-quality specialist to review. Stop at
 MG9.
 ```
@@ -720,7 +833,7 @@ same gates as 2Y/5Y.
 
 Tests must cover one/no/multiple eligible maturities, ties, missing data,
 capacity constraints, a top-ranked blocked opportunity, and stability under
-future-data changes. Follow the Phase 8 experiment sequence. Ask a portfolio-
+future-data changes. Follow the Phase 9 experiment sequence. Ask a portfolio-
 allocation specialist to review. Stop at MG9.
 ```
 
@@ -738,11 +851,11 @@ timing or broker mechanics.
 Tests must run the same frozen MarketSnapshot sequence through the backtest
 strategy call and Agent 10 policy and assert identical SignalDecision,
 TargetPosition, and RiskDecision outputs before execution adaptation. Follow
-the Phase 8 experiment sequence. Ask a full-strategy requirements reviewer, a
+the Phase 9 experiment sequence. Ask a full-strategy requirements reviewer, a
 paper-safety reviewer, and an adapter-parity reviewer. Stop at MG9.
 ```
 
-## Phase 9 and 10 prompts
+## Phase 10 and 11 prompts
 
 ### P70 — Evaluate evidence without changing the strategy
 

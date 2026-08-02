@@ -82,6 +82,32 @@ class SchemaCatalogTests(unittest.TestCase):
         self.assertEqual(paper_order["ibkr_order_id"].reason, "paper broker reconciliation")
         self.assertEqual(paper_order["ibkr_order_id"].consumers, ("agents.shared",))
 
+    def test_historical_contracts_route_only_approved_sources(self) -> None:
+        rates = SCHEMAS["historical_rates"]
+        settlements = SCHEMAS["historical_futures_settlements"]
+
+        self.assertEqual(rates.path_pattern, "data/source/fred/rates/rates_YYYY.csv")
+        self.assertEqual(rates.consumers[0], "data_pipeline.fred_source")
+        self.assertEqual(
+            settlements.path_pattern,
+            "data/source/cme/futures/futures_settlements_YYYY.csv",
+        )
+        self.assertEqual(settlements.consumers[0], "data_pipeline.cme_source")
+
+        canonical_destinations = [
+            rule.destination
+            for rule in MIGRATION_RULES
+            if rule.rule_id != "r2_inventory"
+        ]
+        self.assertFalse(
+            any("quantt" in destination.lower() for destination in canonical_destinations)
+        )
+        r2_inventory = next(rule for rule in MIGRATION_RULES if rule.rule_id == "r2_inventory")
+        self.assertEqual(
+            r2_inventory.destination,
+            "r2_objects.csv (retained in place; excluded from canonical inputs)",
+        )
+
 
 class CsvValidationTests(unittest.TestCase):
     def setUp(self) -> None:
