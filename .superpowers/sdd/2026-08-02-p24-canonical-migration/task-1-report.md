@@ -78,3 +78,10 @@ library.
   have no executable consumer; source-text tests would only detect an
   intentional wording change rather than exercise behavior.
 - Historical verification records were not edited.
+
+## Fix round 3 evidence and self-review
+
+- Corrected P23's active sequencing: it now completes fake-broker coverage and
+  evidence, then proceeds directly to P24. P24, not P23, produces the staged
+  dry-run evidence that is reviewed at MG4.
+- Historical verification records were not edited.

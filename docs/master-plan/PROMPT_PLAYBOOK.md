@@ -277,8 +277,10 @@ development path is dry-run and cannot submit an order.
 
 Ask a broker-safety reviewer to trace every path that could submit or cancel
 and a data reviewer to compare CSV output with the approved schema. Run only
-fake-broker tests. Stop at MG4. The user, not the development agent, performs
-any later IBKR paper connectivity check.
+fake-broker tests. Complete the fake-broker coverage and evidence, then proceed
+directly to P24. P24 produces the staged dry-run evidence for the MG4 review.
+The user, not the development agent, performs any later IBKR paper connectivity
+check.
 ```
 
 ### P24 — Migrate data through a verified dry run
