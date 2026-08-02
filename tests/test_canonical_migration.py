@@ -711,6 +711,38 @@ class MigrationPublicationTests(unittest.TestCase):
         leftovers = [path for path in self.repo.rglob("*") if any(marker in path.name for marker in (".p24-publish-", ".p24-backup-", ".p24-claim-"))]
         self.assertEqual(leftovers, [])
 
+    def test_claim_is_journaled_before_unlink_guard_can_fail(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        originals: dict[Path, bytes] = {}
+        for index, relative in enumerate(sorted(result.output_hashes)):
+            destination = self.repo / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            originals[destination] = f"original-{index}\n".encode()
+            destination.write_bytes(originals[destination])
+        target = self.repo / sorted(result.output_hashes)[0]
+        real_verify = migration._DirectoryGuard.verify
+        claim_verifications = 0
+        injected = False
+
+        def fail_before_claim_unlink(guard: object) -> None:
+            nonlocal claim_verifications, injected
+            real_verify(guard)
+            if any(target.parent.glob(f".{target.name}.p24-claim-*.tmp")):
+                claim_verifications += 1
+                if claim_verifications == 2:
+                    injected = True
+                    raise migration.MigrationError("injected claim unlink guard failure")
+
+        with patch.object(migration._DirectoryGuard, "verify", autospec=True, side_effect=fail_before_claim_unlink):
+            with self.assertRaisesRegex(migration.MigrationError, "claim unlink guard failure"):
+                migration.publish_migration(result, self.repo)
+        self.assertTrue(injected)
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+        leftovers = [path for path in self.repo.rglob("*") if any(marker in path.name for marker in (".p24-publish-", ".p24-backup-", ".p24-claim-"))]
+        self.assertEqual(leftovers, [])
+
     def test_cleanup_failure_does_not_mask_rollback_or_skip_guards_and_siblings(self) -> None:
         from data_pipeline import migration
 

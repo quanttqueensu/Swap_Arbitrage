@@ -1097,8 +1097,8 @@ def publish_migration(result: MigrationResult, repo_root: Path) -> list[Path]:
                 if backup_data != old_data or backup_state.sha256 != old_state.sha256:
                     raise MigrationError(f"publication backup mismatch: {relative}")
                 claim = _write_sibling(destination, b"", "p24-claim", guards)
-                _unlink_sibling(claim, guards)
                 claims[relative] = claim
+                _unlink_sibling(claim, guards)
             else:
                 backups[relative] = None
                 claims[relative] = None
