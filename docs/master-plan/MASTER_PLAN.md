@@ -46,8 +46,9 @@ only the complete and naive-complete strategies receive portfolio backtests.
    execution.
 6. All research features must be causal. A decision can use only information
    observable by its decision timestamp.
-7. Quantt/Cloudflare is the preferred historical source. IBKR is the paper
-   execution and later paper-market-data source. Source fallbacks must be
+7. Approved source adapters provide historical data through source-neutral
+   partitions while retaining provider identity in each row's `source` field.
+   IBKR is the paper execution and later paper-market-data source. Source fallbacks must be
    labelled and must never silently replace a requested field.
 8. Research-ready and paper-run datasets are narrow CSV files with explicit
    schemas, unique keys, deterministic ordering, units, source identifiers,
@@ -95,7 +96,8 @@ strategy/
 
 data_pipeline/
   contracts.py              CSV schemas, units, unique keys, and validation
-  quantt_source.py          selective historical reads from Quantt/Cloudflare
+  rates_source.py           approved historical-rate source adapter
+  futures_source.py         approved historical-futures source adapter
   public_sources.py         explicitly labelled research fallbacks
   ibkr_paper_source.py      paper quote, order, fill, and position capture
   canonicalize.py           source-specific data to canonical narrow CSVs
@@ -199,7 +201,7 @@ signals.
 - Quote-convention and sign table for each instrument.
 - Causal decision clock and observation-lag rules.
 - Two hand-calculated golden examples per direction and one flattening example.
-- Field-by-field source coverage matrix for Quantt, public research sources,
+- Field-by-field source coverage matrix for approved historical, public research,
   and IBKR paper data.
 - Explicit classification of every input as observed, derived, assumption, or
   unavailable.
@@ -233,7 +235,7 @@ validated before moving existing files.
 **Exit criteria:** Every canonical column has one reason to exist, one unit, one
 source or derivation, one unique key, and at least one named consumer.
 
-### Phase 3: Build canonical Quantt and IBKR-paper ingestion
+### Phase 3: Build canonical source and IBKR-paper ingestion
 
 **Purpose:** Produce narrow, validated CSVs through source adapters without
 leaking source-specific details into strategy code.
@@ -242,7 +244,7 @@ leaking source-specific details into strategy code.
 
 **Deliverables:**
 
-- Selective, read-only Quantt/Cloudflare historical ingestion.
+- Selective, read-only approved historical-source ingestion.
 - IBKR paper quote/order/fill/position recorder with paper-account enforcement.
 - Deterministic canonicalization and manifest generation.
 - Schema, uniqueness, ordering, timezone, unit, coverage, and freshness checks.
@@ -436,7 +438,7 @@ The project has reached its intended outcome when:
 1. Every pathway is permanently paper-only.
 2. The economic hypothesis and executable implementation have approved
    equations, units, signs, and causal timestamps.
-3. Quantt and IBKR paper adapters produce narrow, validated, provenance-rich
+3. Historical-source and IBKR paper adapters produce narrow, validated, provenance-rich
    CSVs.
 4. The same pure strategy core is used by complete-strategy backtests and later
    paper agents.

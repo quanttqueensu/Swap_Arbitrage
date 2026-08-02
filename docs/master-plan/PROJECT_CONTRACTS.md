@@ -366,7 +366,7 @@ no implicit index.
 ### Historical rates
 
 Path:
-`data/source/quantt/rates/rates_YYYY.csv`
+`data/source/rates/rates_YYYY.csv`
 
 Columns:
 
@@ -380,7 +380,7 @@ Unique key:
 ### Historical futures settlements
 
 Path:
-`data/source/quantt/futures/futures_settlements_YYYY.csv`
+`data/source/futures/futures_settlements_YYYY.csv`
 
 Columns:
 
