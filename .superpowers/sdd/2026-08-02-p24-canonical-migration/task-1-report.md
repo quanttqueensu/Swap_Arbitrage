@@ -28,8 +28,7 @@
 - Active contracts and migration destinations are provider-neutral while row
   `source` remains part of both historical schema headers and keys.
 - `r2_objects.csv` remains in place and is explicitly excluded from canonical
-  manifests. The only remaining `Quantt`/`Cloudflare` text is preserved in
-  labelled historical baseline records in `MASTER_PLAN.md`.
+  manifests.
 - No migration action was performed and no historical verification record was
   edited.
 
@@ -39,3 +38,30 @@ The primary worktree has no runnable `python` command and its main virtual
 environment references a removed interpreter. Verification therefore used the
 available bundled P01 interpreter; the contract tests use only the standard
 library.
+
+## Fix round 1 evidence
+
+- Corrected the prior overclaim about remaining provider-specific text. Active
+  `PROMPT_PLAYBOOK.md` and `VERIFICATION_GATES.md` directives were still
+  provider-specific; this round retires P22, advances P23/P24 without it, and
+  replaces active primary directives with approved local, IBKR, FRED, and CME
+  adapter language.
+- Expanded `test_historical_contracts_route_only_approved_sources` to assert
+  exact first consumers, every affected migration destination, no Quantt or
+  Cloudflare destination, `source` in both historical headers and keys, and
+  the in-place/excluded `r2_inventory` destination.
+- RED was observed by evaluating these literal routing invariants against
+  `HEAD^:data_pipeline/contracts.py`; it failed with `AssertionError` on the
+  former provider-specific historical-rate path. The focused expanded test
+  then passed against the current contract revision.
+
+## Fix round 1 self-review
+
+- P22 is explicitly retired; it neither authorizes nor blocks an external
+  provider ingestion path. P23 follows MG3 and P24 follows P23 fake-broker
+  coverage plus MG4 source-neutral evidence.
+- MG4 now verifies source-neutral paths, schema headers/keys, and row-level
+  `source` provenance for approved local, IBKR, FRED, and CME adapters.
+- Historical baseline and approval records remain untouched. Provider names
+  remain only where they label retired or historical material, not active
+  source-routing directives.

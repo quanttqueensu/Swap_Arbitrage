@@ -172,19 +172,20 @@ Execute only master-plan prompt P11 after the P10 equations are approved.
 From the approved equations, build
 docs/research/data-source-coverage-matrix.md. Include one row per required
 field: semantic name, unit, frequency, decision-time availability, history
-needed, primary Quantt object/dataset, IBKR paper field when applicable,
-public fallback, observed/derived/assumed/unavailable classification, license
-or access restriction, validation rule, and exact strategy/accounting consumer.
+needed, approved local/IBKR/FRED/CME adapter, IBKR paper field when applicable,
+observed/derived/assumed/unavailable classification, license or access
+restriction, validation rule, actual row `source`, and exact
+strategy/accounting consumer.
 
-Use the existing R2 inventory only to find candidates. Any Cloudflare call must
-be read-only and list metadata or inspect a narrowly selected sample; never
-download the full bucket. Do not expose credentials or unrelated object names
-in committed output. Use authoritative source documentation for field meaning.
+Treat the existing R2 inventory as historical evidence only: it stays in place
+and is excluded from canonical manifests. Use approved local, IBKR, FRED, and
+CME adapter documentation for field meaning. Do not expose credentials or
+unrelated object names in committed output.
 
-Explicitly resolve whether Quantt supplies maturity-matched swap rates,
-Treasury yields, repo, bid/ask, contract metadata, and DV01. Mark EFFR-SOFR,
-continuous futures roots, fixed hedge ratios, and price regressions as proxies
-where appropriate.
+Explicitly resolve which approved local, IBKR, FRED, or CME adapter supplies
+maturity-matched swap rates, Treasury yields, repo, bid/ask, contract metadata,
+and DV01. Mark EFFR-SOFR, continuous futures roots, fixed hedge ratios, and
+price regressions as proxies where appropriate.
 
 Ask a data-source reviewer to verify sample fields against source docs and a
 strategy reviewer to prove every equation input has a matrix row. Stop at MG2
@@ -246,36 +247,21 @@ or deletion.
 
 ## Phase 3 prompts
 
-### P22 — Implement selective Quantt/Cloudflare ingestion
+### P22 — Retired: Quantt/Cloudflare ingestion
 
 ```text
-Execute only master-plan prompt P22 after MG3 approves the schemas and
-migration preview.
-
-Implement a focused read-only Quantt/Cloudflare source adapter for only the
-approved datasets in the source-coverage matrix. Reuse the existing R2 access
-method when sound, but separate inventory from ingestion. Make bucket, object
-key, expected schema, date range, and destination explicit inputs. Support
-pagination and streaming or bounded reads. Never scan or download unrelated
-objects during normal ingestion.
-
-Write source CSVs and manifests through schema validators using temporary files
-and atomic replacement. Include source key, etag/version when available,
-sha256, rows, coverage, and schema version. Preserve credential names in
-environment variables and ensure values cannot appear in logs or exceptions.
-
-Write tests first with fake S3/R2 clients covering pagination, missing objects,
-wrong schema, duplicate keys, date filtering, deterministic ordering, atomic
-failure, and credential redaction. Then run a narrow read-only sample pull
-only if the user has approved network access. Ask a source-adapter reviewer and
-a secret-safety reviewer to inspect the implementation. Stop at MG4 with
-representative source and canonical samples; do not build signals.
+P22 is retired. Do not implement a Quantt or Cloudflare ingestion path and do
+not use `r2_objects.csv` as an ingestion manifest. The approved source-neutral
+contracts route local, IBKR, FRED, and CME adapter output into shared rates and
+futures source partitions, while each emitted row retains its provider identity
+in `source`. Continue with P23 and then P24 under their approved sequencing.
 ```
 
 ### P23 — Implement the IBKR paper data recorder
 
 ```text
-Execute only master-plan prompt P23 after the source schemas are approved.
+Execute only master-plan prompt P23 after MG3 approves the source schemas and
+migration preview. P22 is retired and is not a prerequisite.
 
 Implement an IBKR adapter that can record the exact paper quote, order, fill,
 position, and connection fields approved in PROJECT_CONTRACTS.md. Broker-facing
@@ -298,13 +284,16 @@ any later IBKR paper connectivity check.
 ### P24 — Migrate data through a verified dry run
 
 ```text
-Execute only master-plan prompt P24 after MG4 approves both source adapters.
+Execute only master-plan prompt P24 after P23's fake-broker schema coverage and
+MG4 approval of the staged source-neutral adapter evidence. P22 is retired and
+is not a prerequisite.
 
 Implement canonicalization, manifest generation, and the approved migration
-from P21. First run the entire migration into a new staging directory. Compare
-source and staged row counts, time coverage, unique keys, hashes, schema
-versions, and numerical spot checks. Demonstrate that rerunning unchanged input
-is deterministic.
+from P21 using only approved local, IBKR, FRED, and CME adapters. First run the
+entire migration into a new staging directory. Compare source and staged row
+counts, time coverage, unique keys, hashes, schema versions, numerical spot
+checks, and actual row `source` provenance. Demonstrate that rerunning
+unchanged input is deterministic.
 
 Generate a machine-readable migration report showing every original path,
 staged replacement, action, validation result, and recovery path. Stop and
