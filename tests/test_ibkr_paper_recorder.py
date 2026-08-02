@@ -132,6 +132,26 @@ class PaperEventStoreTests(unittest.TestCase):
         self.assertEqual(store.write("paper_orders", [row]), 1)
         self.assertIn("broker gateway acknowledged", store.path_for("paper_orders").read_text(encoding="utf-8"))
 
+    def test_rejects_exact_endpoint_in_unrestricted_order_status(self) -> None:
+        store = PaperEventStore(self.root, "agent_0", "run-1")
+        row = {
+            "order_ref": "order-1", "decision_id": "decision-1", "created_at_utc": "2026-08-02T15:00:00Z",
+            "instrument_id": "IBKR:1", "side": "BUY", "quantity": 2, "order_type": "MKT",
+            "time_in_force": "DAY", "status": "127.0.0.1:7497", "ibkr_order_id": "",
+        }
+        with self.assertRaisesRegex(ValueError, "sensitive") as caught:
+            store.write("paper_orders", [row])
+        self.assertNotIn("127.0.0.1:7497", str(caught.exception))
+
+    def test_accepts_ambiguous_bare_host_like_order_reference(self) -> None:
+        store = PaperEventStore(self.root, "agent_0", "run-1")
+        row = {
+            "order_ref": "node-01", "decision_id": "decision-1", "created_at_utc": "2026-08-02T15:00:00Z",
+            "instrument_id": "IBKR:1", "side": "BUY", "quantity": 2, "order_type": "MKT",
+            "time_in_force": "DAY", "status": "planned", "ibkr_order_id": "",
+        }
+        self.assertEqual(store.write("paper_orders", [row]), 1)
+
     def test_replace_failure_preserves_existing_destination(self) -> None:
         store = PaperEventStore(self.root, "agent_0", "run-1")
         store.write("paper_quotes", [quote("2026-08-02T15:00:00Z", "IBKR:1", "98", "99")])

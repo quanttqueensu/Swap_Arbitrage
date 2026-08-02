@@ -146,11 +146,12 @@ class PaperEventStore:
             or _SENSITIVE_LABEL.search(value) is not None
             or lowered in {"host", "localhost", "password", "credential", "secret", "token", "client_id", "client id"}
             or "://" in value
-            or (field_name == "instrument_id" and PaperEventStore._is_endpoint(value))
+            or PaperEventStore._is_exact_endpoint(value)
+            or (field_name == "instrument_id" and PaperEventStore._is_ambiguous_bare_host(value))
         )
 
     @staticmethod
-    def _is_endpoint(value: str) -> bool:
+    def _is_exact_endpoint(value: str) -> bool:
         try:
             ipaddress.ip_address(value)
             return True
@@ -158,8 +159,16 @@ class PaperEventStore:
             pass
         host, separator, port = value.rpartition(":")
         if separator and port.isdigit() and host:
-            return PaperEventStore._is_endpoint(host)
-        return value.casefold() == "localhost" or _HOSTNAME.fullmatch(value) is not None or _LOWER_BARE_HOST.fullmatch(value) is not None
+            try:
+                ipaddress.ip_address(host)
+                return True
+            except ValueError:
+                return _HOSTNAME.fullmatch(host) is not None
+        return _HOSTNAME.fullmatch(value) is not None
+
+    @staticmethod
+    def _is_ambiguous_bare_host(value: str) -> bool:
+        return value.casefold() == "localhost" or _LOWER_BARE_HOST.fullmatch(value) is not None
 
     @staticmethod
     def _ordering_key(contract: CsvContract, row: Mapping[str, str]) -> tuple[object, ...]:
