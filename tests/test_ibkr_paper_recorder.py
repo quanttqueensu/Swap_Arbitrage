@@ -108,11 +108,19 @@ class PaperEventStoreTests(unittest.TestCase):
 
     def test_rejects_sensitive_values_without_echoing_them(self) -> None:
         store = PaperEventStore(self.root, "agent_0", "run-1")
-        for sensitive in ("DU12345678", "client_id=42", "credential=not-for-csv", "localhost"):
+        for sensitive in ("DU12345678", "client_id=42", "credential=not-for-csv", "localhost", "127.0.0.1", "paper-gateway"):
             with self.subTest(sensitive=sensitive):
                 with self.assertRaisesRegex(ValueError, "sensitive") as caught:
                     store.write("paper_quotes", [quote("2026-08-02T15:00:00Z", sensitive, "98", "99")])
                 self.assertNotIn(sensitive, str(caught.exception))
+
+    def test_conflicting_duplicate_error_redacts_the_key_value(self) -> None:
+        store = PaperEventStore(self.root, "agent_0", "run-1")
+        private_key = "IBKR:private-order-marker"
+        store.write("paper_quotes", [quote("2026-08-02T15:00:00Z", private_key, "98", "99")])
+        with self.assertRaisesRegex(ValueError, "conflicting duplicate key") as caught:
+            store.write("paper_quotes", [quote("2026-08-02T15:00:00Z", private_key, "97", "99")])
+        self.assertNotIn(private_key, str(caught.exception))
 
     def test_replace_failure_preserves_existing_destination(self) -> None:
         store = PaperEventStore(self.root, "agent_0", "run-1")

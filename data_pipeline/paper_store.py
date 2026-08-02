@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import ipaddress
 import os
 import re
 import tempfile
@@ -24,6 +25,8 @@ _SENSITIVE_LABEL = re.compile(
     r"(?:^|[?&,;\s])(?:host|hostname|password|credential|secret|token|client[_ -]?id)\s*[:=]",
     re.IGNORECASE,
 )
+_HOST_MARKER = re.compile(r"(?:host|gateway|broker|ibgateway|tws)", re.IGNORECASE)
+_HOSTNAME = re.compile(r"^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*)+$")
 
 
 class PaperEventStore:
@@ -54,7 +57,7 @@ class PaperEventStore:
             elif schema_id == "paper_orders" and self._only_order_status_changed(existing, row):
                 merged[key] = row
             else:
-                raise ValueError(f"conflicting duplicate key {key}")
+                raise ValueError("conflicting duplicate key")
         ordered = sorted(merged.values(), key=lambda row: self._ordering_key(contract, row))
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
@@ -137,9 +140,16 @@ class PaperEventStore:
     @staticmethod
     def _is_sensitive(value: str) -> bool:
         lowered = value.casefold()
+        try:
+            ipaddress.ip_address(value)
+            return True
+        except ValueError:
+            pass
         return (
             _SENSITIVE_ACCOUNT.search(value) is not None
             or _SENSITIVE_LABEL.search(value) is not None
+            or _HOST_MARKER.search(value) is not None
+            or _HOSTNAME.fullmatch(value) is not None
             or lowered in {"host", "localhost", "password", "credential", "secret", "token", "client_id", "client id"}
             or "://" in value
         )
