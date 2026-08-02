@@ -237,7 +237,7 @@ Expected: import failure because `data_pipeline.migration` does not exist.
 
 - [ ] **Step 3: Implement fail-closed staging**
 
-Add strict path resolution, supported-input discovery, fresh staging creation, partition writing, validation, manifests, rule report rows, reconciliation, and a second temporary staging comparison. The CLI must omit publication entirely unless `--publish` is passed and every report row is `pass`.
+Add strict path resolution, supported-input discovery, fresh staging creation, partition writing, validation, manifests, rule report rows, reconciliation, and a second temporary staging comparison. Task 4 must reject `--publish`; publication remains disabled until Task 5.
 
 ```python
 class MigrationError(RuntimeError):

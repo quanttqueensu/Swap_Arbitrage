@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import os
 import socket
 import tempfile
@@ -306,11 +307,26 @@ class MigrationStagingTests(unittest.TestCase):
         self.repo = Path(self.tempdir.name) / "repo"
         self.repo.mkdir()
         (self.repo / ".git").mkdir()
-        self._write("data/treasury_rates.csv", RATE_HEADER, [["2026-08-01", *( ["4"] * 6), "4.10", "4", "4.25", "4", "4", "4", "4", "4.33", "4.34"]])
-        self._write("data/cme_swap_data.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "YITU26", "99.25", "39.8"]])
-        self._write("data/treasury_futures_data.csv", ["date", "ticker", "price", "dv01"], [["2026-08-01", "ZT=F", "108.5", "79.6"]])
-        self._write("data/swap_rates.csv", ["date", "eris_swap_2y_price", "eris_swap_2y_return", "eris_swap_5y_price", "eris_swap_5y_return"], [["2026-08-01", "99.25", "0", "98.5", "0"]])
-        self._write("data/treasury_futures.csv", ["date", "treasury_futures_2y_price", "treasury_futures_2y_return", "treasury_futures_5y_price", "treasury_futures_5y_return"], [["2026-08-01", "108.5", "0", "110.25", "0"]])
+        self._write("data/treasury_rates.csv", RATE_HEADER, [
+            ["2025-12-31", *(["3"] * 6), "3.10", "3", "3.25", "3", "3", "3", "3", "3.33", "3.34"],
+            ["2026-08-01", *(["4"] * 6), "4.10", "4", "4.25", "4", "4", "4", "4", "4.33", "4.34"],
+        ])
+        self._write("data/cme_swap_data.csv", ["date", "ticker", "price", "dv01"], [
+            ["2025-12-31", "YITZ25", "98.75", "38.8"],
+            ["2026-08-01", "YITU26", "99.25", "39.8"],
+        ])
+        self._write("data/treasury_futures_data.csv", ["date", "ticker", "price", "dv01"], [
+            ["2025-12-31", "ZT=F", "107.5", "78.6"],
+            ["2026-08-01", "ZT=F", "108.5", "79.6"],
+        ])
+        self._write("data/swap_rates.csv", ["date", "eris_swap_2y_price", "eris_swap_2y_return", "eris_swap_5y_price", "eris_swap_5y_return"], [
+            ["2025-12-31", "98.75", "0", "97.5", "0"],
+            ["2026-08-01", "99.25", "0", "98.5", "0"],
+        ])
+        self._write("data/treasury_futures.csv", ["date", "treasury_futures_2y_price", "treasury_futures_2y_return", "treasury_futures_5y_price", "treasury_futures_5y_return"], [
+            ["2025-12-31", "107.5", "0", "109.25", "0"],
+            ["2026-08-01", "108.5", "0", "110.25", "0"],
+        ])
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
@@ -325,6 +341,15 @@ class MigrationStagingTests(unittest.TestCase):
 
     def _input_hashes(self) -> dict[str, str]:
         return {path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted((self.repo / "data").glob("*.csv"))}
+
+    @staticmethod
+    def _copy_partitions(partitions: dict[int, list[dict[str, str]]]) -> dict[int, list[dict[str, str]]]:
+        return {year: [dict(row) for row in rows] for year, rows in partitions.items()}
+
+    @staticmethod
+    def _read_report(path: Path) -> list[dict[str, str]]:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return list(csv.DictReader(handle))
 
     def test_stages_supported_rules_with_exact_report_reconciliation_and_deterministic_bytes(self) -> None:
         before = self._input_hashes()
@@ -349,7 +374,28 @@ class MigrationStagingTests(unittest.TestCase):
             self.assertEqual(reader.fieldnames, list(REPORT_COLUMNS))
             report = list(reader)
         self.assertEqual([row["rule_id"] for row in report], ["cme_swap_master", "swap_rates", "treasury_futures", "treasury_futures_master", "treasury_rates"])
-        self.assertTrue(all(row["status"] == "pass" and row["source_key_count"] == row["output_key_count"] for row in report))
+        self.assertEqual(
+            {row["rule_id"]: (row["source_key_count"], row["output_key_count"]) for row in report},
+            {
+                "cme_swap_master": ("4", "4"),
+                "swap_rates": ("4", "4"),
+                "treasury_futures": ("4", "4"),
+                "treasury_futures_master": ("4", "4"),
+                "treasury_rates": ("8", "8"),
+            },
+        )
+        for row in report:
+            self.assertEqual(row["status"], "pass")
+            self.assertEqual(row["expected_key_digest"], row["actual_key_digest"])
+            self.assertEqual(row["expected_value_digest"], row["actual_value_digest"])
+            self.assertEqual(row["timing_certainty"], "assumed")
+            self.assertEqual(row["timing_rule_id"], "p24-market-close-v1")
+            self.assertEqual(row["timing_matrix_digest"], "3d4a5df7dedb5c96291891fa7b3383a0b746d710fa1dcf133beaa089c5c56106")
+            self.assertEqual(row["scope"], "5 consumed top-level inputs; 1482 catalog artifacts excluded (including 1474 Eris cache files and r2 inventory)")
+            spots = json.loads(row["spot_evidence"])
+            self.assertEqual([spot["position"] for spot in spots], ["first", "middle", "last"])
+            self.assertTrue(all(spot["expected_output"] == spot["actual_output"] for spot in spots))
+            self.assertTrue(all(spot["source"] for spot in spots))
         rates = self.repo / "stage-a/data/source/rates/rates_2026.csv"
         settlements = self.repo / "stage-a/data/source/futures/futures_settlements_2026.csv"
         market = self.repo / "stage-a/data/canonical/market/daily_market_2026.csv"
@@ -362,6 +408,100 @@ class MigrationStagingTests(unittest.TestCase):
         self.assertEqual(rate_rows[0], {"observation_date": "2026-08-01", "source": "NYFED", "series_id": "EFFR", "maturity": "ON", "rate_bps": "434"})
         self.assertEqual(settlement_rows[0]["instrument_id"], "ERIS-YIT-202609")
         self.assertEqual((market_rows[0]["instrument_id"], market_rows[len(market_rows) // 2]["instrument_id"], market_rows[-1]["instrument_id"]), ("ERIS-YIT", "YAHOO-CONTINUOUS-ZF", "YAHOO-CONTINUOUS-ZT"))
+        eris = [row for row in market_rows if row["source"] == "ERIS"]
+        yahoo = [row for row in market_rows if row["source"] == "YAHOO"]
+        self.assertTrue(all(row["classification"] == "exact" and row["proxy_label"] == "" for row in eris))
+        self.assertTrue(all(row["classification"] == "proxy" and row["proxy_label"] for row in yahoo))
+
+    def test_independent_lineage_rejects_schema_valid_wrong_canonicalizer_keys_and_values(self) -> None:
+        from data_pipeline import migration
+
+        def wrong_rates(path: Path) -> dict[int, list[dict[str, str]]]:
+            result = self._copy_partitions(canonicalize_rates(path))
+            first = result[min(result)][0]
+            first["series_id"] = "A-EFFR"
+            first["rate_bps"] = "999"
+            return result
+
+        def wrong_futures(swap_path: Path, treasury_path: Path) -> FuturesCanonicalization:
+            result = canonicalize_futures(swap_path, treasury_path)
+            settlements = self._copy_partitions(result.settlements_by_year)
+            risks = self._copy_partitions(result.risk_by_year)
+            settlements[min(settlements)][0]["instrument_id"] = "ERIS-YIS-202512"
+            settlements[min(settlements)][0]["settlement_price"] = "77"
+            risks[min(risks)][0]["instrument_id"] = "ERIS-YIS-202512"
+            risks[min(risks)][0]["dv01_usd_per_bp"] = "77"
+            return FuturesCanonicalization(settlements, risks)
+
+        def wrong_market(swap_path: Path, treasury_path: Path, timing: object) -> dict[int, list[dict[str, str]]]:
+            result = self._copy_partitions(canonicalize_daily_market(swap_path, treasury_path, timing))
+            first = result[min(result)][0]
+            first["instrument_id"] = "ERIS-YIS"
+            first["value"] = "77"
+            return result
+
+        cases = (
+            ("canonicalize_rates", wrong_rates),
+            ("canonicalize_futures", wrong_futures),
+            ("canonicalize_daily_market", wrong_market),
+        )
+        for index, (name, replacement) in enumerate(cases):
+            with self.subTest(canonicalizer=name), patch.object(migration, name, replacement):
+                stage = self.repo / f"wrong-stage-{index}"
+                report_path = self.repo / "docs/verification" / f"wrong-report-{index}.csv"
+                result = migration.stage_migration(self.repo, stage, report_path)
+                self.assertFalse(result.all_passed)
+                report = self._read_report(report_path)
+                failed = [row for row in report if row["status"] == "fail"]
+                self.assertTrue(failed)
+                self.assertTrue(any(
+                    row["expected_key_digest"] != row["actual_key_digest"]
+                    or row["expected_value_digest"] != row["actual_value_digest"]
+                    for row in failed
+                ))
+                self.assertTrue(stage.is_dir())
+
+    def test_descriptor_path_race_fails_and_removes_new_stage(self) -> None:
+        from data_pipeline.migration import MigrationError, stage_migration
+
+        source = self.repo / "data/treasury_rates.csv"
+        replacement = self.repo / "data/treasury-race.tmp"
+        replacement.write_bytes(source.read_bytes())
+        original_open = Path.open
+        raced = False
+
+        def racing_open(path: Path, *args: object, **kwargs: object) -> object:
+            nonlocal raced
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if path.name == source.name and mode == "rb" and not raced:
+                raced = True
+                os.replace(replacement, source)
+            return original_open(path, *args, **kwargs)
+
+        stage = self.repo / "raced-stage"
+        report = self.repo / "docs/verification/raced-report.csv"
+        with patch.object(Path, "open", new=racing_open), self.assertRaisesRegex(MigrationError, "changed before snapshot"):
+            stage_migration(self.repo, stage, report)
+        self.assertTrue(raced)
+        self.assertFalse(stage.exists())
+        self.assertFalse(report.exists())
+
+    def test_publication_flag_remains_disabled(self) -> None:
+        from data_pipeline.migration import MigrationError, main
+
+        stage = self.repo / "publish-disabled-stage"
+        report = self.repo / "docs/verification/publish-disabled-report.csv"
+        with self.assertRaisesRegex(MigrationError, "publication is reserved for Task 5"):
+            main([
+                "--repo-root", str(self.repo),
+                "--staging-root", str(stage),
+                "--report", str(report),
+                "--publish",
+            ])
+        self.assertFalse(stage.exists())
+        self.assertFalse(report.exists())
+        self.assertFalse((self.repo / "data/source").exists())
+        self.assertFalse((self.repo / "data/canonical").exists())
 
     def test_rejects_path_escape_symlink_input_and_nonempty_staging(self) -> None:
         from data_pipeline.migration import MigrationError, stage_migration
