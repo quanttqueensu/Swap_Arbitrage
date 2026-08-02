@@ -12,12 +12,13 @@ import re
 import secrets
 import shutil
 import stat
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from data_pipeline.canonicalize import (
     SourceTiming,
@@ -168,7 +169,14 @@ def _guard_for(path: Path, guards: dict[Path, _DirectoryGuard], *, verify: bool 
     return guard
 
 
-def _replace_sibling(source: Path, destination: Path, guards: dict[Path, _DirectoryGuard], *, verify: bool = True) -> None:
+def _replace_sibling(
+    source: Path,
+    destination: Path,
+    guards: dict[Path, _DirectoryGuard],
+    *,
+    verify: bool = True,
+    journal: Callable[[], None] | None = None,
+) -> None:
     guard = _guard_for(destination, guards, verify=verify)
     if _guard_for(source, guards, verify=verify) is not guard:
         raise MigrationError("atomic replacement requires same-directory siblings")
@@ -176,11 +184,19 @@ def _replace_sibling(source: Path, destination: Path, guards: dict[Path, _Direct
         os.replace(source, destination)
     else:
         os.replace(source.name, destination.name, src_dir_fd=guard.token, dst_dir_fd=guard.token)
+    if journal is not None:
+        journal()
     if verify:
         guard.verify()
 
 
-def _link_sibling(source: Path, destination: Path, guards: dict[Path, _DirectoryGuard]) -> None:
+def _link_sibling(
+    source: Path,
+    destination: Path,
+    guards: dict[Path, _DirectoryGuard],
+    *,
+    journal: Callable[[], None] | None = None,
+) -> None:
     guard = _guard_for(destination, guards)
     if _guard_for(source, guards) is not guard:
         raise MigrationError("atomic publication requires same-directory siblings")
@@ -188,6 +204,8 @@ def _link_sibling(source: Path, destination: Path, guards: dict[Path, _Directory
         os.link(source, destination)
     else:
         os.link(source.name, destination.name, src_dir_fd=guard.token, dst_dir_fd=guard.token, follow_symlinks=False)
+    if journal is not None:
+        journal()
     guard.verify()
 
 
@@ -1102,8 +1120,7 @@ def publish_migration(result: MigrationResult, repo_root: Path) -> list[Path]:
                 claim = claims[relative]
                 if claim is None or claim.exists():
                     raise MigrationError(f"publication claim path is unavailable: {relative}")
-                _replace_sibling(destination, claim, guards)
-                claimed.append(relative)
+                _replace_sibling(destination, claim, guards, journal=lambda relative=relative: claimed.append(relative))
                 _, claimed_state = _capture_sibling(claim, "claimed publication destination", guards)
                 if claimed_state != expected_old:
                     _replace_sibling(claim, destination, guards)
@@ -1112,8 +1129,7 @@ def publish_migration(result: MigrationResult, repo_root: Path) -> list[Path]:
             # A same-directory hard-link is an atomic no-clobber install: if a
             # path appears after the final check, link fails instead of
             # overwriting bytes that were never part of this transaction.
-            _link_sibling(prepared[relative], destination, guards)
-            installed.append(relative)
+            _link_sibling(prepared[relative], destination, guards, journal=lambda relative=relative: installed.append(relative))
             _, installed_state = _capture_sibling(destination, "published output", guards)
             if installed_state.sha256 != evidence.output_states[relative].sha256:
                 raise MigrationError(f"published hash mismatch: {relative}")
@@ -1141,17 +1157,33 @@ def publish_migration(result: MigrationResult, repo_root: Path) -> list[Path]:
             raise
         raise MigrationError(f"publication failed and all destinations were rolled back: {error}") from error
     finally:
-        for path in [
-            *prepared.values(),
-            *(path for path in backups.values() if path is not None),
-            *(path for path in claims.values() if path is not None),
-        ]:
-            if path.parent.absolute() in guards:
-                _unlink_sibling(path, guards, verify=False)
+        transaction_error = sys.exc_info()[1]
+        cleanup_errors: list[str] = []
+        try:
+            for path in [
+                *prepared.values(),
+                *(path for path in backups.values() if path is not None),
+                *(path for path in claims.values() if path is not None),
+            ]:
+                try:
+                    if path.parent.absolute() in guards:
+                        _unlink_sibling(path, guards, verify=False)
+                    else:
+                        path.unlink(missing_ok=True)
+                except Exception as cleanup_error:
+                    cleanup_errors.append(f"sibling {path}: {cleanup_error}")
+        finally:
+            for guard in {id(guard): guard for guard in guards.values()}.values():
+                try:
+                    guard.close()
+                except Exception as cleanup_error:
+                    cleanup_errors.append(f"guard {guard.path}: {cleanup_error}")
+        if cleanup_errors:
+            detail = "; ".join(cleanup_errors)
+            if transaction_error is not None:
+                transaction_error.add_note(f"publication cleanup was incomplete: {detail}")
             else:
-                path.unlink(missing_ok=True)
-        for guard in {id(guard): guard for guard in guards.values()}.values():
-            guard.close()
+                raise MigrationError(f"publication committed but cleanup was incomplete: {detail}")
 
 
 def main(argv: list[str] | None = None) -> int:

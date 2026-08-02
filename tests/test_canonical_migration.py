@@ -657,6 +657,198 @@ class MigrationPublicationTests(unittest.TestCase):
         leftovers = [path for path in self.repo.rglob("*") if ".p24-publish-" in path.name or ".p24-backup-" in path.name]
         self.assertEqual(leftovers, [])
 
+    def test_post_replace_verify_failure_is_journaled_before_rollback(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        originals: dict[Path, bytes] = {}
+        for index, relative in enumerate(sorted(result.output_hashes)):
+            destination = self.repo / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            originals[destination] = f"original-{index}\n".encode()
+            destination.write_bytes(originals[destination])
+        target = self.repo / sorted(result.output_hashes)[0]
+        real_verify = migration._DirectoryGuard.verify
+        injected = False
+
+        def fail_immediately_after_replace(guard: object) -> None:
+            nonlocal injected
+            real_verify(guard)
+            claim_exists = any(target.parent.glob(f".{target.name}.p24-claim-*.tmp"))
+            if not injected and not target.exists() and claim_exists:
+                injected = True
+                raise migration.MigrationError("injected post-replace verification failure")
+
+        with patch.object(migration._DirectoryGuard, "verify", autospec=True, side_effect=fail_immediately_after_replace):
+            with self.assertRaisesRegex(migration.MigrationError, "post-replace verification failure"):
+                migration.publish_migration(result, self.repo)
+        self.assertTrue(injected)
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+        leftovers = [path for path in self.repo.rglob("*") if any(marker in path.name for marker in (".p24-publish-", ".p24-backup-", ".p24-claim-"))]
+        self.assertEqual(leftovers, [])
+
+    def test_post_link_verify_failure_is_journaled_before_rollback(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        first_relative = sorted(result.output_hashes)[0]
+        target = self.repo / first_relative
+        real_verify = migration._DirectoryGuard.verify
+        injected = False
+
+        def fail_immediately_after_link(guard: object) -> None:
+            nonlocal injected
+            real_verify(guard)
+            if not injected and target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() == result.output_hashes[first_relative]:
+                injected = True
+                raise migration.MigrationError("injected post-link verification failure")
+
+        with patch.object(migration._DirectoryGuard, "verify", autospec=True, side_effect=fail_immediately_after_link):
+            with self.assertRaisesRegex(migration.MigrationError, "post-link verification failure"):
+                migration.publish_migration(result, self.repo)
+        self.assertTrue(injected)
+        self.assertFalse(any((self.repo / relative).exists() for relative in result.output_hashes))
+        leftovers = [path for path in self.repo.rglob("*") if any(marker in path.name for marker in (".p24-publish-", ".p24-backup-", ".p24-claim-"))]
+        self.assertEqual(leftovers, [])
+
+    def test_cleanup_failure_does_not_mask_rollback_or_skip_guards_and_siblings(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        originals: dict[Path, bytes] = {}
+        for index, relative in enumerate(sorted(result.output_hashes)):
+            destination = self.repo / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            originals[destination] = f"original-{index}\n".encode()
+            destination.write_bytes(originals[destination])
+
+        real_acquire = migration._acquire_directory_guard
+        real_close = migration._DirectoryGuard.close
+        real_link = os.link
+        real_unlink = migration._unlink_sibling
+        acquired: list[object] = []
+        closed: list[object] = []
+        cleanup_attempts: list[Path] = []
+        installs = 0
+        cleanup_failed = False
+
+        def record_acquire(path: Path) -> object:
+            guard = real_acquire(path)
+            acquired.append(guard)
+            return guard
+
+        def record_close(guard: object) -> None:
+            try:
+                real_close(guard)
+            finally:
+                closed.append(guard)
+
+        def fail_second_install(source: object, destination: object, *args: object, **kwargs: object) -> None:
+            nonlocal installs
+            if ".p24-publish-" in Path(source).name:
+                installs += 1
+                if installs == 2:
+                    raise OSError("injected transaction failure")
+            real_link(source, destination, *args, **kwargs)
+
+        def fail_first_cleanup(path: Path, guards: object, *, verify: bool = True) -> None:
+            nonlocal cleanup_failed
+            if not verify:
+                cleanup_attempts.append(path)
+                real_unlink(path, guards, verify=False)
+                if not cleanup_failed:
+                    cleanup_failed = True
+                    raise OSError("injected cleanup failure")
+                return
+            real_unlink(path, guards, verify=verify)
+
+        caught: BaseException | None = None
+        try:
+            with (
+                patch.object(migration, "_acquire_directory_guard", side_effect=record_acquire),
+                patch.object(migration._DirectoryGuard, "close", autospec=True, side_effect=record_close),
+                patch.object(migration.os, "link", side_effect=fail_second_install),
+                patch.object(migration, "_unlink_sibling", side_effect=fail_first_cleanup),
+            ):
+                try:
+                    migration.publish_migration(result, self.repo)
+                except BaseException as error:
+                    caught = error
+        finally:
+            for guard in acquired:
+                if guard not in closed:
+                    real_close(guard)
+        self.assertIsInstance(caught, migration.MigrationError)
+        self.assertRegex(str(caught), "publication failed")
+        self.assertTrue(cleanup_failed)
+        self.assertEqual(len(cleanup_attempts), 3 * len(result.output_hashes))
+        self.assertEqual({id(guard) for guard in acquired}, {id(guard) for guard in closed})
+        self.assertTrue(any("injected cleanup failure" in note for note in getattr(caught, "__notes__", ())))
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+        leftovers = [path for path in self.repo.rglob("*") if any(marker in path.name for marker in (".p24-publish-", ".p24-backup-", ".p24-claim-"))]
+        self.assertEqual(leftovers, [])
+
+    def test_cleanup_failure_after_commit_reports_committed_outcome_and_closes_guards(self) -> None:
+        from data_pipeline import migration
+
+        result = self._stage()
+        real_acquire = migration._acquire_directory_guard
+        real_close = migration._DirectoryGuard.close
+        real_unlink = migration._unlink_sibling
+        acquired: list[object] = []
+        closed: list[object] = []
+        cleanup_attempts: list[Path] = []
+        cleanup_failed = False
+
+        def record_acquire(path: Path) -> object:
+            guard = real_acquire(path)
+            acquired.append(guard)
+            return guard
+
+        def record_close(guard: object) -> None:
+            try:
+                real_close(guard)
+            finally:
+                closed.append(guard)
+
+        def fail_first_cleanup(path: Path, guards: object, *, verify: bool = True) -> None:
+            nonlocal cleanup_failed
+            if not verify:
+                cleanup_attempts.append(path)
+                real_unlink(path, guards, verify=False)
+                if not cleanup_failed:
+                    cleanup_failed = True
+                    raise OSError("injected committed cleanup failure")
+                return
+            real_unlink(path, guards, verify=verify)
+
+        caught: BaseException | None = None
+        try:
+            with (
+                patch.object(migration, "_acquire_directory_guard", side_effect=record_acquire),
+                patch.object(migration._DirectoryGuard, "close", autospec=True, side_effect=record_close),
+                patch.object(migration, "_unlink_sibling", side_effect=fail_first_cleanup),
+            ):
+                try:
+                    migration.publish_migration(result, self.repo)
+                except BaseException as error:
+                    caught = error
+        finally:
+            for guard in acquired:
+                if guard not in closed:
+                    real_close(guard)
+        self.assertIsInstance(caught, migration.MigrationError)
+        self.assertRegex(str(caught), "publication committed but cleanup was incomplete")
+        self.assertTrue(cleanup_failed)
+        self.assertEqual(len(cleanup_attempts), len(result.output_hashes))
+        self.assertEqual({id(guard) for guard in acquired}, {id(guard) for guard in closed})
+        self.assertEqual(
+            {self.repo / relative: hashlib.sha256((self.repo / relative).read_bytes()).hexdigest() for relative in result.output_hashes},
+            {self.repo / relative: digest for relative, digest in result.output_hashes.items()},
+        )
+        leftovers = [path for path in self.repo.rglob("*") if any(marker in path.name for marker in (".p24-publish-", ".p24-backup-", ".p24-claim-"))]
+        self.assertEqual(leftovers, [])
+
     def test_success_publishes_only_declared_outputs_preserves_sources_and_leaves_no_siblings(self) -> None:
         from data_pipeline.migration import publish_migration
 
