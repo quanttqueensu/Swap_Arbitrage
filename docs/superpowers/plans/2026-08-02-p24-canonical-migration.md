@@ -161,7 +161,7 @@ git commit -m "feat: canonicalize approved market inputs"
 
 **Interfaces:**
 - Consumes: validated canonical files and their `CsvContract`.
-- Produces: `FileManifest`, `profile_file(path: Path, contract: CsvContract) -> FileManifest`, `write_input_manifest(path: Path, rows: Sequence[FileManifest]) -> str`, and `manifest_digest(rows: Sequence[FileManifest]) -> str`.
+- Produces: `FileManifest`, `profile_file(path: Path, contract: CsvContract) -> FileManifest`, `write_input_manifest(path: Path, run_id: str, rows: Sequence[FileManifest]) -> str`, and `manifest_digest(rows: Sequence[FileManifest]) -> str`.
 
 - [ ] **Step 1: Write failing manifest tests**
 

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import os
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from data_pipeline.canonicalize import (
     CanonicalizationError,
@@ -163,6 +167,7 @@ class ManifestTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
+        (self.root / ".git").mkdir()
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
@@ -203,7 +208,7 @@ class ManifestTests(unittest.TestCase):
         output = self.root / "p24_inputs.csv"
 
         first = manifest_digest(rows)
-        second = write_input_manifest(output, list(reversed(rows)))
+        second = write_input_manifest(output, "p24-run", list(reversed(rows)))
 
         self.assertEqual(first, manifest_digest(list(reversed(rows))))
         self.assertEqual(second, first)
@@ -212,6 +217,51 @@ class ManifestTests(unittest.TestCase):
             written = list(csv.DictReader(handle))
         self.assertEqual([row["path"] for row in written], ["a/rates.csv", "z/rates.csv"])
         self.assertEqual(validate_csv(SCHEMAS["run_inputs"], output), 2)
+
+    def test_profile_uses_one_snapshot_when_file_changes_after_validation(self) -> None:
+        path = self.write_rows("rates.csv", "historical_rates", [["2026-08-01", "UST", "DGS2", "2Y", "410"]])
+        original_validate = validate_csv
+
+        def mutate_after_validation(contract: object, candidate: Path) -> int:
+            result = original_validate(contract, candidate)
+            with candidate.open("a", encoding="utf-8", newline="") as handle:
+                csv.writer(handle).writerow(["2026-08-02", "UST", "DGS2", "2Y", "411"])
+            return result
+
+        with patch("data_pipeline.manifests.validate_csv", side_effect=mutate_after_validation):
+            manifest = profile_file(path, SCHEMAS["historical_rates"])
+        self.assertEqual((manifest.row_count, manifest.start_time, manifest.end_time), (1, "2026-08-01", "2026-08-01"))
+        self.assertEqual(manifest.sha256, "85452f8588bfc392267c3ffd46e9cb392f0d0df66f607d97ea2c59607fd8cde0")
+
+    def test_profile_requires_exact_registered_contract_and_contained_nonsymlink_path(self) -> None:
+        path = self.write_rows("rates.csv", "historical_rates", [["2026-08-01", "UST", "DGS2", "2Y", "410"]])
+        with self.assertRaisesRegex(ValueError, "approved"):
+            profile_file(path, replace(SCHEMAS["historical_rates"], version="1.0.0"))
+        outside = Path(self.tempdir.name).parent / "outside-rates.csv"
+        outside.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        self.addCleanup(lambda: outside.unlink(missing_ok=True))
+        with self.assertRaisesRegex(ValueError, "repository"):
+            profile_file(outside, SCHEMAS["historical_rates"])
+        linked = self.root / "linked.csv"
+        try:
+            linked.symlink_to(path)
+        except OSError as error:
+            self.skipTest(f"symlinks unavailable: {error}")
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            profile_file(linked, SCHEMAS["historical_rates"])
+
+    def test_writer_requires_valid_run_id_and_preserves_destination_on_temp_validation_failure(self) -> None:
+        output = self.root / "p24_inputs.csv"
+        output.write_text("old destination", encoding="utf-8")
+        rows = [FileManifest("rates.csv", "a" * 64, 1, "2026-08-01", "2026-08-01", "1.0.0")]
+        with self.assertRaises(ValueError):
+            write_input_manifest(output, "", rows)
+        self.assertEqual(output.read_text(encoding="utf-8"), "old destination")
+        with patch("data_pipeline.manifests.validate_csv", side_effect=ValueError("temp invalid")):
+            with self.assertRaisesRegex(ValueError, "temp invalid"):
+                write_input_manifest(output, "p24-run", rows)
+        self.assertEqual(output.read_text(encoding="utf-8"), "old destination")
+        self.assertEqual(list(output.parent.glob(f".{output.name}.*.tmp")), [])
 
 
 if __name__ == "__main__":
