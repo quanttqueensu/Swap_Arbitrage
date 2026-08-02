@@ -11,6 +11,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+def _blocked_network(*args: object, **kwargs: object) -> None:
+    raise AssertionError("network access is forbidden in P23 tests")
+
+
+_MODULE_SOCKET_GUARDS = [
+    patch.object(socket.socket, "connect", side_effect=_blocked_network),
+    patch.object(socket.socket, "connect_ex", side_effect=_blocked_network),
+    patch.object(socket.socket, "sendto", side_effect=_blocked_network),
+    patch("socket.create_connection", side_effect=_blocked_network),
+    patch("socket.getaddrinfo", side_effect=_blocked_network),
+]
+for _module_socket_guard in _MODULE_SOCKET_GUARDS:
+    _module_socket_guard.start()
+
 from data_pipeline.contracts import SCHEMAS, validate_csv
 from data_pipeline.ibkr_paper_source import (
     IbkrPaperRecorder,
@@ -115,7 +129,7 @@ class PaperEventStoreTests(unittest.TestCase):
 
     def test_rejects_sensitive_values_without_echoing_them(self) -> None:
         store = PaperEventStore(self.root, "agent_0", "run-1")
-        for sensitive in ("DU12345678", "client_id=42", "credential=not-for-csv", "localhost", "127.0.0.1", "paper-gateway", "node-01", "127.0.0.1:7497"):
+        for sensitive in ("DU12345678", "DU1", "U1", "DU_SECRET", "U_SECRET", "client_id=42", "credential=not-for-csv", "localhost", "127.0.0.1", "paper-gateway", "node-01", "127.0.0.1:7497"):
             with self.subTest(sensitive=sensitive):
                 with self.assertRaisesRegex(ValueError, "sensitive") as caught:
                     store.write("paper_quotes", [quote("2026-08-02T15:00:00Z", sensitive, "98", "99")])
@@ -186,6 +200,7 @@ class FakeIB:
         self.market_data_requests: list[tuple[object, str, bool, bool]] = []
         self.is_connected_calls = 0
         self.managed_account_calls = 0
+        self.market_data_failure: Exception | None = None
 
     def isConnected(self) -> bool:
         self.is_connected_calls += 1
@@ -200,6 +215,8 @@ class FakeIB:
     def reqMktData(
         self, contract: object, generic_tick_list: str, snapshot: bool, regulatory_snapshot: bool
     ) -> SimpleNamespace:
+        if self.market_data_failure is not None:
+            raise self.market_data_failure
         self.market_data_requests.append((contract, generic_tick_list, snapshot, regulatory_snapshot))
         return SimpleNamespace()
 
@@ -234,9 +251,13 @@ class PaperRecorderQuoteTests(unittest.TestCase):
             ({"port": 7496}, "paper port"),
             ({"client_id": 0}, "client ID"),
             ({"client_id": 31}, "client ID"),
+            ({"client_id": True}, "client ID"),
+            ({"client_id": 30.0}, "client ID"),
             ({"paper_only": False}, "paper-only"),
             ({"live_trading_enabled": True}, "live trading"),
             ({"account_id": "U12345678"}, "DU paper account"),
+            ({"account_id": "DU_SECRET"}, "DU paper account"),
+            ({"account_id": "DU123x"}, "DU paper account"),
             ({"account_alias": ""}, "account alias"),
             ({"stale_after_seconds": 0}, "stale quote limit"),
         ):
@@ -336,6 +357,57 @@ class PaperRecorderQuoteTests(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(PaperSafetyError, message):
                     recorder.record_quote(self.contract(101), ticker, observed)
+
+    def test_quote_paths_sanitize_hostile_properties_scalars_and_broker_calls(self) -> None:
+        secret = "DU12345678 credential=secret host=127.0.0.1 client_id=30"
+
+        class HostileObject:
+            def __getattribute__(self, _: str) -> object:
+                raise PaperSafetyError(secret)
+
+        class HostileScalar:
+            def __str__(self) -> str:
+                raise PaperSafetyError(secret)
+
+        now = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        operations = []
+        request_property = self.recorder_for()
+        operations.append(lambda: request_property.request_quotes([HostileObject()]))
+        request_call = self.recorder_for()
+        request_call.ib.market_data_failure = PaperSafetyError(secret)
+        operations.append(lambda: request_call.request_quotes([self.contract(101)]))
+        quote_contract = self.recorder_for(clock=lambda: now)
+        operations.append(
+            lambda: quote_contract.record_quote(
+                HostileObject(), SimpleNamespace(bid=99, ask=100, bidSize=1, askSize=1), now
+            )
+        )
+        quote_scalar = self.recorder_for(clock=lambda: now)
+        operations.append(
+            lambda: quote_scalar.record_quote(
+                self.contract(101), SimpleNamespace(bid=HostileScalar(), ask=100, bidSize=1, askSize=1), now
+            )
+        )
+        for operation in operations:
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(PaperSafetyError, "broker") as caught:
+                    operation()
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                rendered = "".join(traceback.format_exception(caught.exception))
+                for marker in ("DU12345678", "credential", "127.0.0.1", "client_id"):
+                    self.assertNotIn(marker, str(caught.exception))
+                    self.assertNotIn(marker, rendered)
+
+    def test_recorder_public_surface_is_read_and_record_only(self) -> None:
+        public = {
+            name for name, value in vars(IbkrPaperRecorder).items()
+            if not name.startswith("_") and callable(value)
+        }
+        self.assertEqual(
+            public,
+            {"validate_session", "request_quotes", "record_quote", "record_order", "record_fill", "record_positions"},
+        )
 
 
 class PaperRecorderEventTests(unittest.TestCase):
@@ -437,6 +509,17 @@ class PaperRecorderEventTests(unittest.TestCase):
         third = self.recorder.record_fill("o-1", self.contract(101), self.execution("e-2", 1), self.commission("0"))
         self.assertEqual((first, second, third), (1, 1, 2))
 
+    def test_normalizes_ibkr_execution_sides_to_canonical_signed_fills(self) -> None:
+        buy = self.execution("e-bot", 2)
+        buy.side = "BOT"
+        sell = self.execution("e-sld", 3)
+        sell.side = "SLD"
+        self.assertEqual(self.recorder.record_fill("o-1", self.contract(101), buy, self.commission("0")), 1)
+        self.assertEqual(self.recorder.record_fill("o-2", self.contract(202), sell, self.commission("0")), 2)
+        text = self.store.path_for("paper_fills").read_text(encoding="utf-8")
+        self.assertIn(",IBKR:101,BUY,2,", text)
+        self.assertIn(",IBKR:202,SELL,-3,", text)
+
     def test_rejects_conflicting_execution_and_invalid_commission(self) -> None:
         self.recorder.record_fill("o-1", self.contract(101), self.execution("e-1", 1), self.commission("1.20"))
         with self.assertRaisesRegex(ValueError, "conflicting duplicate key"):
@@ -478,6 +561,58 @@ class PaperRecorderEventTests(unittest.TestCase):
                 for secret in ("DU12345678", "credential", "127.0.0.1", "client_id"):
                     self.assertNotIn(secret, str(caught.exception))
                     self.assertNotIn(secret, rendered)
+
+    def test_sanitizes_hostile_scalar_conversions_for_all_event_records(self) -> None:
+        secret = "DU12345678 credential=secret host=127.0.0.1 client_id=30"
+
+        class HostileScalar:
+            def __str__(self) -> str:
+                raise PaperSafetyError(secret)
+
+        created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        order = self.order("o-1", "BUY", 1)
+        order.totalQuantity = HostileScalar()
+        execution = self.execution("e-1", 1)
+        execution.shares = HostileScalar()
+        position = SimpleNamespace(
+            contract=self.contract(101), position=1, avgCost=HostileScalar(), marketPrice=99,
+            unrealizedPNL=1, realizedPNL=0,
+        )
+        for name, operation in (
+            ("order", lambda: self.recorder.record_order("decision-1", self.contract(101), order, "Submitted", created)),
+            ("fill", lambda: self.recorder.record_fill("o-1", self.contract(101), execution, self.commission("0"))),
+            ("position", lambda: self.recorder.record_positions([position], created)),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(PaperSafetyError, "broker object normalization") as caught:
+                    operation()
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                rendered = "".join(traceback.format_exception(caught.exception))
+                for marker in ("DU12345678", "credential", "127.0.0.1", "client_id"):
+                    self.assertNotIn(marker, rendered)
+
+    def test_configured_account_cannot_enter_any_recorder_row(self) -> None:
+        account_id = self.recorder.config.account_id
+        created = datetime(2026, 8, 2, 15, 0, tzinfo=timezone.utc)
+        self.recorder.clock = lambda: created
+        position = SimpleNamespace(
+            account=account_id, contract=self.contract(101), position=1, avgCost=98,
+            marketPrice=99, unrealizedPNL=1, realizedPNL=0,
+        )
+        ticker = SimpleNamespace(account=account_id, bid=99, ask=100, bidSize=1, askSize=1)
+        for name, operation in (
+            ("quote", lambda: self.recorder.record_quote(self.contract(101), ticker, created)),
+            ("order", lambda: self.recorder.record_order(account_id, self.contract(101), self.order("o-1", "BUY", 1), "Submitted", created)),
+            ("fill", lambda: self.recorder.record_fill(account_id, self.contract(101), self.execution("e-1", 1), self.commission("0"))),
+            ("position", lambda: self.recorder.record_positions([position], created)),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(PaperSafetyError) as caught:
+                    operation()
+                self.assertNotIn(account_id, str(caught.exception))
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
 
     def test_unsafe_session_blocks_event_objects_before_access(self) -> None:
         unsafe = IbkrPaperRecorder(

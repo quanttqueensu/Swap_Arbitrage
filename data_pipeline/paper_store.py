@@ -20,7 +20,9 @@ SCHEMA_FILES = {
     "paper_positions": "positions.csv",
 }
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]+$")
-_SENSITIVE_ACCOUNT = re.compile(r"(?:^|\b)(?:DU|U)\d{3,}(?:\b|$)", re.IGNORECASE)
+_SENSITIVE_ACCOUNT = re.compile(
+    r"(?:^|\b)(?:DU|U)(?:\d+|[_-][A-Za-z0-9_-]+)(?:\b|$)", re.IGNORECASE
+)
 _SENSITIVE_LABEL = re.compile(
     r"(?:^|[?&,;\s])(?:host|hostname|password|credential|secret|token|client[_ -]?id)\s*[:=]",
     re.IGNORECASE,

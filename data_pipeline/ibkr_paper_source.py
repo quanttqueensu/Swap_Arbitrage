@@ -145,6 +145,18 @@ def _instrument_id_from_text(con_id: str) -> str:
     return f"IBKR:{con_id}"
 
 
+def _strict_broker_contract_id(contract: object) -> int | None:
+    _reject_broker_account(contract)
+    con_id = getattr(contract, "conId", None)
+    return con_id if type(con_id) is int else None
+
+
+def _instrument_id_from_int(con_id: int | None) -> str:
+    if con_id is None or con_id <= 0:
+        raise PaperSafetyError("contract must have a positive contract ID")
+    return f"IBKR:{con_id}"
+
+
 def _broker_text(value: object, field_name: str) -> str:
     value = getattr(value, field_name, None)
     return "" if value is None else str(value)
@@ -176,13 +188,13 @@ class IbkrPaperRecorder:
             raise PaperSafetyError("unsafe paper host")
         if isinstance(self.config.port, bool) or not isinstance(self.config.port, int) or self.config.port != 7497:
             raise PaperSafetyError("unsafe paper port")
-        if self.config.client_id != 30:
+        if type(self.config.client_id) is not int or self.config.client_id != 30:
             raise PaperSafetyError("paper client ID is required")
         if self.config.paper_only is not True:
             raise PaperSafetyError("paper-only mode is required")
         if self.config.live_trading_enabled is not False:
             raise PaperSafetyError("live trading must be disabled")
-        if not isinstance(self.config.account_id, str) or not self.config.account_id.startswith("DU"):
+        if not isinstance(self.config.account_id, str) or re.fullmatch(r"DU\d+", self.config.account_id) is None:
             raise PaperSafetyError("DU paper account is required")
         if not isinstance(self.config.account_alias, str) or not self.config.account_alias:
             raise PaperSafetyError("nonempty account alias is required")
@@ -211,36 +223,45 @@ class IbkrPaperRecorder:
     def request_quotes(self, contracts: list[object]) -> list[object]:
         self.validate_session()
         checked_contracts = list(contracts)
-        for contract in checked_contracts:
-            _instrument_id(contract)
-        return [self.ib.reqMktData(contract, "", False, False) for contract in checked_contracts]
+        contract_ids = [
+            _normalize_broker_object(lambda contract=contract: _strict_broker_contract_id(contract))
+            for contract in checked_contracts
+        ]
+        for con_id in contract_ids:
+            _instrument_id_from_int(con_id)
+        return [
+            _normalize_broker_object(
+                lambda contract=contract: self.ib.reqMktData(contract, "", False, False)
+            )
+            for contract in checked_contracts
+        ]
 
     def record_quote(self, contract: object, ticker: object, observed_at_utc: datetime) -> int:
         self.validate_session()
-        instrument_id = _instrument_id(contract)
         timestamp_utc = _utc_text(observed_at_utc)
         now_utc = self.clock()
         _utc_text(now_utc)
         age_seconds = (now_utc.astimezone(timezone.utc) - observed_at_utc.astimezone(timezone.utc)).total_seconds()
         if age_seconds < 0 or age_seconds > self.config.stale_after_seconds:
             raise PaperSafetyError("stale quote timestamp")
-        bid_price = _finite_decimal(getattr(ticker, "bid", None), "bid_price")
-        ask_price = _finite_decimal(getattr(ticker, "ask", None), "ask_price")
-        bid_size = _finite_decimal(getattr(ticker, "bidSize", None), "bid_size")
-        ask_size = _finite_decimal(getattr(ticker, "askSize", None), "ask_size")
+        values = _normalize_broker_object(lambda: self._quote_values(contract, ticker))
+        instrument_id = _instrument_id_from_int(values["con_id"])
+        bid_price = _finite_decimal(values["bid_price"], "bid_price")
+        ask_price = _finite_decimal(values["ask_price"], "ask_price")
+        bid_size = _finite_decimal(values["bid_size"], "bid_size")
+        ask_size = _finite_decimal(values["ask_size"], "ask_size")
         if bid_price > ask_price:
             raise PaperSafetyError("crossed quote")
-        return self.store.write(
-            "paper_quotes",
-            [{
-                "timestamp_utc": timestamp_utc,
-                "instrument_id": instrument_id,
-                "bid_price": bid_price,
-                "ask_price": ask_price,
-                "bid_size": bid_size,
-                "ask_size": ask_size,
-            }],
-        )
+        row = {
+            "timestamp_utc": timestamp_utc,
+            "instrument_id": instrument_id,
+            "bid_price": bid_price,
+            "ask_price": ask_price,
+            "bid_size": bid_size,
+            "ask_size": ask_size,
+        }
+        self._reject_configured_account([row])
+        return self.store.write("paper_quotes", [row])
 
     def record_order(
         self, decision_id: str, contract: object, order: object, status: str, created_at_utc: datetime
@@ -248,6 +269,7 @@ class IbkrPaperRecorder:
         self.validate_session()
         values = _normalize_broker_object(lambda: self._order_values(contract, order))
         row = self._order_row(decision_id, status, created_at_utc, values)
+        self._reject_configured_account([row])
         return self.store.write("paper_orders", [row])
 
     def record_fill(
@@ -258,6 +280,7 @@ class IbkrPaperRecorder:
             raise PaperSafetyError("commission report is required")
         values = _normalize_broker_object(lambda: self._fill_values(contract, execution, commission_report))
         row = self._fill_row(order_ref, values)
+        self._reject_configured_account([row])
         return self.store.write("paper_fills", [row])
 
     def record_positions(self, position_rows: Iterable[object], observed_at_utc: datetime) -> int:
@@ -265,7 +288,25 @@ class IbkrPaperRecorder:
         timestamp_utc = _utc_text(observed_at_utc)
         values = _normalize_broker_object(lambda: self._position_values(position_rows))
         rows = self._position_rows(values, timestamp_utc)
+        self._reject_configured_account(rows)
         return self.store.write("paper_positions", rows)
+
+    @staticmethod
+    def _quote_values(contract: object, ticker: object) -> dict[str, object]:
+        _reject_broker_account(contract)
+        _reject_broker_account(ticker)
+        return {
+            "con_id": _strict_broker_contract_id(contract),
+            "bid_price": _broker_text(ticker, "bid"),
+            "ask_price": _broker_text(ticker, "ask"),
+            "bid_size": _broker_text(ticker, "bidSize"),
+            "ask_size": _broker_text(ticker, "askSize"),
+        }
+
+    def _reject_configured_account(self, rows: Iterable[dict[str, object]]) -> None:
+        account_id = self.config.account_id
+        if any(account_id in str(value) for row in rows for value in row.values()):
+            raise PaperSafetyError("configured account values are not permitted")
 
     @staticmethod
     def _order_values(contract: object, order: object) -> dict[str, str]:
@@ -325,7 +366,8 @@ class IbkrPaperRecorder:
 
     @staticmethod
     def _fill_row(order_ref: str, values: dict[str, str]) -> dict[str, object]:
-        side, quantity = _signed_quantity(values["side"], values["quantity"], "fill quantity")
+        normalized_side = {"BOT": "BUY", "SLD": "SELL"}.get(values["side"].upper(), values["side"])
+        side, quantity = _signed_quantity(normalized_side, values["quantity"], "fill quantity")
         return {
             "fill_id": _nonempty_text(values["fill_id"], "execution ID"),
             "order_ref": _nonempty_text(order_ref, "order_ref"),
