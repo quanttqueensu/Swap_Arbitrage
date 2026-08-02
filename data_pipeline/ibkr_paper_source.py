@@ -89,11 +89,17 @@ class IbkrPaperRecorder:
             or self.config.stale_after_seconds <= 0
         ):
             raise PaperSafetyError("positive stale quote limit is required")
+        broker_failure = False
+        connected = False
+        accounts: tuple[object, ...] = ()
         try:
             connected = self.ib.isConnected()
-            accounts = tuple(self.ib.managedAccounts()) if connected else ()
+            if connected:
+                accounts = tuple(self.ib.managedAccounts())
         except Exception:
-            raise PaperSafetyError("broker session validation failed") from None
+            broker_failure = True
+        if broker_failure:
+            raise PaperSafetyError("broker session validation failed")
         if not connected:
             raise PaperSafetyError("IBKR paper session is not connected")
         if self.config.account_id not in accounts:

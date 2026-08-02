@@ -256,6 +256,8 @@ class PaperRecorderQuoteTests(unittest.TestCase):
         recorder.ib.failure = RuntimeError(f"broker rejected {account_id}; {alias}")
         with self.assertRaisesRegex(PaperSafetyError, "broker session validation") as caught:
             recorder.request_quotes([self.contract(101)])
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
         rendered = "".join(traceback.format_exception(caught.exception))
         for sensitive in (account_id, alias, "127.0.0.1", "client_id=30"):
             with self.subTest(sensitive=sensitive):
