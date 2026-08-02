@@ -65,3 +65,16 @@ library.
 - Historical baseline and approval records remain untouched. Provider names
   remain only where they label retired or historical material, not active
   source-routing directives.
+
+## Fix round 2 evidence and self-review
+
+- Removed retired P22 from the active Phase 3 execution list; it now lists
+  P23 and P24 only.
+- Corrected P24 sequencing: P24 follows P23 fake-broker schema coverage and
+  creates staged/dry-run source-neutral migration evidence for MG4 review.
+  MG4, rather than a prerequisite to P24, gates publication, strategy
+  consumption, and P30.
+- No text regression was added because these human-facing planning directives
+  have no executable consumer; source-text tests would only detect an
+  intentional wording change rather than exercise behavior.
+- Historical verification records were not edited.

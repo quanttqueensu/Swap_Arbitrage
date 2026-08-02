@@ -240,7 +240,7 @@ source or derivation, one unique key, and at least one named consumer.
 **Purpose:** Produce narrow, validated CSVs through source adapters without
 leaking source-specific details into strategy code.
 
-**Execute:** Prompts `P22`, `P23`, and `P24`.
+**Execute:** Prompts `P23` and `P24`.
 
 **Deliverables:**
 

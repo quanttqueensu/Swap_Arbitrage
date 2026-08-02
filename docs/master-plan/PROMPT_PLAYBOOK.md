@@ -284,9 +284,10 @@ any later IBKR paper connectivity check.
 ### P24 — Migrate data through a verified dry run
 
 ```text
-Execute only master-plan prompt P24 after P23's fake-broker schema coverage and
-MG4 approval of the staged source-neutral adapter evidence. P22 is retired and
-is not a prerequisite.
+Execute only master-plan prompt P24 after P23's fake-broker schema coverage.
+P24 creates the staged/dry-run source-neutral migration evidence for MG4
+review; MG4 then gates publication, strategy consumption, and P30. P22 is
+retired and is not a prerequisite.
 
 Implement canonicalization, manifest generation, and the approved migration
 from P21 using only approved local, IBKR, FRED, and CME adapters. First run the
