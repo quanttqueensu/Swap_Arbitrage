@@ -1,4 +1,4 @@
-"""Pure, fail-closed transforms for approved market-data inputs."""
+"""Fail-closed, deterministic transforms for approved market inputs."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 
 class CanonicalizationError(ValueError):
-    """An input cannot safely be represented by a canonical contract."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -29,37 +29,26 @@ RATE_COLUMNS = {
     "sofr": ("NYFED", "SOFR", "ON"),
     "effr": ("NYFED", "EFFR", "ON"),
 }
-RATE_HEADER = [
-    "date", "dgs1mo", "dgs2mo", "dgs3mo", "dgs4mo", "dgs6mo", "dgs1", "dgs2",
-    "dgs3", "dgs5", "dgs7", "dgs10", "dgs20", "dgs30", "sofr", "effr",
-]
+RATE_HEADER = ["date", "dgs1mo", "dgs2mo", "dgs3mo", "dgs4mo", "dgs6mo", "dgs1", "dgs2", "dgs3", "dgs5", "dgs7", "dgs10", "dgs20", "dgs30", "sofr", "effr"]
 FUTURES_HEADER = ["date", "ticker", "price", "dv01"]
 SWAP_PRICE_HEADER = ["date", "eris_swap_2y_price", "eris_swap_2y_return", "eris_swap_5y_price", "eris_swap_5y_return"]
 TREASURY_PRICE_HEADER = ["date", "treasury_futures_2y_price", "treasury_futures_2y_return", "treasury_futures_5y_price", "treasury_futures_5y_return"]
-ERIS_MONTHS = {"H": "03", "M": "06", "U": "09", "Z": "12"}
+MONTHS = {"H": "03", "M": "06", "U": "09", "Z": "12"}
 
 
-def _decimal(value: str, label: str) -> Decimal:
-    if value == "":
-        raise CanonicalizationError(f"{label} is required")
+def _read(path: Path, header: list[str]) -> list[dict[str, str]]:
     try:
-        parsed = Decimal(value)
-    except InvalidOperation as error:
-        raise CanonicalizationError(f"{label} must be decimal") from error
-    if not parsed.is_finite():
-        raise CanonicalizationError(f"{label} must be finite")
-    if parsed <= 0:
-        raise CanonicalizationError(f"{label} must be positive")
-    return parsed
-
-
-def _number_text(value: Decimal) -> str:
-    text = format(value, "f")
-    return text.rstrip("0").rstrip(".") if "." in text else text
-
-
-def percent_to_bps(value: str) -> str:
-    return _number_text(_decimal(value, "rate") * Decimal("100"))
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != header:
+                raise CanonicalizationError(f"header must equal {header}")
+            rows = list(reader)
+    except OSError as error:
+        raise CanonicalizationError(f"cannot read {path}") from error
+    for number, row in enumerate(rows, 2):
+        if None in row or any(row[column] is None for column in header):
+            raise CanonicalizationError(f"row {number}: row width differs from header")
+    return rows
 
 
 def _date(value: str) -> date:
@@ -69,134 +58,121 @@ def _date(value: str) -> date:
         raise CanonicalizationError("date must be ISO YYYY-MM-DD") from error
 
 
-def _read_rows(path: Path, expected_header: list[str]) -> list[dict[str, str]]:
+def _positive(value: str, name: str) -> Decimal:
+    if value == "":
+        raise CanonicalizationError(f"{name} is required")
     try:
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
-            if reader.fieldnames != expected_header:
-                raise CanonicalizationError(f"header must equal {expected_header}")
-            rows = list(reader)
-    except OSError as error:
-        raise CanonicalizationError(f"cannot read {path}") from error
-    for number, row in enumerate(rows, start=2):
-        if None in row or any(row[name] is None for name in expected_header):
-            raise CanonicalizationError(f"row {number}: row width differs from header")
-    return rows
+        decimal = Decimal(value)
+    except InvalidOperation as error:
+        raise CanonicalizationError(f"{name} must be decimal") from error
+    if not decimal.is_finite():
+        raise CanonicalizationError(f"{name} must be finite")
+    if decimal <= 0:
+        raise CanonicalizationError(f"{name} must be positive")
+    return decimal
+
+
+def _text(value: Decimal) -> str:
+    output = format(value, "f")
+    return output.rstrip("0").rstrip(".") if "." in output else output
+
+
+def percent_to_bps(value: str) -> str:
+    return _text(_positive(value, "rate") * Decimal("100"))
 
 
 def _partition(rows: list[dict[str, str]], ordering: tuple[str, ...]) -> dict[int, list[dict[str, str]]]:
     partitions: dict[int, list[dict[str, str]]] = {}
     for row in rows:
-        year = _date(row["observation_date"]).year
-        partitions.setdefault(year, []).append(row)
-    for partition in partitions.values():
-        partition.sort(key=lambda row: tuple(row[name] for name in ordering))
+        partitions.setdefault(_date(row["observation_date"]).year, []).append(row)
+    for rows_for_year in partitions.values():
+        rows_for_year.sort(key=lambda row: tuple(row[column] for column in ordering))
     return dict(sorted(partitions.items()))
 
 
 def canonicalize_rates(path: Path) -> dict[int, list[dict[str, str]]]:
-    output: list[dict[str, str]] = []
-    seen_dates: set[str] = set()
-    for row in _read_rows(path, RATE_HEADER):
-        observation_date = row["date"]
-        _date(observation_date)
-        if observation_date in seen_dates:
-            raise CanonicalizationError(f"duplicate rate date {observation_date}")
-        seen_dates.add(observation_date)
+    result: list[dict[str, str]] = []
+    dates: set[str] = set()
+    for row in _read(path, RATE_HEADER):
+        observed = row["date"]
+        _date(observed)
+        if observed in dates:
+            raise CanonicalizationError(f"duplicate rate date {observed}")
+        dates.add(observed)
         for column, (source, series_id, maturity) in RATE_COLUMNS.items():
-            output.append({
-                "observation_date": observation_date,
-                "source": source,
-                "series_id": series_id,
-                "maturity": maturity,
-                "rate_bps": percent_to_bps(row[column]),
-            })
-    return _partition(output, ("observation_date", "source", "series_id", "maturity"))
+            result.append({"observation_date": observed, "source": source, "series_id": series_id, "maturity": maturity, "rate_bps": percent_to_bps(row[column])})
+    return _partition(result, ("observation_date", "source", "series_id", "maturity"))
 
 
-def _eris_instrument_id(ticker: str) -> str:
-    if len(ticker) != 5 or ticker[:3] not in {"YIT", "YIW"} or ticker[3] not in ERIS_MONTHS or not ticker[4:].isdigit():
+def _eris_id(ticker: str) -> str:
+    # ``YIU26`` is the existing short legacy 2Y form; canonicalize it to YIT.
+    if len(ticker) == 5 and ticker[:2] == "YI":
+        root, month, year = "YIT", ticker[2], ticker[3:]
+    elif len(ticker) == 6 and ticker[:3] in {"YIT", "YIW"}:
+        root, month, year = ticker[:3], ticker[3], ticker[4:]
+    else:
         raise CanonicalizationError(f"unapproved Eris ticker {ticker}")
-    return f"ERIS-{ticker[:3]}-20{ticker[4:]}{ERIS_MONTHS[ticker[3]]}"
+    if month not in MONTHS or len(year) != 2 or not year.isdigit():
+        raise CanonicalizationError(f"unapproved Eris ticker {ticker}")
+    return f"ERIS-{root}-20{year}{MONTHS[month]}"
 
 
-def _treasury_instrument_id(ticker: str) -> str:
+def _treasury_id(ticker: str) -> str:
     if ticker not in {"ZT=F", "ZF=F"}:
         raise CanonicalizationError(f"unapproved Treasury proxy ticker {ticker}")
     return f"YAHOO-CONTINUOUS-{ticker[:2]}"
 
 
-def canonicalize_futures(
-    swap_path: Path, treasury_path: Path,
-) -> tuple[dict[int, list[dict[str, str]]], dict[int, list[dict[str, str]]]]:
+def canonicalize_futures(swap_path: Path, treasury_path: Path) -> tuple[dict[int, list[dict[str, str]]], dict[int, list[dict[str, str]]]]:
     settlements: list[dict[str, str]] = []
-    risk: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for path, source, identify, method in (
-        (swap_path, "ERIS", _eris_instrument_id, "eris_settlement_dv01"),
-        (treasury_path, "YAHOO", _treasury_instrument_id, "cme_fixed_ics_ratio_proxy"),
-    ):
-        for row in _read_rows(path, FUTURES_HEADER):
-            observation_date = row["date"]
-            _date(observation_date)
-            instrument_id = identify(row["ticker"])
-            identity = (observation_date, instrument_id)
-            if identity in seen:
-                raise CanonicalizationError(f"duplicate futures identity {identity}")
-            seen.add(identity)
-            price = _number_text(_decimal(row["price"], "price"))
-            dv01 = _number_text(_decimal(row["dv01"], "dv01"))
-            settlements.append({"observation_date": observation_date, "source": source, "instrument_id": instrument_id, "settlement_price": price, "dv01_usd_per_bp": ""})
-            risk.append({"observation_date": observation_date, "instrument_id": instrument_id, "dv01_usd_per_bp": dv01, "rate_sensitivity_sign": "-1", "dv01_method": method})
-    return (
-        _partition(settlements, ("observation_date", "source", "instrument_id")),
-        _partition(risk, ("observation_date", "instrument_id")),
+    risks: list[dict[str, str]] = []
+    identities: set[tuple[str, str]] = set()
+    sources: tuple[tuple[Path, str, Callable[[str], str], str], ...] = (
+        (swap_path, "ERIS", _eris_id, "eris_settlement_dv01"),
+        (treasury_path, "YAHOO", _treasury_id, "cme_fixed_ics_ratio_proxy"),
     )
+    for path, source, identify, method in sources:
+        for row in _read(path, FUTURES_HEADER):
+            observed = row["date"]
+            _date(observed)
+            instrument_id = identify(row["ticker"])
+            identity = (observed, instrument_id)
+            if identity in identities:
+                raise CanonicalizationError(f"duplicate futures identity {identity}")
+            identities.add(identity)
+            settlements.append({"observation_date": observed, "source": source, "instrument_id": instrument_id, "settlement_price": _text(_positive(row["price"], "price")), "dv01_usd_per_bp": ""})
+            risks.append({"observation_date": observed, "instrument_id": instrument_id, "dv01_usd_per_bp": _text(_positive(row["dv01"], "dv01")), "rate_sensitivity_sign": "-1", "dv01_method": method})
+    return _partition(settlements, ("observation_date", "source", "instrument_id")), _partition(risks, ("observation_date", "instrument_id"))
 
 
-def _timestamp(observation_date: str, timing: SourceTiming) -> tuple[str, str]:
-    day = _date(observation_date)
-    observed = datetime.combine(day, timing.observation_time_utc, tzinfo=timezone.utc)
-    available = observed + timing.availability_delay
-    return observed.strftime("%Y-%m-%dT%H:%M:%SZ"), available.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _market_rows(path: Path, header: list[str], mappings: tuple[tuple[str, str], ...], timing_rules: Mapping[str, SourceTiming], source: str) -> list[dict[str, str]]:
+def _market_rows(path: Path, header: list[str], columns: tuple[tuple[str, str], ...], source: str, timing_rules: Mapping[str, SourceTiming]) -> list[dict[str, str]]:
     timing = timing_rules.get(source)
     if timing is None or timing.source != source:
         raise CanonicalizationError(f"no timing rule for {source}")
-    if timing.classification not in {"exact", "proxy", "assumed", "unavailable"}:
-        raise CanonicalizationError(f"invalid classification for {source}")
-    if (timing.classification == "proxy") != bool(timing.proxy_label):
-        raise CanonicalizationError(f"invalid proxy label for {source}")
-    output: list[dict[str, str]] = []
-    seen_dates: set[str] = set()
-    for row in _read_rows(path, header):
-        observation_date = row["date"]
-        _date(observation_date)
-        if observation_date in seen_dates:
-            raise CanonicalizationError(f"duplicate market date {observation_date}")
-        seen_dates.add(observation_date)
-        observed, available = _timestamp(observation_date, timing)
-        for column, instrument_id in mappings:
-            output.append({
-                "observation_date": observation_date, "series_id": "", "instrument_id": instrument_id,
-                "value": _number_text(_decimal(row[column], "price")), "value_unit": "price_points",
-                "source_observation_time_utc": observed, "available_at_utc": available,
+    if timing.classification not in {"exact", "proxy", "assumed", "unavailable"} or (timing.classification == "proxy") != bool(timing.proxy_label):
+        raise CanonicalizationError(f"invalid classification or proxy label for {source}")
+    result: list[dict[str, str]] = []
+    dates: set[str] = set()
+    for row in _read(path, header):
+        observed = row["date"]
+        day = _date(observed)
+        if observed in dates:
+            raise CanonicalizationError(f"duplicate market date {observed}")
+        dates.add(observed)
+        source_time = datetime.combine(day, timing.observation_time_utc, tzinfo=timezone.utc)
+        available = source_time + timing.availability_delay
+        for column, instrument_id in columns:
+            result.append({
+                "observation_date": observed, "series_id": "", "instrument_id": instrument_id,
+                "value": _text(_positive(row[column], "price")), "value_unit": "price_points",
+                "source_observation_time_utc": source_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "available_at_utc": available.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "source": source, "classification": timing.classification, "proxy_label": timing.proxy_label,
             })
-    return output
+    return result
 
 
-def canonicalize_daily_market(
-    swap_prices_path: Path, treasury_prices_path: Path, timing_rules: Mapping[str, SourceTiming],
-) -> dict[int, list[dict[str, str]]]:
-    rows = _market_rows(
-        swap_prices_path, SWAP_PRICE_HEADER,
-        (("eris_swap_2y_price", "ERIS-YIT"), ("eris_swap_5y_price", "ERIS-YIW")), timing_rules, "ERIS",
-    )
-    rows.extend(_market_rows(
-        treasury_prices_path, TREASURY_PRICE_HEADER,
-        (("treasury_futures_2y_price", "YAHOO-CONTINUOUS-ZT"), ("treasury_futures_5y_price", "YAHOO-CONTINUOUS-ZF")), timing_rules, "YAHOO",
-    ))
+def canonicalize_daily_market(swap_prices_path: Path, treasury_prices_path: Path, timing_rules: Mapping[str, SourceTiming]) -> dict[int, list[dict[str, str]]]:
+    rows = _market_rows(swap_prices_path, SWAP_PRICE_HEADER, (("eris_swap_2y_price", "ERIS-YIT"), ("eris_swap_5y_price", "ERIS-YIW")), "ERIS", timing_rules)
+    rows.extend(_market_rows(treasury_prices_path, TREASURY_PRICE_HEADER, (("treasury_futures_2y_price", "YAHOO-CONTINUOUS-ZT"), ("treasury_futures_5y_price", "YAHOO-CONTINUOUS-ZF")), "YAHOO", timing_rules))
     return _partition(rows, ("observation_date", "series_id", "instrument_id", "source", "available_at_utc"))
