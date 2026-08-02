@@ -183,7 +183,7 @@ class ManifestTests(unittest.TestCase):
     def test_profile_hashes_validated_bytes_and_derives_date_coverage(self) -> None:
         path = self.write_rows("rates.csv", "historical_rates", [["2026-08-01", "UST", "DGS2", "2Y", "410"]])
 
-        manifest = profile_file(path, SCHEMAS["historical_rates"])
+        manifest = profile_file(self.root, path, SCHEMAS["historical_rates"])
 
         self.assertEqual(manifest.sha256, "85452f8588bfc392267c3ffd46e9cb392f0d0df66f607d97ea2c59607fd8cde0")
         self.assertEqual(manifest.row_count, 1)
@@ -194,11 +194,11 @@ class ManifestTests(unittest.TestCase):
     def test_profile_rejects_empty_or_unvalidated_input(self) -> None:
         empty = self.write_rows("empty.csv", "historical_rates", [])
         with self.assertRaisesRegex(ValueError, "empty"):
-            profile_file(empty, SCHEMAS["historical_rates"])
+            profile_file(self.root, empty, SCHEMAS["historical_rates"])
         bad = self.root / "bad.csv"
         bad.write_text("wrong\nvalue\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "header"):
-            profile_file(bad, SCHEMAS["historical_rates"])
+            profile_file(self.root, bad, SCHEMAS["historical_rates"])
 
     def test_digest_and_atomic_writer_sort_by_normalized_path(self) -> None:
         rows = [
@@ -229,26 +229,41 @@ class ManifestTests(unittest.TestCase):
             return result
 
         with patch("data_pipeline.manifests.validate_csv", side_effect=mutate_after_validation):
-            manifest = profile_file(path, SCHEMAS["historical_rates"])
-        self.assertEqual((manifest.row_count, manifest.start_time, manifest.end_time), (1, "2026-08-01", "2026-08-01"))
-        self.assertEqual(manifest.sha256, "85452f8588bfc392267c3ffd46e9cb392f0d0df66f607d97ea2c59607fd8cde0")
+            with self.assertRaisesRegex(ValueError, "snapshot"):
+                profile_file(self.root, path, SCHEMAS["historical_rates"])
 
     def test_profile_requires_exact_registered_contract_and_contained_nonsymlink_path(self) -> None:
         path = self.write_rows("rates.csv", "historical_rates", [["2026-08-01", "UST", "DGS2", "2Y", "410"]])
         with self.assertRaisesRegex(ValueError, "approved"):
-            profile_file(path, replace(SCHEMAS["historical_rates"], version="1.0.0"))
+            profile_file(self.root, path, replace(SCHEMAS["historical_rates"], version="1.0.0"))
         outside = Path(self.tempdir.name).parent / "outside-rates.csv"
+        outside_root = outside.parent / ".git"
+        outside_root.mkdir(exist_ok=True)
+        self.addCleanup(lambda: outside_root.rmdir())
         outside.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
         self.addCleanup(lambda: outside.unlink(missing_ok=True))
         with self.assertRaisesRegex(ValueError, "repository"):
-            profile_file(outside, SCHEMAS["historical_rates"])
+            profile_file(self.root, outside, SCHEMAS["historical_rates"])
         linked = self.root / "linked.csv"
         try:
             linked.symlink_to(path)
         except OSError as error:
             self.skipTest(f"symlinks unavailable: {error}")
         with self.assertRaisesRegex(ValueError, "symlink"):
-            profile_file(linked, SCHEMAS["historical_rates"])
+            profile_file(self.root, linked, SCHEMAS["historical_rates"])
+
+    def test_profile_rejects_validation_temp_replaced_with_different_valid_bytes(self) -> None:
+        path = self.write_rows("rates.csv", "historical_rates", [["2026-08-01", "UST", "DGS2", "2Y", "410"]])
+        replacement = self.write_rows("replacement.csv", "historical_rates", [["2026-08-02", "UST", "DGS2", "2Y", "411"]]).read_bytes()
+        original_validate = validate_csv
+
+        def replace_validation_temp(contract: object, candidate: Path) -> int:
+            candidate.write_bytes(replacement)
+            return original_validate(contract, candidate)
+
+        with patch("data_pipeline.manifests.validate_csv", side_effect=replace_validation_temp):
+            with self.assertRaisesRegex(ValueError, "snapshot"):
+                profile_file(self.root, path, SCHEMAS["historical_rates"])
 
     def test_writer_requires_valid_run_id_and_preserves_destination_on_temp_validation_failure(self) -> None:
         output = self.root / "p24_inputs.csv"

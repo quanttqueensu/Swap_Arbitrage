@@ -35,6 +35,32 @@ def _repository_root(path: Path) -> Path:
     raise ValueError(f"path has no repository root: {path}")
 
 
+def _approved_repository_root(repo_root: Path) -> Path:
+    root = repo_root.absolute()
+    git_marker = root / ".git"
+    if not root.is_dir() or root.is_symlink() or not git_marker.exists() or git_marker.is_symlink():
+        raise ValueError(f"repo_root must be an actual non-symlink repository root: {repo_root}")
+    return root.resolve(strict=True)
+
+
+def _contained_profile_file(repo_root: Path, path: Path) -> tuple[Path, Path]:
+    root = _approved_repository_root(repo_root)
+    raw_path = path.absolute()
+    try:
+        relative = raw_path.relative_to(repo_root.absolute())
+    except ValueError as error:
+        raise ValueError(f"path escapes repository: {path}") from error
+    current = repo_root.absolute()
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"symlink path is not allowed: {current}")
+    resolved_path = path.resolve(strict=True)
+    if resolved_path == root or root not in resolved_path.parents:
+        raise ValueError(f"path escapes repository: {path}")
+    return root, resolved_path
+
+
 def _contained_file(path: Path, *, require_exists: bool = True) -> tuple[Path, Path]:
     root = _repository_root(path)
     relative = path.absolute().relative_to(root)
@@ -106,9 +132,9 @@ def _snapshot(path: Path) -> bytes:
     return b"".join(chunks)
 
 
-def profile_file(path: Path, contract: CsvContract) -> FileManifest:
+def profile_file(repo_root: Path, path: Path, contract: CsvContract) -> FileManifest:
     contract = _approved_contract(contract)
-    root, source = _contained_file(path)
+    root, source = _contained_profile_file(repo_root, path)
     snapshot = _snapshot(source)
     if not snapshot:
         raise ValueError("cannot manifest an empty file")
@@ -120,7 +146,11 @@ def profile_file(path: Path, contract: CsvContract) -> FileManifest:
             handle.flush()
             os.fsync(handle.fileno())
         temporary = Path(temporary_name)
+        if temporary.read_bytes() != snapshot:
+            raise ValueError("validation snapshot bytes changed before validation")
         row_count = validate_csv(contract, temporary)
+        if temporary.read_bytes() != snapshot:
+            raise ValueError("validation snapshot bytes changed during validation")
     finally:
         if temporary_name is not None:
             Path(temporary_name).unlink(missing_ok=True)
