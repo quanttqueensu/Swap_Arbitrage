@@ -226,3 +226,40 @@ def generate_signal_decision(
         strategy_version=strategy_version,
         configuration_version=configuration_version,
     )
+
+
+def rank_opportunities(observations: object) -> tuple[str, ...] | None:
+    """Rank synchronized eligible maturities by absolute z-score."""
+    if isinstance(observations, str) or not isinstance(observations, Sequence):
+        return None
+    if len(observations) == 0:
+        return ()
+
+    maturities: set[str] = set()
+    decision_time = observations[0].observation_time_utc if type(observations[0]) is SpreadObservation else None
+    ranked: list[SpreadObservation] = []
+    for observation in observations:
+        if (
+            not _valid_observation(observation)
+            or observation.maturity in maturities
+            or observation.observation_time_utc != decision_time
+        ):
+            return None
+        maturities.add(observation.maturity)
+        if (
+            observation.source_quality_ok is True
+            and observation.is_fresh is True
+            and observation.observation_count == 252
+            and observation.z_score is not None
+            and (
+                observation.z_score >= Decimal("2.0")
+                and observation.traditional_net_opportunity_bps > 0
+                or observation.z_score <= Decimal("-2.0")
+                and observation.reverse_net_opportunity_bps > 0
+            )
+        ):
+            ranked.append(observation)
+
+    ranked.sort(key=lambda item: item.maturity)
+    ranked.sort(key=lambda item: item.z_score.copy_abs(), reverse=True)
+    return tuple(item.maturity for item in ranked)

@@ -36,7 +36,12 @@ from .spread import (
     tick_value_usd,
     treasury_fractional_quote_to_points,
 )
-from .signal_generation import causal_zscore, generate_signal_decision, signal_transition
+from .signal_generation import (
+    causal_zscore,
+    generate_signal_decision,
+    rank_opportunities,
+    signal_transition,
+)
 
 __all__ = [
     "ContractMetadata",
@@ -76,4 +81,5 @@ __all__ = [
     "causal_zscore",
     "signal_transition",
     "generate_signal_decision",
+    "rank_opportunities",
 ]

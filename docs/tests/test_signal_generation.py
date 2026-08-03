@@ -21,6 +21,7 @@ from strategy import (
     TradeDirection,
     causal_zscore,
     generate_signal_decision,
+    rank_opportunities,
     signal_transition,
 )
 
@@ -500,6 +501,105 @@ class SignalDecisionTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case):
                 self.assertIsNone(generate_signal_decision(*case))
+
+
+class OpportunityRankingTests(unittest.TestCase):
+    @staticmethod
+    def row(maturity, z_score, *, traditional="1", reverse="-1", count=252,
+            quality=True, fresh=True, when=BASE_TIME):
+        return replace(
+            observation(
+                maturity, when, Decimal("0"), z_score=Decimal(z_score) if z_score is not None else None,
+                count=count, quality=quality, fresh=fresh,
+            ),
+            traditional_net_opportunity_bps=Decimal(traditional),
+            reverse_net_opportunity_bps=Decimal(reverse),
+        )
+
+    # Mutation caught: sorting by signed z-score or ascending absolute z-score.
+    def test_ranks_eligible_traditional_and_reverse_rows_by_descending_absolute_zscore(self):
+        two_year = self.row("2Y", "2.1", traditional="1", reverse="-1")
+        five_year = self.row("5Y", "-3", traditional="-1", reverse="1")
+        self.assertEqual(rank_opportunities((two_year, five_year)), ("5Y", "2Y"))
+
+    # Mutation caught: omitting the deterministic maturity-text tie-break.
+    def test_equal_absolute_zscores_rank_maturity_text_ascending(self):
+        five_year = self.row("5Y", "-3", traditional="-1", reverse="1")
+        two_year = self.row("2Y", "3", traditional="1", reverse="-1")
+        self.assertEqual(rank_opportunities((five_year, two_year)), ("2Y", "5Y"))
+
+    # Mutation caught: treating a zero directional net as eligible.
+    def test_nonpositive_directional_net_excludes_an_otherwise_extreme_row(self):
+        blocked = self.row("2Y", "9", traditional="0", reverse="-1")
+        eligible = self.row("5Y", "2", traditional="1", reverse="-1")
+        self.assertEqual(rank_opportunities((blocked, eligible)), ("5Y",))
+
+    # Mutation caught: allowing rows that lack every required current-data qualifier.
+    def test_excludes_below_threshold_stale_poor_quality_missing_z_and_short_history_rows(self):
+        eligible = self.row("7Y", "2", traditional="1", reverse="-1")
+        rows = (
+            self.row("1Y", "1.9999", traditional="1", reverse="-1"),
+            self.row("2Y", "3", traditional="1", reverse="-1", fresh=False),
+            self.row("3Y", "3", traditional="1", reverse="-1", quality=False),
+            self.row("5Y", None, traditional="1", reverse="-1"),
+            self.row("10Y", "3", traditional="1", reverse="-1", count=251),
+            eligible,
+        )
+        self.assertEqual(rank_opportunities(rows), ("7Y",))
+
+    # Mutation caught: returning None instead of the empty valid ranking.
+    def test_no_eligible_rows_return_an_empty_tuple(self):
+        self.assertEqual(rank_opportunities((self.row("2Y", "1.9"),)), ())
+
+    # Mutation caught: rejecting a valid empty synchronized sequence.
+    def test_empty_sequence_returns_an_empty_tuple(self):
+        self.assertEqual(rank_opportunities(()), ())
+
+    # Mutation caught: accepting unsynchronized, duplicated, or non-observation collections.
+    def test_duplicate_maturity_mismatched_time_and_malformed_collections_return_none(self):
+        two_year = self.row("2Y", "2")
+        cases = (
+            (two_year, self.row("2Y", "3", when=BASE_TIME)),
+            (two_year, self.row("5Y", "3", when=BASE_TIME + timedelta(minutes=1))),
+            object(),
+            "not observations",
+            (two_year, object()),
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertIsNone(rank_opportunities(value))
+
+    # Mutation caught: retaining caller input order when z-scores differ.
+    def test_input_order_cannot_change_the_rank(self):
+        two_year = self.row("2Y", "2.1", traditional="1", reverse="-1")
+        five_year = self.row("5Y", "-3", traditional="-1", reverse="1")
+        self.assertEqual(rank_opportunities((two_year, five_year)), ("5Y", "2Y"))
+        self.assertEqual(rank_opportunities((five_year, two_year)), ("5Y", "2Y"))
+
+    # Mutation caught: performing ranking arithmetic in the caller Decimal context.
+    def test_preserves_a_nondefault_caller_decimal_context(self):
+        original = getcontext().copy()
+        constrained = original.copy()
+        constrained.prec = 2
+        constrained.rounding = ROUND_UP
+        constrained.Emin = -999
+        constrained.Emax = 999
+        constrained.capitals = 0
+        constrained.clamp = 1
+        constrained.clear_flags()
+        constrained.flags[Inexact] = True
+        constrained.traps[FloatOperation] = True
+        expected = context_snapshot(constrained)
+        rows = (
+            self.row("2Y", "2.1", traditional="1", reverse="-1"),
+            self.row("5Y", "-3", traditional="-1", reverse="1"),
+        )
+        try:
+            setcontext(constrained.copy())
+            self.assertEqual(rank_opportunities(rows), ("5Y", "2Y"))
+            self.assertEqual(context_snapshot(getcontext()), expected)
+        finally:
+            setcontext(original)
 
 
 if __name__ == "__main__":
