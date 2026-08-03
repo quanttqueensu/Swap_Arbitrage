@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from decimal import Decimal, localcontext
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP, localcontext
 
 from .models import TradeDirection
 
@@ -155,3 +155,68 @@ def net_opportunity_bps(
     with localcontext() as context:
         context.prec = 50
         return Decimal(direction) * gross - cost
+
+
+def dv01_hedge_quantities(
+    direction: object,
+    target_dv01: object,
+    swap_dv01: object,
+    treasury_dv01: object,
+) -> tuple[int, int]:
+    target = _decimal(target_dv01, positive=True)
+    swap = _decimal(swap_dv01, positive=True)
+    treasury = _decimal(treasury_dv01, positive=True)
+    if (
+        type(direction) is not TradeDirection
+        or direction is TradeDirection.FLAT
+        or target is None
+        or swap is None
+        or treasury is None
+    ):
+        return (0, 0)
+    with localcontext() as context:
+        context.prec = 50
+        swap_magnitude = int((target / swap).to_integral_value(rounding=ROUND_HALF_UP))
+        if swap_magnitude == 0:
+            return (0, 0)
+        swap_quantity = int(direction) * swap_magnitude
+        continuous_treasury = -Decimal(swap_quantity) * swap / treasury
+        floor = int(continuous_treasury.to_integral_value(rounding=ROUND_FLOOR))
+        candidates = (floor, floor + 1)
+        treasury_quantity = min(
+            candidates,
+            key=lambda quantity: (
+                abs(-Decimal(swap_quantity) * swap - Decimal(quantity) * treasury),
+                Decimal(abs(swap_quantity)) * swap + Decimal(abs(quantity)) * treasury,
+                quantity,
+            ),
+        )
+        return (swap_quantity, treasury_quantity)
+
+
+def residual_dv01_usd_per_bp(
+    swap_quantity: object,
+    treasury_quantity: object,
+    swap_dv01: object,
+    treasury_dv01: object,
+) -> Decimal | None:
+    swap = _decimal(swap_dv01, positive=True)
+    treasury = _decimal(treasury_dv01, positive=True)
+    if (
+        type(swap_quantity) is not int
+        or type(treasury_quantity) is not int
+        or swap is None
+        or treasury is None
+    ):
+        return None
+    with localcontext() as context:
+        context.prec = 50
+        return -Decimal(swap_quantity) * swap - Decimal(treasury_quantity) * treasury
+
+
+def residual_fraction(net_dv01: object, target_dv01: object) -> Decimal | None:
+    net = _decimal(net_dv01)
+    target = _decimal(target_dv01, positive=True)
+    if net is None or target is None:
+        return None
+    return _divide(abs(net), target)

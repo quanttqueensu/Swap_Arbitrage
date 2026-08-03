@@ -22,12 +22,15 @@ from .models import (
 from .spread import (
     STRATEGY_SPEC_VERSION,
     directional_cost_buffer_bps,
+    dv01_hedge_quantities,
     expected_funding_bps,
     fixed_swap_spread_bps,
     funding_spread_bps,
     gross_excess_spread_bps,
     net_opportunity_bps,
     rate_decimal_to_bps,
+    residual_dv01_usd_per_bp,
+    residual_fraction,
     tick_value_usd,
     treasury_fractional_quote_to_points,
 )
@@ -62,4 +65,7 @@ __all__ = [
     "gross_excess_spread_bps",
     "directional_cost_buffer_bps",
     "net_opportunity_bps",
+    "dv01_hedge_quantities",
+    "residual_dv01_usd_per_bp",
+    "residual_fraction",
 ]

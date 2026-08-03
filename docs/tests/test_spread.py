@@ -12,12 +12,15 @@ from strategy import TradeDirection
 from strategy.spread import (
     STRATEGY_SPEC_VERSION,
     directional_cost_buffer_bps,
+    dv01_hedge_quantities,
     expected_funding_bps,
     fixed_swap_spread_bps,
     funding_spread_bps,
     gross_excess_spread_bps,
     net_opportunity_bps,
     rate_decimal_to_bps,
+    residual_dv01_usd_per_bp,
+    residual_fraction,
     tick_value_usd,
     treasury_fractional_quote_to_points,
 )
@@ -244,6 +247,126 @@ class SpreadBoundaryTests(unittest.TestCase):
             context.prec, context.rounding, context.Emin, context.Emax,
             context.capitals, context.clamp, dict(context.flags), dict(context.traps),
         )
+
+
+class Dv01HedgeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture = json.loads(FIXTURE_PATH.read_bytes())
+
+    def test_frozen_hedge_examples_match_literal_outputs(self) -> None:
+        for example in self.fixture["hedge_examples"]:
+            with self.subTest(example=example["id"]):
+                target = Decimal(example["target_dv01_usd_per_bp"])
+                swap_dv01 = Decimal(example["swap_dv01_usd_per_bp"])
+                treasury_dv01 = Decimal(example["treasury_dv01_usd_per_bp"])
+                swap_quantity, treasury_quantity = dv01_hedge_quantities(
+                    TradeDirection(example["direction"]), target, swap_dv01, treasury_dv01
+                )
+                net = residual_dv01_usd_per_bp(
+                    swap_quantity, treasury_quantity, swap_dv01, treasury_dv01
+                )
+                fraction = residual_fraction(net, target)
+                allowed = (
+                    swap_quantity != 0
+                    and treasury_quantity != 0
+                    and fraction <= Decimal("0.05")
+                )
+                self.assertEqual(swap_quantity, example["expected_swap_quantity"])
+                self.assertEqual(treasury_quantity, example["expected_treasury_quantity"])
+                self.assertEqual(net, Decimal(example["expected_net_dv01_usd_per_bp"]))
+                self.assertEqual(fraction, Decimal(example["expected_residual_fraction"]))
+                self.assertEqual(allowed, example["expected_allowed"])
+
+    def test_swap_quantity_rounds_half_up_and_hedges(self) -> None:
+        cases = (("249", 2), ("250", 3), ("251", 3), ("50", 1))
+        for target, expected_quantity in cases:
+            with self.subTest(target=target):
+                swap_quantity, treasury_quantity = dv01_hedge_quantities(
+                    TradeDirection.TRADITIONAL,
+                    Decimal(target),
+                    Decimal("100"),
+                    Decimal("100"),
+                )
+                self.assertEqual(swap_quantity, expected_quantity)
+                self.assertEqual(treasury_quantity, -expected_quantity)
+
+    def test_directions_are_exact_sign_mirrors(self) -> None:
+        traditional = dv01_hedge_quantities(
+            TradeDirection.TRADITIONAL, Decimal("1000"), Decimal("100"), Decimal("950")
+        )
+        reverse = dv01_hedge_quantities(
+            TradeDirection.REVERSE, Decimal("1000"), Decimal("100"), Decimal("950")
+        )
+        self.assertEqual(reverse, tuple(-quantity for quantity in traditional))
+        self.assertEqual(
+            residual_dv01_usd_per_bp(*reverse, Decimal("100"), Decimal("950")),
+            -residual_dv01_usd_per_bp(*traditional, Decimal("100"), Decimal("950")),
+        )
+
+    def test_exact_tie_chooses_lower_gross_dv01(self) -> None:
+        self.assertEqual(
+            dv01_hedge_quantities(
+                TradeDirection.TRADITIONAL,
+                Decimal("300"),
+                Decimal("100"),
+                Decimal("200"),
+            ),
+            (3, -1),
+        )
+
+    def test_invalid_hedge_inputs_return_zero_legs(self) -> None:
+        invalid_scalars = (None, 1.0, Decimal("NaN"), Decimal("Infinity"))
+        for direction in (TradeDirection.FLAT, 1, -1, None):
+            with self.subTest(field="direction", value=direction):
+                self.assertEqual(
+                    dv01_hedge_quantities(direction, Decimal("100"), Decimal("100"), Decimal("100")),
+                    (0, 0),
+                )
+        for field in range(3):
+            for value in (*invalid_scalars, Decimal("0"), Decimal("-1")):
+                values: list[object] = [Decimal("100"), Decimal("100"), Decimal("100")]
+                values[field] = value
+                with self.subTest(field=field, value=value):
+                    self.assertEqual(
+                        dv01_hedge_quantities(TradeDirection.TRADITIONAL, *values), (0, 0)
+                    )
+
+    def test_residual_dv01_validates_exact_quantities_and_dv01s(self) -> None:
+        self.assertEqual(
+            residual_dv01_usd_per_bp(10, -1, Decimal("100"), Decimal("950")),
+            Decimal("-50"),
+        )
+        for quantities in ((True, 0), (0, True), (1.0, 0), (0, 1.0)):
+            with self.subTest(quantities=quantities):
+                self.assertIsNone(
+                    residual_dv01_usd_per_bp(*quantities, Decimal("100"), Decimal("950"))
+                )
+        for value in (None, 1.0, Decimal("NaN"), Decimal("Infinity"), Decimal("0"), Decimal("-1")):
+            with self.subTest(dv01=value):
+                self.assertIsNone(residual_dv01_usd_per_bp(1, -1, value, Decimal("950")))
+                self.assertIsNone(residual_dv01_usd_per_bp(1, -1, Decimal("100"), value))
+
+    def test_residual_fraction_validates_inputs_and_uses_local_precision(self) -> None:
+        self.assertEqual(
+            residual_fraction(Decimal("1"), Decimal("3")),
+            Decimal("0.33333333333333333333333333333333333333333333333333"),
+        )
+        for net in (None, 1.0, Decimal("NaN"), Decimal("Infinity")):
+            with self.subTest(net=net):
+                self.assertIsNone(residual_fraction(net, Decimal("1")))
+        for target in (None, 1.0, Decimal("NaN"), Decimal("Infinity"), Decimal("0"), Decimal("-1")):
+            with self.subTest(target=target):
+                self.assertIsNone(residual_fraction(Decimal("1"), target))
+        original = getcontext().copy()
+        try:
+            getcontext().prec = 2
+            self.assertEqual(
+                residual_fraction(Decimal("1"), Decimal("3")),
+                Decimal("0.33333333333333333333333333333333333333333333333333"),
+            )
+        finally:
+            setcontext(original)
 
 
 if __name__ == "__main__":
