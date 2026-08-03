@@ -21,6 +21,8 @@ from .models import (
 )
 from .spread import (
     STRATEGY_SPEC_VERSION,
+    basket_pnl_usd,
+    contract_turnover_contracts,
     directional_cost_buffer_bps,
     dv01_hedge_quantities,
     expected_funding_bps,
@@ -56,6 +58,8 @@ __all__ = [
     "OrderIntent",
     "to_csv_row",
     "STRATEGY_SPEC_VERSION",
+    "basket_pnl_usd",
+    "contract_turnover_contracts",
     "rate_decimal_to_bps",
     "treasury_fractional_quote_to_points",
     "tick_value_usd",

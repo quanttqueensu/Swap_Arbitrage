@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP, localcontext
+import re
 
 from .models import TradeDirection
 
 
 STRATEGY_SPEC_VERSION = "p10.strategy-equations.v1"
+_FULL_CONTRACT_ID = re.compile(r"(?:YIT|YIW|ZT|ZF)[HMUZ]\d{2}")
 
 
 def _decimal(
@@ -220,3 +222,54 @@ def residual_fraction(net_dv01: object, target_dv01: object) -> Decimal | None:
     if net is None or target is None:
         return None
     return _divide(abs(net), target)
+
+
+def basket_pnl_usd(legs: object, total_cost_usd: object) -> Decimal | None:
+    total_cost = _decimal(total_cost_usd, nonnegative=True)
+    if (
+        not isinstance(legs, Sequence)
+        or isinstance(legs, str)
+        or not legs
+        or total_cost is None
+    ):
+        return None
+    validated_legs = []
+    for leg in legs:
+        if type(leg) is not tuple or len(leg) != 6:
+            return None
+        start_id, end_id, quantity, multiplier, start_price, end_price = leg
+        if (
+            type(start_id) is not str
+            or type(end_id) is not str
+            or _FULL_CONTRACT_ID.fullmatch(start_id) is None
+            or _FULL_CONTRACT_ID.fullmatch(end_id) is None
+            or start_id != end_id
+            or type(quantity) is not int
+        ):
+            return None
+        multiplier_decimal = _decimal(multiplier, positive=True)
+        start_decimal = _decimal(start_price, positive=True)
+        end_decimal = _decimal(end_price, positive=True)
+        if multiplier_decimal is None or start_decimal is None or end_decimal is None:
+            return None
+        validated_legs.append((quantity, multiplier_decimal, start_decimal, end_decimal))
+    with localcontext() as context:
+        context.prec = 50
+        return (
+            sum(
+                (
+                    Decimal(quantity) * multiplier * (end_price - start_price)
+                    for quantity, multiplier, start_price, end_price in validated_legs
+                ),
+                Decimal("0"),
+            )
+            - total_cost
+        )
+
+
+def contract_turnover_contracts(quantities: object) -> int | None:
+    if not isinstance(quantities, Sequence) or isinstance(quantities, str):
+        return None
+    if any(type(quantity) is not int for quantity in quantities):
+        return None
+    return sum(abs(quantity) for quantity in quantities)

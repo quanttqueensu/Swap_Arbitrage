@@ -11,6 +11,8 @@ import unittest
 from strategy import TradeDirection
 from strategy.spread import (
     STRATEGY_SPEC_VERSION,
+    basket_pnl_usd,
+    contract_turnover_contracts,
     directional_cost_buffer_bps,
     dv01_hedge_quantities,
     expected_funding_bps,
@@ -364,6 +366,126 @@ class Dv01HedgeTests(unittest.TestCase):
             self.assertEqual(
                 residual_fraction(Decimal("1"), Decimal("3")),
                 Decimal("0.33333333333333333333333333333333333333333333333333"),
+            )
+        finally:
+            setcontext(original)
+
+
+class BasketPnlTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture = json.loads(FIXTURE_PATH.read_bytes())
+
+    @staticmethod
+    def _fixture_leg(leg: dict[str, object]) -> tuple[object, ...]:
+        return (
+            leg["start_instrument_id"],
+            leg["end_instrument_id"],
+            leg["quantity"],
+            Decimal(leg["multiplier_usd_per_point"]),
+            Decimal(leg["start_price"]),
+            Decimal(leg["end_price"]),
+        )
+
+    def test_same_contract_fixture_pnl_matches_literal_outputs(self) -> None:
+        for example in self.fixture["pnl_examples"][:2]:
+            with self.subTest(example=example["id"]):
+                legs = tuple(self._fixture_leg(leg) for leg in example["legs"])
+                costs = sum(
+                    (Decimal(leg["costs_usd"]) for leg in example["legs"]), Decimal("0")
+                )
+                self.assertEqual(
+                    basket_pnl_usd(legs, costs), Decimal(example["expected_pnl_usd"])
+                )
+
+    def test_roll_boundary_uses_only_the_old_leg(self) -> None:
+        example = self.fixture["pnl_examples"][2]
+        old = example["old_contract"]
+        new = example["new_contract"]
+        old_leg = (
+            old["symbol"], old["symbol"], old["quantity"],
+            Decimal(old["multiplier_usd_per_point"]), Decimal(old["start_price"]),
+            Decimal(old["end_price"]),
+        )
+        new_leg = (
+            new["symbol"], new["symbol"], new["quantity"],
+            Decimal(new["multiplier_usd_per_point"]), Decimal(new["start_price"]),
+            Decimal(new["end_price"]),
+        )
+        total_cost = Decimal(old["close_cost_usd"]) + Decimal(new["open_cost_usd"])
+        boundary_pnl = basket_pnl_usd((old_leg,), total_cost)
+        self.assertEqual(boundary_pnl, Decimal(example["expected_net_at_roll_usd"]))
+        self.assertEqual(
+            basket_pnl_usd((old_leg, new_leg), total_cost),
+            Decimal(example["expected_net_pnl_usd"]),
+        )
+        self.assertEqual(
+            contract_turnover_contracts((old["quantity"], new["quantity"])),
+            example["expected_contract_turnover"],
+        )
+        future_leg = (*new_leg[:5], Decimal(new["end_price"]) + Decimal("1"))
+        self.assertEqual(basket_pnl_usd((old_leg,), total_cost), boundary_pnl)
+        self.assertNotEqual(future_leg, new_leg)
+
+    def test_reversal_cost_charges_exit_and_entry_turnover(self) -> None:
+        example = self.fixture["pnl_examples"][3]
+        self.assertEqual(
+            contract_turnover_contracts((example["exit_quantity"], example["entry_quantity"])),
+            example["expected_contract_turnover"],
+        )
+        self.assertEqual(
+            directional_cost_buffer_bps(
+                Decimal(example["exit_cost_usd"]), Decimal(example["entry_cost_usd"]),
+                Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("1"),
+            ),
+            Decimal(example["expected_total_cost_usd"]),
+        )
+
+    def test_invalid_baskets_return_none(self) -> None:
+        valid = (
+            "YITH27", "YITH27", 1, Decimal("1000"), Decimal("100"), Decimal("101")
+        )
+        invalid_legs = (
+            (),
+            valid[:5],
+            ("YITH27", "YITM27", 1, Decimal("1000"), Decimal("100"), Decimal("101")),
+            ("YIT", "YIT", 1, Decimal("1000"), Decimal("100"), Decimal("101")),
+            ("YIZH27", "YIZH27", 1, Decimal("1000"), Decimal("100"), Decimal("101")),
+            ("YITF27", "YITF27", 1, Decimal("1000"), Decimal("100"), Decimal("101")),
+            ("YITH27", "YITH27", True, Decimal("1000"), Decimal("100"), Decimal("101")),
+            ("YITH27", "YITH27", 1, Decimal("0"), Decimal("100"), Decimal("101")),
+            ("YITH27", "YITH27", 1, Decimal("1000"), Decimal("0"), Decimal("101")),
+            ("YITH27", "YITH27", 1, Decimal("1000"), Decimal("100"), Decimal("0")),
+            ("YITH27", "YITH27", 1, 1000, Decimal("100"), Decimal("101")),
+            ("YITH27", "YITH27", 1, Decimal("1000"), "100", Decimal("101")),
+            ("YITH27", "YITH27", 1, Decimal("NaN"), Decimal("100"), Decimal("101")),
+            ("YITH27", "YITH27", 1, Decimal("1000"), Decimal("Infinity"), Decimal("101")),
+        )
+        self.assertIsNone(basket_pnl_usd((), Decimal("0")))
+        self.assertIsNone(basket_pnl_usd("YITH27", Decimal("0")))
+        for leg in invalid_legs:
+            with self.subTest(leg=leg):
+                self.assertIsNone(basket_pnl_usd((leg,), Decimal("0")))
+        self.assertIsNone(basket_pnl_usd((valid,), Decimal("-1")))
+
+    def test_turnover_handles_signed_quantities_and_rejects_invalid_members(self) -> None:
+        self.assertEqual(contract_turnover_contracts(()), 0)
+        self.assertEqual(contract_turnover_contracts((-3, 2, 0)), 5)
+        self.assertIsNone(contract_turnover_contracts("2"))
+        for quantities in ((True,), (1.0,)):
+            with self.subTest(quantities=quantities):
+                self.assertIsNone(contract_turnover_contracts(quantities))
+
+    def test_basket_pnl_uses_local_precision(self) -> None:
+        original = getcontext().copy()
+        try:
+            getcontext().prec = 2
+            self.assertEqual(
+                basket_pnl_usd(
+                    (("YITH27", "YITH27", 1, Decimal("1.234"), Decimal("0.001"), Decimal("1.235")),),
+                    Decimal("0"),
+                ),
+                Decimal("1.522756"),
             )
         finally:
             setcontext(original)
