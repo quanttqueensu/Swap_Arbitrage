@@ -65,3 +65,12 @@
 - Task 3 scoped review: APPROVE after causal-control, context, and evidence corrections.
 - Whole-branch review: explicitly pending.
 - Commit: `docs: record P31 specialist reviews`.
+
+## Final whole-branch review correction â€” fixture boundaries
+
+- Findings: Important â€” no fixture-driven literal test covered every named funding profile; Minor â€” invalid basket `total_cost_usd` lacked direct `None`, float, NaN, and Infinity cases against a valid leg.
+- Pre-test evidence: repository search showed funding profiles only consumed indirectly by economic examples and only a negative total-cost basket assertion. Production already satisfied the new cases, so this test-only wave records absence rather than inventing a RED.
+- Fix: added literal named-profile expectations (`flat_5_bps_39 -> None`, `flat_5_bps_40 -> Decimal("5")`, `flat_5_bps_60 -> Decimal("5")`) with complete fixture-key coverage; added all four invalid total-cost cases and retained the negative case. No production edits.
+- GREEN: focused suite passed 27 tests; docs suite passed 209 tests; `git diff --check` passed.
+- Final whole-branch verdict: pending scoped re-review.
+- Commit: `test: complete P31 fixture boundaries`.

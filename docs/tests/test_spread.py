@@ -76,6 +76,22 @@ class SpreadFixtureTests(unittest.TestCase):
                     Decimal(expected["net_directional_opportunity_bps"]),
                 )
 
+    def test_every_named_funding_profile_has_a_literal_expected_result(self) -> None:
+        expected = {
+            "flat_5_bps_39": None,
+            "flat_5_bps_40": Decimal("5"),
+            "flat_5_bps_60": Decimal("5"),
+        }
+        self.assertEqual(set(self.fixture["funding_profiles"]), set(expected))
+        for name, rows in self.fixture["funding_profiles"].items():
+            with self.subTest(profile=name):
+                history = [
+                    Decimal(row["value_bps"])
+                    for row in rows
+                    for _ in range(row["count"])
+                ]
+                self.assertEqual(expected_funding_bps(history), expected[name])
+
     def test_fixture_quote_conventions_and_treasury_endpoints_are_exact(self) -> None:
         self.assertEqual(self.fixture_hash, FIXTURE_SHA256)
         for convention in self.fixture["quote_conventions"].values():
@@ -500,6 +516,9 @@ class BasketPnlTests(unittest.TestCase):
         for leg in invalid_legs:
             with self.subTest(leg=leg):
                 self.assertIsNone(basket_pnl_usd((leg,), Decimal("0")))
+        for total_cost in (None, 1.0, Decimal("NaN"), Decimal("Infinity")):
+            with self.subTest(total_cost=total_cost):
+                self.assertIsNone(basket_pnl_usd((valid,), total_cost))
         self.assertIsNone(basket_pnl_usd((valid,), Decimal("-1")))
 
     def test_turnover_handles_signed_quantities_and_rejects_invalid_members(self) -> None:
