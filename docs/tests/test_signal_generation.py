@@ -5,7 +5,7 @@ Mutation map: each test names the production change it is intended to catch.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, FloatOperation, Inexact, ROUND_UP, getcontext, setcontext
 from hashlib import sha256
@@ -13,7 +13,16 @@ import json
 from pathlib import Path
 import unittest
 
-from strategy import SpreadObservation, causal_zscore
+from strategy import (
+    NamedValue,
+    PositionState,
+    SignalDecision,
+    SpreadObservation,
+    TradeDirection,
+    causal_zscore,
+    generate_signal_decision,
+    signal_transition,
+)
 
 
 FIXTURE_PATH = Path(__file__).with_name("fixtures") / "strategy_equation_examples.json"
@@ -209,6 +218,251 @@ class CausalZScoreTests(unittest.TestCase):
             self.assertEqual(context_snapshot(getcontext()), expected)
         finally:
             setcontext(original)
+
+
+class SignalTransitionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        fixture_bytes = FIXTURE_PATH.read_bytes()
+        assert sha256(fixture_bytes).hexdigest() == FIXTURE_SHA256
+        cls.state_examples = json.loads(fixture_bytes)["state_examples"]
+
+    # Mutation caught: changing frozen transition outcomes or reversal action order.
+    def test_fixture_state_examples_have_literal_states_and_actions(self):
+        for example in self.state_examples:
+            with self.subTest(example=example["id"]):
+                self.assertEqual(
+                    signal_transition(
+                        PositionState(example["position"]),
+                        Decimal(example["zscore"]),
+                        Decimal(example["traditional_net_bps"]),
+                        Decimal(example["reverse_net_bps"]),
+                        example["data_ready"],
+                        example["risk_flatten"],
+                    ),
+                    (
+                        PositionState(example["expected_position"]),
+                        tuple(example["expected_actions"]),
+                    ),
+                )
+
+    # Mutation caught: moving inclusive entry thresholds or selecting an ineligible side.
+    def test_entry_boundaries_are_inclusive_and_require_positive_net(self):
+        cases = (
+            ("traditional_below", "1.9999", "1", "1", PositionState.FLAT, ()),
+            ("traditional_at", "2.0", "0.0001", "1", PositionState.TRADITIONAL, ("enter_traditional",)),
+            ("traditional_above", "2.0001", "1", "1", PositionState.TRADITIONAL, ("enter_traditional",)),
+            ("reverse_below", "-1.9999", "1", "1", PositionState.FLAT, ()),
+            ("reverse_at", "-2.0", "1", "0.0001", PositionState.REVERSE, ("enter_reverse",)),
+            ("reverse_above", "-2.0001", "1", "1", PositionState.REVERSE, ("enter_reverse",)),
+            ("traditional_zero_net", "2.0", "0", "1", PositionState.FLAT, ()),
+            ("reverse_zero_net", "-2.0", "1", "0", PositionState.FLAT, ()),
+        )
+        for name, z_score, traditional, reverse, expected_state, expected_actions in cases:
+            with self.subTest(case=name):
+                self.assertEqual(
+                    signal_transition(
+                        PositionState.FLAT, Decimal(z_score), Decimal(traditional),
+                        Decimal(reverse), True, False,
+                    ),
+                    (expected_state, expected_actions),
+                )
+
+    # Mutation caught: making exit hysteresis exclusive or retaining an ineligible open position.
+    def test_open_position_exit_boundaries_and_reversals(self):
+        cases = (
+            ("traditional_below_exit", PositionState.TRADITIONAL, "0.4999", "1", "1", PositionState.FLAT, ("exit_traditional",)),
+            ("traditional_at_exit", PositionState.TRADITIONAL, "0.5", "1", "1", PositionState.FLAT, ("exit_traditional",)),
+            ("traditional_above_exit", PositionState.TRADITIONAL, "0.5001", "1", "1", PositionState.TRADITIONAL, ()),
+            ("reverse_below_exit", PositionState.REVERSE, "-0.4999", "1", "1", PositionState.FLAT, ("exit_reverse",)),
+            ("reverse_at_exit", PositionState.REVERSE, "-0.5", "1", "1", PositionState.FLAT, ("exit_reverse",)),
+            ("reverse_above_exit", PositionState.REVERSE, "-0.5001", "1", "1", PositionState.REVERSE, ()),
+            ("traditional_zero_net", PositionState.TRADITIONAL, "1", "0", "1", PositionState.FLAT, ("exit_traditional",)),
+            ("reverse_zero_net", PositionState.REVERSE, "-1", "1", "0", PositionState.FLAT, ("exit_reverse",)),
+            ("reverse_to_traditional", PositionState.REVERSE, "2.0", "0.0001", "-1", PositionState.TRADITIONAL, ("exit_reverse", "enter_traditional")),
+        )
+        for name, prior, z_score, traditional, reverse, expected_state, expected_actions in cases:
+            with self.subTest(case=name):
+                self.assertEqual(
+                    signal_transition(
+                        prior, Decimal(z_score), Decimal(traditional), Decimal(reverse), True, False,
+                    ),
+                    (expected_state, expected_actions),
+                )
+
+    # Mutation caught: applying data checks before risk or creating actions while already flat.
+    def test_risk_and_missing_data_precedence_preserve_flat_idempotence(self):
+        cases = (
+            ("risk_open", PositionState.TRADITIONAL, Decimal("2"), True, True, PositionState.FLAT, ("risk_flatten",)),
+            ("risk_flat", PositionState.FLAT, None, False, True, PositionState.FLAT, ()),
+            ("data_open", PositionState.REVERSE, None, False, False, PositionState.FLAT, ("data_flatten",)),
+            ("data_flat", PositionState.FLAT, None, False, False, PositionState.FLAT, ()),
+        )
+        for name, prior, z_score, data_ready, risk_flatten, expected_state, expected_actions in cases:
+            with self.subTest(case=name):
+                self.assertEqual(
+                    signal_transition(
+                        prior, z_score, Decimal("1"), Decimal("1"), data_ready, risk_flatten,
+                    ),
+                    (expected_state, expected_actions),
+                )
+
+    # Mutation caught: accepting non-exact state, Decimal, or bool boundary inputs.
+    def test_malformed_transition_inputs_return_none(self):
+        cases = (
+            (0, Decimal("1"), Decimal("1"), Decimal("1"), True, False),
+            (PositionState.FLAT, 1.0, Decimal("1"), Decimal("1"), True, False),
+            (PositionState.FLAT, Decimal("NaN"), Decimal("1"), Decimal("1"), True, False),
+            (PositionState.FLAT, Decimal("Infinity"), Decimal("1"), Decimal("1"), True, False),
+            (PositionState.FLAT, Decimal("1"), 1.0, Decimal("1"), True, False),
+            (PositionState.FLAT, Decimal("1"), Decimal("NaN"), Decimal("1"), True, False),
+            (PositionState.FLAT, Decimal("1"), Decimal("1"), Decimal("Infinity"), True, False),
+            (PositionState.FLAT, Decimal("1"), Decimal("1"), Decimal("1"), 1, False),
+            (PositionState.FLAT, Decimal("1"), Decimal("1"), Decimal("1"), True, 0),
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertIsNone(signal_transition(*case))
+
+
+class SignalDecisionTests(unittest.TestCase):
+    @staticmethod
+    def standard_prior():
+        return history((Decimal("-5"),) * 123 + (Decimal("5"),) * 123 + (
+            Decimal("-7.5"), Decimal("7.5"), Decimal("-2.5"),
+            Decimal("2.5"), Decimal("0"), Decimal("0"),
+        ))
+
+    @staticmethod
+    def current(gross, z_score, *, traditional="4", reverse="-2", count=252,
+                quality=True, fresh=True):
+        return replace(
+            observation(
+                "2Y", BASE_TIME + timedelta(minutes=252), Decimal(gross),
+                z_score=Decimal(z_score) if z_score is not None else None,
+                count=count, quality=quality, fresh=fresh,
+            ),
+            traditional_net_opportunity_bps=Decimal(traditional),
+            reverse_net_opportunity_bps=Decimal(reverse),
+        )
+
+    def decision(self, observation_value, prior=None, prior_state=PositionState.FLAT,
+                 risk_flatten=False, decision_id="decision-1", strategy="p32",
+                 configuration="config-1"):
+        return generate_signal_decision(
+            decision_id,
+            observation_value,
+            self.standard_prior() if prior is None else prior,
+            prior_state,
+            risk_flatten,
+            strategy,
+            configuration,
+        )
+
+    # Mutation caught: omitting calculated features, changing field mapping, or returning mutable output.
+    def test_traditional_entry_is_an_immutable_decision_with_literal_features(self):
+        observation_value = self.current("10", "2", traditional="4.5", reverse="-1.5")
+        decision = self.decision(observation_value)
+        self.assertEqual(
+            decision,
+            SignalDecision(
+                decision_id="decision-1",
+                maturity="2Y",
+                decision_time_utc=BASE_TIME + timedelta(minutes=252),
+                prior_state=PositionState.FLAT,
+                new_state=PositionState.TRADITIONAL,
+                direction=TradeDirection.TRADITIONAL,
+                reason_code="enter_traditional",
+                feature_values=(
+                    NamedValue("z_score", Decimal("2"), "standard_deviations"),
+                    NamedValue("traditional_net_opportunity", Decimal("4.5"), "bps"),
+                    NamedValue("reverse_net_opportunity", Decimal("-1.5"), "bps"),
+                ),
+                strategy_version="p32",
+                configuration_version="config-1",
+            ),
+        )
+        with self.assertRaises(FrozenInstanceError):
+            decision.reason_code = "changed"
+
+    # Mutation caught: replacing no-action reason codes or losing supplied versions.
+    def test_holds_and_flat_states_have_literal_reason_codes(self):
+        cases = (
+            ("flat", self.current("0", "0"), PositionState.FLAT, "remain_flat"),
+            ("traditional", self.current("5", "1"), PositionState.TRADITIONAL, "hold_traditional"),
+            ("reverse", self.current("-5", "-1", traditional="-2", reverse="4"), PositionState.REVERSE, "hold_reverse"),
+        )
+        for name, observation_value, prior_state, reason_code in cases:
+            with self.subTest(case=name):
+                decision = self.decision(
+                    observation_value, prior_state=prior_state,
+                    strategy="strategy-42", configuration="configuration-99",
+                )
+                self.assertEqual(decision.reason_code, reason_code)
+                self.assertEqual(decision.strategy_version, "strategy-42")
+                self.assertEqual(decision.configuration_version, "configuration-99")
+
+    # Mutation caught: collapsing a reversal into one unordered action or incorrect reason joining.
+    def test_reversal_joins_ordered_actions_in_its_reason_code(self):
+        decision = self.decision(
+            self.current("-10", "-2", traditional="-1", reverse="4"),
+            prior_state=PositionState.TRADITIONAL,
+        )
+        self.assertEqual(decision.new_state, PositionState.REVERSE)
+        self.assertEqual(decision.reason_code, "exit_traditional_then_enter_reverse")
+
+    # Mutation caught: treating unavailable but valid observations as malformed or changing unavailable features.
+    def test_valid_unavailable_data_uses_flatten_or_data_unavailable_outcomes(self):
+        stale = self.current("10", "2", fresh=False)
+        poor_quality = self.current("10", "2", quality=False)
+        mismatched_z = self.current("10", "3")
+        short_prior = self.standard_prior()[:-1]
+        zero_variance = history((Decimal("1"),) * 252)
+        cases = (
+            ("stale_open", stale, self.standard_prior(), PositionState.TRADITIONAL, PositionState.FLAT, "data_flatten", True),
+            ("poor_quality_flat", poor_quality, self.standard_prior(), PositionState.FLAT, PositionState.FLAT, "data_unavailable", True),
+            ("mismatched_z_flat", mismatched_z, self.standard_prior(), PositionState.FLAT, PositionState.FLAT, "data_unavailable", True),
+            ("short_flat", self.current("10", "2"), short_prior, PositionState.FLAT, PositionState.FLAT, "data_unavailable", False),
+            ("zero_variance_flat", self.current("10", "2"), zero_variance, PositionState.FLAT, PositionState.FLAT, "data_unavailable", False),
+        )
+        for name, observation_value, prior, prior_state, state, reason_code, has_z in cases:
+            with self.subTest(case=name):
+                decision = self.decision(observation_value, prior, prior_state)
+                self.assertEqual(decision.new_state, state)
+                self.assertEqual(decision.reason_code, reason_code)
+                self.assertEqual(
+                    tuple(value.name for value in decision.feature_values),
+                    ("observation_count", "gross_excess_spread", "traditional_net_opportunity", "reverse_net_opportunity", "z_score")
+                    if has_z else ("observation_count", "gross_excess_spread", "traditional_net_opportunity", "reverse_net_opportunity"),
+                )
+
+    # Mutation caught: reading or validating history before an explicit risk flatten and emitting risk features.
+    def test_risk_flatten_bypasses_malformed_history_and_economic_features(self):
+        decision = self.decision(
+            self.current("10", "2"), object(), PositionState.TRADITIONAL, True,
+        )
+        self.assertEqual(decision.new_state, PositionState.FLAT)
+        self.assertEqual(decision.reason_code, "risk_flatten")
+        self.assertEqual(decision.feature_values, ())
+        already_flat = self.decision(self.current("10", "2"), object(), PositionState.FLAT, True)
+        self.assertEqual(already_flat.reason_code, "risk_flatten_already_flat")
+
+    # Mutation caught: accepting malformed boundary inputs instead of returning None.
+    def test_malformed_decision_inputs_return_none(self):
+        valid_observation = self.current("10", "2")
+        cases = (
+            (None, valid_observation, self.standard_prior(), PositionState.FLAT, False, "p32", "config"),
+            ("", valid_observation, self.standard_prior(), PositionState.FLAT, False, "p32", "config"),
+            ("id", object(), self.standard_prior(), PositionState.FLAT, False, "p32", "config"),
+            ("id", valid_observation, object(), PositionState.FLAT, False, "p32", "config"),
+            ("id", valid_observation, self.standard_prior(), 0, False, "p32", "config"),
+            ("id", valid_observation, self.standard_prior(), PositionState.FLAT, 0, "p32", "config"),
+            ("id", valid_observation, self.standard_prior(), PositionState.FLAT, False, "", "config"),
+            ("id", valid_observation, self.standard_prior(), PositionState.FLAT, False, "p32", None),
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertIsNone(generate_signal_decision(*case))
 
 
 if __name__ == "__main__":
