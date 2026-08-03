@@ -55,4 +55,13 @@
 - Restored-code RED: the regression then exposed `abs(net)` rounding before the precision-50 helper, yielding `4.2143287176399759181216134858518964479229379891632`; `net.copy_abs()` fixed the leak without changing the public API.
 - GREEN: full context settings/flags/traps remain unchanged around all three Task 2 functions; focused suite passed 26 tests; docs suite passed 208 tests; `git diff --check` passed.
 - Commit: `test: harden P31 hedge context isolation`.
-- Caveat: the final numerical verdict remains pending; this entry records the specialist finding and correction only.
+- Scoped re-review: verified literal `(1, -1)`, residual `-627.489`, and fraction `4.1975316074653822998193859121011438892233594220349`; APPROVE with no findings.
+
+## P31 specialist verdicts
+
+- Equations reviewer: Terra-high fallback (Luna unavailable; no Sol) independently matched economic 4/4, hedge/residual/allowance 7/7, P&L/turnover 4/4, quote ticks 4/4, Treasury endpoints 4/4, and schema/hash 1/1; APPROVE. P11 source matrix and production calendar remain unavailable.
+- Numerical reviewer: initial CHANGES_REQUIRED for missing full caller-context tests on all three Task 2 functions; `a55ec6b` added precision-2 full-context subtests and minimally replaced the exposed `abs(net)` precision leak with `copy_abs()`. Scoped re-review verified the exact literals above; APPROVE with no findings.
+- Ponytail simplicity reviewer: Terra high suggested deleting 28 lines of duplicated expected/production evidence tables. Not applied because the approved Task 3/MG5 plan explicitly requires row-by-row evidence; no runtime abstraction, dependency, or code finding. This is not an unconditional `Lean already` verdict.
+- Task 3 scoped review: APPROVE after causal-control, context, and evidence corrections.
+- Whole-branch review: explicitly pending.
+- Commit: `docs: record P31 specialist reviews`.
