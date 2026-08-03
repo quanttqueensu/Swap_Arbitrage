@@ -17,6 +17,7 @@ from .models import (
     TradeDirection,
     WorkingOrder,
     OrderIntent,
+    to_csv_row,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "TradeDirection",
     "WorkingOrder",
     "OrderIntent",
+    "to_csv_row",
 ]

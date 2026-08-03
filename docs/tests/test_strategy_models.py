@@ -24,6 +24,7 @@ from strategy import (
     TradeDirection,
     WorkingOrder,
     OrderIntent,
+    to_csv_row,
 )
 
 
@@ -34,6 +35,68 @@ NOW = datetime(2026, 8, 3, 21, tzinfo=UTC)
 
 
 class StrategyModelTests(unittest.TestCase):
+    def test_to_csv_row_serializes_signal_decision_as_a_stable_literal_row(self) -> None:
+        decision = SignalDecision(
+            decision_id="decision-1", maturity="2Y", decision_time_utc=NOW,
+            prior_state=PositionState.FLAT, new_state=PositionState.TRADITIONAL,
+            direction=TradeDirection.TRADITIONAL, reason_code="entry_threshold",
+            feature_values=(NamedValue("z_score", Decimal("1.75"), "standard_deviations"),),
+            strategy_version="swap-arb-1", configuration_version="config-1",
+        )
+
+        self.assertEqual(
+            to_csv_row(decision),
+            {
+                "decision_id": "decision-1",
+                "maturity": "2Y",
+                "decision_time_utc": "2026-08-03T21:00:00Z",
+                "prior_state": "0",
+                "new_state": "1",
+                "direction": "1",
+                "reason_code": "entry_threshold",
+                "feature_values": '[{"name":"z_score","value":"1.75",'
+                                  '"unit":"standard_deviations"}]',
+                "strategy_version": "swap-arb-1",
+                "configuration_version": "config-1",
+            },
+        )
+
+    def test_to_csv_row_serializes_scalars_nested_values_and_preserves_records(self) -> None:
+        spread = SpreadObservation(
+            maturity="2Y", observation_time_utc=NOW,
+            fixed_swap_spread_bps=Decimal("12.5"),
+            expected_funding_spread_bps=Decimal("3"),
+            gross_excess_spread_bps=Decimal("9.5"),
+            traditional_cost_buffer_bps=Decimal("1.2"),
+            reverse_cost_buffer_bps=Decimal("1.4"),
+            traditional_net_opportunity_bps=Decimal("8.3"),
+            reverse_net_opportunity_bps=Decimal("-10.9"),
+            z_score=None, observation_count=60, source_quality_ok=True, is_fresh=False,
+        )
+        risk = RiskDecision(
+            allowed=True, scale=Decimal("1E+3") / Decimal("1E+3"), reason_codes=("within_limits",),
+            flatten_requested=False, urgency=FlattenUrgency.SCHEDULED,
+            limits=(NamedValue("amount", Decimal("1E+3"), "usd"),), measured_values=(),
+        )
+
+        spread_row = to_csv_row(spread)
+        risk_row = to_csv_row(risk)
+
+        self.assertEqual(spread_row["z_score"], "")
+        self.assertEqual(risk_row["allowed"], "true")
+        self.assertEqual(risk_row["flatten_requested"], "false")
+        self.assertEqual(risk_row["urgency"], "scheduled")
+        self.assertEqual(risk_row["limits"], '[{"name":"amount","value":"1000","unit":"usd"}]')
+        self.assertEqual(tuple(risk_row), tuple(field.name for field in fields(RiskDecision)))
+        self.assertIsNot(risk_row, to_csv_row(risk))
+        self.assertEqual(risk.limits[0].value, Decimal("1E+3"))
+
+    def test_to_csv_row_rejects_non_dataclass_values_and_dataclass_classes(self) -> None:
+        for value in (1, object(), NamedValue):
+            with self.subTest(value=value):
+                with self.assertRaises(TypeError):
+                    to_csv_row(value)
+
     def test_spread_observation_is_frozen_and_accepts_signed_opportunities(self) -> None:
         observation = SpreadObservation(
             maturity="2Y", observation_time_utc=NOW,

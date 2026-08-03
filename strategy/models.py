@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum, IntEnum
+import json
 
 
 class PositionState(IntEnum):
@@ -72,6 +73,44 @@ def _integer(value: int, *, nonnegative: bool = False) -> int:
     if nonnegative and value < 0:
         raise ValueError("integer fields must be nonnegative")
     return value
+
+
+def _serialized(value: object) -> object:
+    if isinstance(value, Enum):
+        return str(value.value)
+    if type(value) is bool:
+        return "true" if value else "false"
+    if value is None:
+        return ""
+    if type(value) is datetime:
+        _utc(value)
+        return value.isoformat().replace("+00:00", "Z")
+    if type(value) is Decimal:
+        _decimal(value)
+        return format(value, "f")
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: _serialized(getattr(value, field.name))
+            for field in fields(value)
+        }
+    if type(value) is tuple:
+        return [_serialized(item) for item in value]
+    return str(value)
+
+
+def to_csv_row(record: object) -> dict[str, str]:
+    """Return a stable declaration-ordered CSV row for a dataclass record."""
+    if not is_dataclass(record) or isinstance(record, type):
+        raise TypeError("record must be a dataclass instance")
+    row: dict[str, str] = {}
+    for field in fields(record):
+        value = _serialized(getattr(record, field.name))
+        row[field.name] = (
+            json.dumps(value, separators=(",", ":"))
+            if isinstance(value, (dict, list))
+            else str(value)
+        )
+    return row
 
 
 @dataclass(frozen=True, slots=True)
