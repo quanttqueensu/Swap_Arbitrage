@@ -33,7 +33,7 @@
 - RED: focused suite failed as expected with `ImportError: cannot import name 'basket_pnl_usd'` from `strategy.spread`.
 - GREEN/final: focused suite passed 25 tests; docs suite passed 207 tests (with the existing `eventkit` deprecation warning); Agent 0 suite passed 25 tests; compileall and all four repository self-checks exited 0; `git diff --check` exited 0.
 - Files: added direct `basket_pnl_usd` and `contract_turnover_contracts` functions and exports; added fixture-driven/boundary/context tests; created `docs/verification/P31.md`. Fixture SHA-256 remains `3fb9da5fc9ad255587ce93ea9770552f42566d56070f68ad1661709c030fbd76`.
-- Caveats: explicit-input arithmetic only; P11 source matrix and production calendar remain unavailable. The existing ignored `agents/agent_0/orders` directory contains pre-existing July 2026 CSV fixtures; P31 neither used nor changed them. Final specialist and whole-branch review verdicts are intentionally left as evidence-only placeholders for the parent follow-up.
+- Caveats: explicit-input arithmetic only; P11 source matrix and production calendar remain unavailable. The existing ignored `agents/agent_0/orders` directory contains pre-existing July 2026 CSV fixtures; P31 neither used nor changed them. Final specialist and whole-branch verdicts are recorded in later ledger entries.
 
 ## Task 3 review correction â€” P2 basket evidence
 
@@ -63,7 +63,7 @@
 - Numerical reviewer: initial CHANGES_REQUIRED for missing full caller-context tests on all three Task 2 functions; `a55ec6b` added precision-2 full-context subtests and minimally replaced the exposed `abs(net)` precision leak with `copy_abs()`. Scoped re-review verified the exact literals above; APPROVE with no findings.
 - Ponytail simplicity reviewer: Terra high suggested deleting 28 lines of duplicated expected/production evidence tables. Not applied because the approved Task 3/MG5 plan explicitly requires row-by-row evidence; no runtime abstraction, dependency, or code finding. This is not an unconditional `Lean already` verdict.
 - Task 3 scoped review: APPROVE after causal-control, context, and evidence corrections.
-- Whole-branch review: explicitly pending.
+- Whole-branch review: completed after the fixture-boundary fix wave recorded below.
 - Commit: `docs: record P31 specialist reviews`.
 
 ## Final whole-branch review correction â€” fixture boundaries
@@ -72,5 +72,11 @@
 - Pre-test evidence: repository search showed funding profiles only consumed indirectly by economic examples and only a negative total-cost basket assertion. Production already satisfied the new cases, so this test-only wave records absence rather than inventing a RED.
 - Fix: added literal named-profile expectations (`flat_5_bps_39 -> None`, `flat_5_bps_40 -> Decimal("5")`, `flat_5_bps_60 -> Decimal("5")`) with complete fixture-key coverage; added all four invalid total-cost cases and retained the negative case. No production edits.
 - GREEN: focused suite passed 27 tests; docs suite passed 209 tests; `git diff --check` passed.
-- Final whole-branch verdict: pending scoped re-review.
+- Final whole-branch verdict: senior Terra-high fallback (Luna unavailable; no Sol) initially **With fixes** for the Important funding-profile coverage gap and Minor invalid-total-cost gap. Scoped re-review found both **Addressed**, no production regression, evidence truthful, no new issues, and **Ready to merge: Yes**.
 - Commit: `test: complete P31 fixture boundaries`.
+
+## Final P31 review evidence
+
+- Commit `c46e331` added frozen literal `39 -> None`, `40 -> 5`, `60 -> 5` funding-profile coverage and invalid basket total costs `None`, float, NaN, and Infinity; no production edits. Focused 27/27 and docs 209/209 passed.
+- Whole-branch scoped re-review: both findings Addressed; no production regression; evidence truthful; no new issues; Ready to merge Yes.
+- Commit: `docs: finalize P31 review evidence`.
