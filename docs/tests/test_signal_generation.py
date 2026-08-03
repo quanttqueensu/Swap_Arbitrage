@@ -436,6 +436,43 @@ class SignalDecisionTests(unittest.TestCase):
                     if has_z else ("observation_count", "gross_excess_spread", "traditional_net_opportunity", "reverse_net_opportunity"),
                 )
 
+    # Mutation caught: changing unavailable feature values, units, or declaration order.
+    def test_unavailable_features_are_complete_literal_named_values(self):
+        stale = self.current("10", "2")
+        stale = replace(stale, is_fresh=False)
+        short = self.current("10", "2")
+        cases = (
+            (
+                "calculated_z",
+                stale,
+                self.standard_prior(),
+                (
+                    NamedValue("observation_count", Decimal("252"), "observations"),
+                    NamedValue("gross_excess_spread", Decimal("10"), "bps"),
+                    NamedValue("traditional_net_opportunity", Decimal("4"), "bps"),
+                    NamedValue("reverse_net_opportunity", Decimal("-2"), "bps"),
+                    NamedValue("z_score", Decimal("2"), "standard_deviations"),
+                ),
+            ),
+            (
+                "missing_z",
+                short,
+                self.standard_prior()[:-1],
+                (
+                    NamedValue("observation_count", Decimal("252"), "observations"),
+                    NamedValue("gross_excess_spread", Decimal("10"), "bps"),
+                    NamedValue("traditional_net_opportunity", Decimal("4"), "bps"),
+                    NamedValue("reverse_net_opportunity", Decimal("-2"), "bps"),
+                ),
+            ),
+        )
+        for name, observation_value, prior, expected_features in cases:
+            with self.subTest(case=name):
+                self.assertEqual(
+                    self.decision(observation_value, prior).feature_values,
+                    expected_features,
+                )
+
     # Mutation caught: reading or validating history before an explicit risk flatten and emitting risk features.
     def test_risk_flatten_bypasses_malformed_history_and_economic_features(self):
         decision = self.decision(

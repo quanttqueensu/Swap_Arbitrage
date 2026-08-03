@@ -75,9 +75,9 @@ def signal_transition(
         return None
 
     if risk_flatten:
-        return (PositionState.FLAT, ("risk_flatten",)) if prior_state else (PositionState.FLAT, ())
+        return (PositionState.FLAT, ("risk_flatten",)) if prior_state is not PositionState.FLAT else (PositionState.FLAT, ())
     if not data_ready or z_score is None:
-        return (PositionState.FLAT, ("data_flatten",)) if prior_state else (PositionState.FLAT, ())
+        return (PositionState.FLAT, ("data_flatten",)) if prior_state is not PositionState.FLAT else (PositionState.FLAT, ())
 
     with localcontext() as context:
         context.prec = 50
