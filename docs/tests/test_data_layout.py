@@ -61,9 +61,14 @@ class DataLayoutTests(unittest.TestCase):
         self.assertTrue((Path("docs") / "tests").is_dir())
         self.assertTrue((Path("docs") / "tools" / "data_audit.py").is_file())
         self.assertTrue((Path("agents") / "agent_0" / "tests" / "test_characterization.py").is_file())
+        self.assertTrue((Path("data_pipeline") / "historical_data" / "historical_data_builder.py").is_file())
         self.assertFalse(Path("tests").exists())
         self.assertFalse((Path("tools") / "data_audit.py").exists())
-        self.assertTrue(importlib.import_module("data_pipeline.historical_data_pipeline.canonicalize"))
+        for legacy_name in ("backtest.py", "data_io.py", "raw_price_data.py", "risk_data.py", "signal_data.py"):
+            with self.subTest(legacy_name=legacy_name):
+                self.assertFalse(Path(legacy_name).exists())
+        self.assertTrue(importlib.import_module("data_pipeline.historical_data.canonicalize"))
+        self.assertTrue(importlib.import_module("data_pipeline.historical_data.historical_data_builder"))
         self.assertTrue(importlib.import_module("data_pipeline.live_data_pipeline.paper_store"))
         self.assertTrue(importlib.import_module("data_pipeline.live_data_pipeline.ibkr_paper_source"))
 

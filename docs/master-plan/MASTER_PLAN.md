@@ -98,7 +98,7 @@ strategy/
 
 data_pipeline/
   contracts.py              CSV schemas, units, unique keys, and validation
-  historical_data_pipeline/ FRED/CME canonicalization and validation
+  historical_data/        FRED/CME source building, canonicalization, and validation
   live_data_pipeline/       IBKR paper-data recording and storage
 
 backtesting/

@@ -55,7 +55,7 @@ from config import (
     USER_AGENT,
     YAHOO_CHART_BASE_URL,
 )
-from data_io import clean_existing_derived_csvs, save_derived_csv, without_dv01_columns
+from clean_data import clean_existing_derived_csvs, save_derived_csv, without_dv01_columns
 
 
 def ensure_directories() -> None:
@@ -853,7 +853,7 @@ def build_raw_price_data(
             if cme_swap_master is None:
                 if not CME_SWAP_DATA_FILE.exists():
                     raise FileNotFoundError(
-                        f"Missing {CME_SWAP_DATA_FILE}. Run `python raw_price_data.py --eris` first."
+                        f"Missing {CME_SWAP_DATA_FILE}. Run `python -m data_pipeline.historical_data.historical_data_builder --eris` first."
                     )
                 cme_swap_master = pd.read_csv(CME_SWAP_DATA_FILE)
                 cme_swap_master["date"] = pd.to_datetime(cme_swap_master["date"], errors="coerce")

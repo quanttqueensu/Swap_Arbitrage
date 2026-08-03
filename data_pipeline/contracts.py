@@ -115,19 +115,19 @@ SCHEMAS = {
         ("observation_date|date|date", "source|string|source_id", "series_id|string|series_id", "maturity|string|maturity", "rate_bps|decimal|basis_points"),
         ("observation_date", "source", "series_id", "maturity"),
         ("observation_date", "source", "series_id", "maturity"), "daily by year", "immutable source capture",
-        ("data_pipeline.rates_source", "data_pipeline.historical_data_pipeline.canonicalize"),
+        ("data_pipeline.rates_source", "data_pipeline.historical_data.canonicalize"),
     ),
     "historical_futures_settlements": _schema(
         "historical_futures_settlements", FUTURES_SOURCE_PATH,
         ("observation_date|date|date", "source|string|source_id", "instrument_id|string|instrument_id", "settlement_price|decimal|price_points", "dv01_usd_per_bp|decimal|usd_per_bp|nullable"),
         ("observation_date", "source", "instrument_id"), ("observation_date", "source", "instrument_id"), "daily by year", "immutable source capture",
-        ("data_pipeline.futures_source", "data_pipeline.historical_data_pipeline.canonicalize"), ("positive_dv01_if_present",),
+        ("data_pipeline.futures_source", "data_pipeline.historical_data.canonicalize"), ("positive_dv01_if_present",),
     ),
     "contract_reference": _schema(
         "contract_reference", "data/contract_risk/contracts.csv",
         ("instrument_id|string|instrument_id", "source|string|source_id", "asset_class|string|asset_class", "root|string|instrument_root", "contract_month|string|year_month", "maturity|string|maturity", "currency|string|currency", "exchange|string|exchange", "price_multiplier|decimal|usd_per_price_point", "tick_size|decimal|price_points", "valid_from|date|date", "valid_to|date|date"),
         ("instrument_id", "valid_from"), ("instrument_id", "valid_from"), "on approved reference change", "retain every validity interval",
-        ("data_pipeline.historical_data_pipeline.canonicalize", "strategy.position_sizing", "backtesting.engine", "agents.shared"),
+        ("data_pipeline.historical_data.canonicalize", "strategy.position_sizing", "backtesting.engine", "agents.shared"),
     ),
     "contract_risk": _schema(
         "contract_risk", "data/contract_risk/contract_risk_YYYY.csv",

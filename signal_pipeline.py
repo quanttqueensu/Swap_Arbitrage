@@ -15,8 +15,12 @@ from config import (
     Z_ENTRY,
     Z_EXIT,
 )
-from data_io import save_derived_csv
-from raw_price_data import build_raw_price_data, clean_price_frame, load_csv
+from clean_data import save_derived_csv
+from data_pipeline.historical_data.historical_data_builder import (
+    build_raw_price_data,
+    clean_price_frame,
+    load_csv,
+)
 
 MIN_PERIODS = max(20, int(ROLLING_WINDOW * 0.25))
 
@@ -248,7 +252,7 @@ def self_check() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build signal data from consolidated raw data.")
-    parser.add_argument("--refresh-raw", action="store_true", help="Rebuild raw_price_data.csv from captured files.")
+    parser.add_argument("--refresh-raw", action="store_true", help="Rebuild historical source data from captured files.")
     parser.add_argument(
         "--treasury",
         "--interest-rates",

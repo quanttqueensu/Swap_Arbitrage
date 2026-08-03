@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from backtest import BacktestConfig, add_backtest_pnl, first_active_range, run_backtest
-from data_io import clean_existing_derived_csvs, without_dv01_columns
-from raw_price_data import (
+from backtest_engine import BacktestConfig, add_backtest_pnl, first_active_range, run_backtest
+from clean_data import clean_existing_derived_csvs, without_dv01_columns
+from data_pipeline.historical_data.historical_data_builder import (
     build_cme_swap_data,
     build_ctd_treasury_futures_data,
     build_treasury_futures_data,
@@ -18,14 +18,14 @@ from raw_price_data import (
     strategy_swap_prices,
     strategy_treasury_futures_prices,
 )
-from risk_data import (
+from risk_pipeline import (
     build_risk_data,
     load_cme_swap_data,
     load_treasury_futures_data,
     merge_cme_dv01,
     merge_treasury_futures_data,
 )
-from signal_data import build_signal_columns
+from signal_pipeline import build_signal_columns
 
 
 def sample_selected_swaps() -> pd.DataFrame:
@@ -461,9 +461,9 @@ class RiskMasterTests(unittest.TestCase):
         )
 
         with (
-            patch("risk_data.load_signal_or_build", return_value=signals),
-            patch("risk_data.load_cme_swap_data", return_value=master),
-            patch("risk_data.load_treasury_futures_data", return_value=treasury_master),
+            patch("risk_pipeline.load_signal_or_build", return_value=signals),
+            patch("risk_pipeline.load_cme_swap_data", return_value=master),
+            patch("risk_pipeline.load_treasury_futures_data", return_value=treasury_master),
         ):
             output = build_risk_data(save=False)
 
@@ -499,9 +499,9 @@ class RiskMasterTests(unittest.TestCase):
         )
 
         with (
-            patch("risk_data.load_signal_or_build", return_value=signals),
-            patch("risk_data.load_cme_swap_data", return_value=master),
-            patch("risk_data.load_treasury_futures_data", return_value=treasury_master),
+            patch("risk_pipeline.load_signal_or_build", return_value=signals),
+            patch("risk_pipeline.load_cme_swap_data", return_value=master),
+            patch("risk_pipeline.load_treasury_futures_data", return_value=treasury_master),
         ):
             output = build_risk_data(save=False)
 
@@ -533,9 +533,9 @@ class RiskMasterTests(unittest.TestCase):
         )
 
         with (
-            patch("risk_data.load_signal_or_build", return_value=signals),
-            patch("risk_data.load_cme_swap_data", return_value=swap_master),
-            patch("risk_data.load_treasury_futures_data", return_value=treasury_master),
+                patch("risk_pipeline.load_signal_or_build", return_value=signals),
+                patch("risk_pipeline.load_cme_swap_data", return_value=swap_master),
+                patch("risk_pipeline.load_treasury_futures_data", return_value=treasury_master),
         ):
             output = build_risk_data(save=False)
 
@@ -663,8 +663,8 @@ class BacktestMasterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             with (
-                patch("backtest.load_signal_frame", return_value=source),
-                patch("backtest.DATA_DIR", Path(directory)),
+                patch("backtest_engine.load_signal_frame", return_value=source),
+                patch("backtest_engine.DATA_DIR", Path(directory)),
             ):
                 output = run_backtest(start="2024-01-03", end="2024-01-04")
 

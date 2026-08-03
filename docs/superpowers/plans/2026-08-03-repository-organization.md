@@ -21,9 +21,9 @@
 ### Task 1: Freeze the target tree and move package files
 
 **Files:**
-- Create: `data_pipeline/historical_data_pipeline/__init__.py`
+- Create: `data_pipeline/historical_data/__init__.py`
 - Create: `data_pipeline/live_data_pipeline/__init__.py`
-- Move: `data_pipeline/canonicalize.py` to `data_pipeline/historical_data_pipeline/canonicalize.py`
+- Move: `data_pipeline/canonicalize.py` to `data_pipeline/historical_data/canonicalize.py`
 - Move: `data_pipeline/ibkr_paper_source.py` to `data_pipeline/live_data_pipeline/ibkr_paper_source.py`
 - Move: `data_pipeline/paper_store.py` to `data_pipeline/live_data_pipeline/paper_store.py`
 
@@ -50,14 +50,14 @@
 ### Task 3: Repair imports and test discovery
 
 **Files:**
-- Modify: `data_pipeline/historical_data_pipeline/canonicalize.py`
+- Modify: `data_pipeline/historical_data/canonicalize.py`
 - Modify: `data_pipeline/live_data_pipeline/ibkr_paper_source.py`
 - Modify: `data_pipeline/live_data_pipeline/paper_store.py`
 - Modify: all moved tests and runtime callers that import moved modules
 - Modify: `docs/tests/test_data_audit.py`
 - Modify: `README.md`, `requirements.txt`, and active docs with test commands
 
-- [x] Replace `data_pipeline.canonicalize` imports with `data_pipeline.historical_data_pipeline.canonicalize`.
+- [x] Replace `data_pipeline.canonicalize` imports with `data_pipeline.historical_data.canonicalize`.
 - [x] Replace live recorder/store imports with `data_pipeline.live_data_pipeline.*`.
 - [x] Replace `tools.data_audit` imports with `docs.tools.data_audit`.
 - [x] Update audit inventory paths for `docs/archive/r2_objects.csv`.
@@ -83,4 +83,15 @@
 
 - [x] Review `git status` and rename detection.
 - [x] Stage the organization changes.
-- [ ] Commit on `main` with a focused message.
+- [x] Commit on `main` with a focused message.
+
+### Task 6: Clarify root entry points and historical ingestion ownership
+
+**Files:**
+- Move: `historical_data_builder.py` to `data_pipeline/historical_data/historical_data_builder.py`
+- Rename: root strategy/config modules to purpose-based names
+- Modify: imports, test patches, CLI hints, README, and active verification commands
+
+- [x] Move historical source ingestion into the historical data pipeline basket.
+- [x] Rename the root strategy/config modules without changing generated CSV names.
+- [x] Run the complete test and self-check verification after the rename.

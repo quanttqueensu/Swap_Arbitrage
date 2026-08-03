@@ -8,7 +8,7 @@ from pathlib import Path
 
 PROJECT_CONFIG_FILE = Path(__file__).resolve().parents[2] / "config.py"
 PROJECT_CONFIG_SPEC = importlib.util.spec_from_file_location(
-    "swap_arb_project_config",
+    "swap_arb_config",
     PROJECT_CONFIG_FILE,
 )
 

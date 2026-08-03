@@ -27,8 +27,8 @@ from config import (
     TREASURY_DV01_YEARS,
     TREASURY_FUTURES,
 )
-from data_io import save_derived_csv, without_dv01_columns
-from signal_data import build_signal_data, clean_maturity, clean_signal_frame
+from clean_data import save_derived_csv, without_dv01_columns
+from signal_pipeline import build_signal_data, clean_maturity, clean_signal_frame
 
 DV01_VOL_MIN_PERIODS = max(20, DV01_VOL_LOOKBACK // 3)
 MASTER_COLUMNS = ["date", "ticker", "price", "dv01"]
@@ -341,7 +341,7 @@ def load_cme_swap_data(path: Path = CME_SWAP_DATA_FILE) -> pd.DataFrame:
     return load_market_master(
         path,
         "CME swap",
-        "python raw_price_data.py --eris",
+        "python -m data_pipeline.historical_data.historical_data_builder --eris",
     )
 
 
@@ -349,7 +349,7 @@ def load_treasury_futures_data(path: Path = TREASURY_FUTURES_DATA_FILE) -> pd.Da
     output = load_market_master(
         path,
         "Treasury futures",
-        "python raw_price_data.py --treasury-futures",
+        "python -m data_pipeline.historical_data.historical_data_builder --treasury-futures",
     )
 
     if output["ticker"].str.contains("=F", regex=False).any():
@@ -513,8 +513,8 @@ def self_check() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build risk management data from signal data.")
-    parser.add_argument("--refresh-signals", action="store_true", help="Rebuild signal_data.csv before risk sizing.")
-    parser.add_argument("--refresh-raw", action="store_true", help="Rebuild raw_price_data.csv before signals/risk.")
+    parser.add_argument("--refresh-signals", action="store_true", help="Rebuild signal pipeline output before risk sizing.")
+    parser.add_argument("--refresh-raw", action="store_true", help="Rebuild historical source data before signals/risk.")
     parser.add_argument(
         "--treasury",
         "--interest-rates",

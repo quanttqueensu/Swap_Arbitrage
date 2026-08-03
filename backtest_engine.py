@@ -15,8 +15,8 @@ from config import (
     SWAP_DV01_YEARS,
     TREASURY_FUTURES_DOLLARS_PER_POINT,
 )
-from data_io import save_derived_csv, without_dv01_columns
-from risk_data import (
+from clean_data import save_derived_csv, without_dv01_columns
+from risk_pipeline import (
     build_risk_data,
     dv01_per_1mm,
     load_cme_swap_data,
@@ -24,7 +24,7 @@ from risk_data import (
     merge_cme_dv01,
     merge_treasury_futures_data,
 )
-from signal_data import clean_maturity
+from signal_pipeline import clean_maturity
 
 AUTO_DATE = "auto"
 INITIAL_EQUITY = 1_000_000.0
@@ -66,7 +66,7 @@ def load_signal_frame(refresh_signals: bool = False) -> pd.DataFrame:
         risk = build_risk_data(refresh_signals=True, save=False)
     else:
         if not RISK_DATA_FILE.exists():
-            raise FileNotFoundError(f"Missing {RISK_DATA_FILE}. Run `python risk_data.py` first.")
+            raise FileNotFoundError(f"Missing {RISK_DATA_FILE}. Run `python risk_pipeline.py` first.")
         risk = pd.read_csv(RISK_DATA_FILE)
 
     output = merge_cme_dv01(risk, load_cme_swap_data(), include_tickers=True)

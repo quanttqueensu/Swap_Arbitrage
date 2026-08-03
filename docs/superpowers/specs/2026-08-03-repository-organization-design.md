@@ -14,8 +14,9 @@ agents/
     tests/
 
 data_pipeline/
-  historical_data_pipeline/
-    canonicalization scripts
+  historical_data/
+    historical_data_builder.py
+    canonicalize.py
   live_data_pipeline/
     IBKR paper-data scripts
   shared schema contracts at data_pipeline/contracts.py
@@ -35,15 +36,17 @@ data/
   contract_risk/
 ```
 
-Runtime entry points and configuration remain at the repository root for this
-pass (`backtest.py`, `raw_price_data.py`, `signal_data.py`, `risk_data.py`,
-`data_io.py`, and `config.py`). This avoids unnecessary import churn while
-keeping the runtime surface obvious.
+Historical source ingestion lives under `data_pipeline/historical_data/`.
+Downstream strategy stages remain at the repository root with purpose-based
+names: `signal_pipeline.py`, `risk_pipeline.py`, `backtest_engine.py`,
+`clean_data.py`, and `config.py`.
 
 ## Moves
 
 - Move `data_pipeline/canonicalize.py` into
-  `data_pipeline/historical_data_pipeline/`.
+  `data_pipeline/historical_data/`.
+- Move `historical_data_builder.py` into
+  `data_pipeline/historical_data/`.
 - Move `data_pipeline/ibkr_paper_source.py` and `data_pipeline/paper_store.py`
   into `data_pipeline/live_data_pipeline/`.
 - Move `tests/` into `docs/tests/`; move the Agent 0 characterization test into
