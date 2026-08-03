@@ -54,8 +54,10 @@ before `current`. Duplicate, reversed, current, or future timestamps block the
 result. Historical source quality must be true. It calculates the mean and
 sample standard deviation from prior `gross_excess_spread_bps` values only;
 the current value is excluded. Zero variance or any invalid collection returns
-`None`. All Decimal arithmetic uses a local precision of 50 and leaves the
-caller context unchanged.
+`None`. Decimal arithmetic for the mean, variance, square root, and division
+uses a local precision of 50. Exact comparisons and `copy_abs()` are
+context-free and require no local-context wrapper. Caller context always
+remains unchanged.
 
 The available P30 model has observation timestamps but no publication timestamp
 or approved business-day calendar. The function can therefore enforce ordering
@@ -77,6 +79,8 @@ boundaries:
 
 Inputs use exact `PositionState`, finite exact Decimals, and exact bools.
 Malformed inputs return `None`. A missing z-score makes data unavailable.
+Transition thresholds use exact Decimal comparisons and `copy_abs()` only, so
+they do not require or mutate a Decimal context.
 
 `generate_signal_decision` derives the causal z-score, requires current source
 quality, freshness, and `observation_count == 252`, then calls the transition.

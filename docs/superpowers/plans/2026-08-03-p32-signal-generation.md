@@ -14,7 +14,7 @@
 - Ponytail full mode applies: one module and one focused test file; no engine, class, registry, service, builder, configuration layer, or new dependency.
 - Reuse `STRATEGY_SPEC_VERSION = "p10.strategy-equations.v1"` from `strategy.spread` and the existing fixture without copying or modifying it.
 - Frozen fixture: `docs/tests/fixtures/strategy_equation_examples.json`, SHA-256 `3fb9da5fc9ad255587ce93ea9770552f42566d56070f68ad1661709c030fbd76`.
-- Use exact finite `Decimal` values and local precision 50 for every Decimal arithmetic operation; never mutate caller/global Decimal context and never use float tolerance.
+- Use exact finite `Decimal` values and local precision 50 for Decimal arithmetic (mean, variance, square root, and division). Exact comparisons and `copy_abs()` are context-free and need no local-context wrapper. Never mutate caller/global Decimal context or use float tolerance.
 - Causal z-score uses exactly 252 prior observations, sample standard deviation, and excludes current/future rows.
 - Use exact `PositionState`, exact bools, strict-positive economic eligibility, inclusive entry/exit thresholds, ordered reversal actions, and flatten precedence.
 - Production code has no file reads, implicit clock, business-calendar inference, pandas/numpy, orders, broker, network, or source integration.
@@ -161,7 +161,8 @@ reverse_entry = z_score <= Decimal("-2.0") and reverse_net_bps > 0
 
 Then reproduce the frozen flat entry, ordered opposite-entry reversal, inclusive
 `z.copy_abs() <= Decimal("0.5")` exit, nonpositive-net exit, and persistence
-branches. Decimal comparisons use a local precision-50 context.
+branches. These exact comparisons and `copy_abs()` are context-free; no
+local-context wrapper is required, and the caller-context guarantee remains.
 
 - [ ] **Step 4: Write integrated `SignalDecision` RED tests**
 
