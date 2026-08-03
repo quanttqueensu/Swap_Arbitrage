@@ -79,34 +79,32 @@ def signal_transition(
     if not data_ready or z_score is None:
         return (PositionState.FLAT, ("data_flatten",)) if prior_state is not PositionState.FLAT else (PositionState.FLAT, ())
 
-    with localcontext() as context:
-        context.prec = 50
-        traditional_entry = z_score >= Decimal("2.0") and traditional_net_bps > 0
-        reverse_entry = z_score <= Decimal("-2.0") and reverse_net_bps > 0
-        if traditional_entry:
-            return (
-                (PositionState.TRADITIONAL, ("enter_traditional",))
-                if prior_state is PositionState.FLAT
-                else (PositionState.TRADITIONAL, ("exit_reverse", "enter_traditional"))
-                if prior_state is PositionState.REVERSE
-                else (prior_state, ())
-            )
-        if reverse_entry:
-            return (
-                (PositionState.REVERSE, ("enter_reverse",))
-                if prior_state is PositionState.FLAT
-                else (PositionState.REVERSE, ("exit_traditional", "enter_reverse"))
-                if prior_state is PositionState.TRADITIONAL
-                else (prior_state, ())
-            )
-        if prior_state is PositionState.TRADITIONAL and (
-            z_score.copy_abs() <= Decimal("0.5") or traditional_net_bps <= 0
-        ):
-            return PositionState.FLAT, ("exit_traditional",)
-        if prior_state is PositionState.REVERSE and (
-            z_score.copy_abs() <= Decimal("0.5") or reverse_net_bps <= 0
-        ):
-            return PositionState.FLAT, ("exit_reverse",)
+    traditional_entry = z_score >= Decimal("2.0") and traditional_net_bps > 0
+    reverse_entry = z_score <= Decimal("-2.0") and reverse_net_bps > 0
+    if traditional_entry:
+        return (
+            (PositionState.TRADITIONAL, ("enter_traditional",))
+            if prior_state is PositionState.FLAT
+            else (PositionState.TRADITIONAL, ("exit_reverse", "enter_traditional"))
+            if prior_state is PositionState.REVERSE
+            else (prior_state, ())
+        )
+    if reverse_entry:
+        return (
+            (PositionState.REVERSE, ("enter_reverse",))
+            if prior_state is PositionState.FLAT
+            else (PositionState.REVERSE, ("exit_traditional", "enter_reverse"))
+            if prior_state is PositionState.TRADITIONAL
+            else (prior_state, ())
+        )
+    if prior_state is PositionState.TRADITIONAL and (
+        z_score.copy_abs() <= Decimal("0.5") or traditional_net_bps <= 0
+    ):
+        return PositionState.FLAT, ("exit_traditional",)
+    if prior_state is PositionState.REVERSE and (
+        z_score.copy_abs() <= Decimal("0.5") or reverse_net_bps <= 0
+    ):
+        return PositionState.FLAT, ("exit_reverse",)
     return prior_state, ()
 
 
