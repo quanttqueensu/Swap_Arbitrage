@@ -19,6 +19,18 @@ from .models import (
     OrderIntent,
     to_csv_row,
 )
+from .spread import (
+    STRATEGY_SPEC_VERSION,
+    directional_cost_buffer_bps,
+    expected_funding_bps,
+    fixed_swap_spread_bps,
+    funding_spread_bps,
+    gross_excess_spread_bps,
+    net_opportunity_bps,
+    rate_decimal_to_bps,
+    tick_value_usd,
+    treasury_fractional_quote_to_points,
+)
 
 __all__ = [
     "ContractMetadata",
@@ -40,4 +52,14 @@ __all__ = [
     "WorkingOrder",
     "OrderIntent",
     "to_csv_row",
+    "STRATEGY_SPEC_VERSION",
+    "rate_decimal_to_bps",
+    "treasury_fractional_quote_to_points",
+    "tick_value_usd",
+    "fixed_swap_spread_bps",
+    "funding_spread_bps",
+    "expected_funding_bps",
+    "gross_excess_spread_bps",
+    "directional_cost_buffer_bps",
+    "net_opportunity_bps",
 ]
