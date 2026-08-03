@@ -349,7 +349,7 @@ class Dv01HedgeTests(unittest.TestCase):
                 self.assertIsNone(residual_dv01_usd_per_bp(1, -1, value, Decimal("950")))
                 self.assertIsNone(residual_dv01_usd_per_bp(1, -1, Decimal("100"), value))
 
-    def test_residual_fraction_validates_inputs_and_uses_local_precision(self) -> None:
+    def test_residual_fraction_validates_inputs(self) -> None:
         self.assertEqual(
             residual_fraction(Decimal("1"), Decimal("3")),
             Decimal("0.33333333333333333333333333333333333333333333333333"),
@@ -360,13 +360,43 @@ class Dv01HedgeTests(unittest.TestCase):
         for target in (None, 1.0, Decimal("NaN"), Decimal("Infinity"), Decimal("0"), Decimal("-1")):
             with self.subTest(target=target):
                 self.assertIsNone(residual_fraction(Decimal("1"), target))
+
+    def test_task2_functions_isolate_full_caller_decimal_context(self) -> None:
         original = getcontext().copy()
         try:
-            getcontext().prec = 2
-            self.assertEqual(
-                residual_fraction(Decimal("1"), Decimal("3")),
-                Decimal("0.33333333333333333333333333333333333333333333333333"),
+            context = getcontext()
+            context.prec = 2
+            calls = (
+                (
+                    "hedge",
+                    lambda: dv01_hedge_quantities(
+                        TradeDirection.TRADITIONAL,
+                        Decimal("149.49"),
+                        Decimal("100"),
+                        Decimal("100"),
+                    ),
+                    (1, -1),
+                ),
+                (
+                    "residual",
+                    lambda: residual_dv01_usd_per_bp(
+                        7, -3, Decimal("123.456"), Decimal("78.901")
+                    ),
+                    Decimal("-627.489"),
+                ),
+                (
+                    "fraction",
+                    lambda: residual_fraction(Decimal("-627.489"), Decimal("149.49")),
+                    Decimal("4.1975316074653822998193859121011438892233594220349"),
+                ),
             )
+            for name, call, expected in calls:
+                with self.subTest(function=name):
+                    context.prec = 2
+                    context.clear_flags()
+                    before = SpreadBoundaryTests._context_state(context)
+                    self.assertEqual(call(), expected)
+                    self.assertEqual(SpreadBoundaryTests._context_state(context), before)
         finally:
             setcontext(original)
 

@@ -221,7 +221,7 @@ def residual_fraction(net_dv01: object, target_dv01: object) -> Decimal | None:
     target = _decimal(target_dv01, positive=True)
     if net is None or target is None:
         return None
-    return _divide(abs(net), target)
+    return _divide(net.copy_abs(), target)
 
 
 def basket_pnl_usd(legs: object, total_cost_usd: object) -> Decimal | None:

@@ -47,3 +47,12 @@
 - Corrected P31 and this ledger to distinguish the actual temporary mutations from a hypothetical bump-only mutation. No runtime or test code was changed; the direct P&L expression remains restored.
 - Verification: focused suite and `git diff --check` were rerun for this evidence-only correction.
 - Commit: `docs: correct P31 mutation evidence` (separate evidence-only commit).
+
+## Task 2 numerical review correction — Decimal context isolation
+
+- Finding: numerical specialist returned CHANGES_REQUIRED on Task 2 context-test coverage while initially judging production arithmetic sound.
+- RED: a temporary isolation-bypass mutant failed all three new precision-2 subtests: hedge `(2, -2)` versus `(1, -1)`, residual `-6.2E+2` versus `-627.489`, and fraction `4.2` versus the literal 50-digit result; the mutant was restored.
+- Restored-code RED: the regression then exposed `abs(net)` rounding before the precision-50 helper, yielding `4.2143287176399759181216134858518964479229379891632`; `net.copy_abs()` fixed the leak without changing the public API.
+- GREEN: full context settings/flags/traps remain unchanged around all three Task 2 functions; focused suite passed 26 tests; docs suite passed 208 tests; `git diff --check` passed.
+- Commit: `test: harden P31 hedge context isolation`.
+- Caveat: the final numerical verdict remains pending; this entry records the specialist finding and correction only.
