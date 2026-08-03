@@ -1,6 +1,7 @@
 """Causal signal features."""
 
 from collections.abc import Sequence
+from datetime import timedelta
 from decimal import Decimal, localcontext
 
 from .models import SpreadObservation
@@ -9,6 +10,8 @@ from .models import SpreadObservation
 def causal_zscore(current: SpreadObservation, prior: object) -> Decimal | None:
     """Return the 252-observation causal z-score, or ``None`` when unusable."""
     if type(current) is not SpreadObservation:
+        return None
+    if current.observation_time_utc.utcoffset() != timedelta(0):
         return None
     if isinstance(prior, str) or not isinstance(prior, Sequence) or len(prior) != 252:
         return None
@@ -19,6 +22,8 @@ def causal_zscore(current: SpreadObservation, prior: object) -> Decimal | None:
         if type(observation) is not SpreadObservation:
             return None
         if observation.maturity != current.maturity or observation.source_quality_ok is not True:
+            return None
+        if observation.observation_time_utc.utcoffset() != timedelta(0):
             return None
         if observation.observation_time_utc >= current.observation_time_utc:
             return None

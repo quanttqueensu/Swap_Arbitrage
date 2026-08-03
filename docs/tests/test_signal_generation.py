@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, getcontext, setcontext
+from decimal import Decimal, FloatOperation, Inexact, ROUND_UP, getcontext, setcontext
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -43,6 +43,19 @@ def observation(maturity, when, gross, *, z_score=None, count=252,
 def history(values, maturity="2Y", start=BASE_TIME):
     return [observation(maturity, start + timedelta(minutes=index), value)
             for index, value in enumerate(values)]
+
+
+def context_snapshot(context):
+    return (
+        context.prec,
+        context.rounding,
+        context.Emin,
+        context.Emax,
+        context.capitals,
+        context.clamp,
+        tuple(context.flags.items()),
+        tuple(context.traps.items()),
+    )
 
 
 class CausalZScoreTests(unittest.TestCase):
@@ -111,12 +124,40 @@ class CausalZScoreTests(unittest.TestCase):
             with self.subTest(case=name):
                 self.assertIsNone(causal_zscore(current, invalid_prior))
 
+    # Mutation caught: assuming model construction prevents corrupted naive or non-UTC timestamps.
+    def test_rejects_corrupted_non_utc_timestamps(self):
+        prior = history(self.profiles["mean_0_sd_5_252"])
+        current = self.current("10")
+        naive_current = replace(current)
+        object.__setattr__(naive_current, "observation_time_utc", current.observation_time_utc.replace(tzinfo=None))
+        non_utc_current = replace(current)
+        object.__setattr__(non_utc_current, "observation_time_utc", current.observation_time_utc.replace(tzinfo=timezone(-timedelta(hours=1))))
+        naive_prior = history(self.profiles["mean_0_sd_5_252"])
+        object.__setattr__(naive_prior[-1], "observation_time_utc", naive_prior[-1].observation_time_utc.replace(tzinfo=None))
+        non_utc_prior = history(self.profiles["mean_0_sd_5_252"])
+        object.__setattr__(non_utc_prior[0], "observation_time_utc", non_utc_prior[0].observation_time_utc.replace(tzinfo=timezone(timedelta(hours=1))))
+        for name, invalid_current, invalid_prior in (
+            ("naive_current", naive_current, prior),
+            ("non_utc_current", non_utc_current, prior),
+            ("naive_prior", current, naive_prior),
+            ("non_utc_prior", current, non_utc_prior),
+        ):
+            with self.subTest(case=name):
+                try:
+                    result = causal_zscore(invalid_current, invalid_prior)
+                except TypeError as error:
+                    self.fail(f"causal_zscore raised {error!r}")
+                self.assertIsNone(result)
+
     # Mutation caught: calculating across maturities or using a poor-quality source row.
     def test_rejects_mismatched_maturity_and_poor_quality_history(self):
         prior = history(self.profiles["mean_0_sd_5_252"])
         current = self.current("10")
         self.assertIsNone(causal_zscore(current, prior[:-1] + [replace(prior[-1], maturity="5Y")]))
         self.assertIsNone(causal_zscore(current, prior[:-1] + [replace(prior[-1], source_quality_ok=False)]))
+        corrupted_quality = replace(prior[-1])
+        object.__setattr__(corrupted_quality, "source_quality_ok", 1)
+        self.assertIsNone(causal_zscore(current, prior[:-1] + [corrupted_quality]))
 
     # Mutation caught: iterating arbitrary objects, strings, or non-observation collection members.
     def test_rejects_invalid_current_collections_and_members(self):
@@ -128,28 +169,44 @@ class CausalZScoreTests(unittest.TestCase):
         self.assertIsNone(causal_zscore(current, "not a history"))
         self.assertIsNone(causal_zscore(current, prior[:-1] + [object()]))
 
-    # Mutation caught: retaining or reading later observations after a valid result is calculated.
+    # Mutation caught: retaining or accepting later observations after a valid result is calculated.
     def test_later_future_observation_cannot_change_saved_result(self):
         prior = history(self.profiles["mean_0_sd_5_252"])
         current = self.current("10")
         saved = causal_zscore(current, prior)
         later = observation("2Y", current.observation_time_utc + timedelta(minutes=1), Decimal("999"))
+        future_prior = prior[:-1] + [later]
+        self.assertIsNone(causal_zscore(current, future_prior))
         later = replace(later, gross_excess_spread_bps=Decimal("-999"))
+        future_prior[-1] = later
+        self.assertIsNone(causal_zscore(current, future_prior))
         self.assertEqual(saved, Decimal("2"))
-        self.assertGreater(later.observation_time_utc, current.observation_time_utc)
+        self.assertEqual(causal_zscore(current, prior), Decimal("2"))
 
     # Mutation caught: using caller precision or leaking Decimal context changes to the caller.
     def test_uses_precision_50_without_changing_caller_decimal_context(self):
         original = getcontext().copy()
-        constrained = getcontext().copy()
+        constrained = original.copy()
         constrained.prec = 2
-        setcontext(constrained)
+        constrained.rounding = ROUND_UP
+        constrained.Emin = -999
+        constrained.Emax = 999
+        constrained.capitals = 0
+        constrained.clamp = 1
+        constrained.clear_flags()
+        constrained.flags[Inexact] = True
+        constrained.traps[FloatOperation] = True
+        expected = context_snapshot(constrained)
         try:
+            setcontext(constrained.copy())
+            aliased = getcontext()
+            aliased.prec = 50
+            self.assertEqual(getcontext().prec, aliased.prec)
+            self.assertNotEqual(context_snapshot(getcontext()), expected)
+            setcontext(constrained.copy())
             result = causal_zscore(self.current("10"), history(self.profiles["mean_0_sd_5_252"]))
             self.assertEqual(result, Decimal("2"))
-            self.assertEqual(getcontext(), constrained)
-            self.assertEqual(getcontext().flags, constrained.flags)
-            self.assertEqual(getcontext().traps, constrained.traps)
+            self.assertEqual(context_snapshot(getcontext()), expected)
         finally:
             setcontext(original)
 
