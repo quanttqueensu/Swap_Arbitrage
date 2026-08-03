@@ -179,6 +179,31 @@ class CausalZScoreTests(unittest.TestCase):
         self.assertIsNone(causal_zscore(current, "not a history"))
         self.assertIsNone(causal_zscore(current, prior[:-1] + [object()]))
 
+    # Mutation caught: trusting exact model identity without revalidating corrupted fields.
+    def test_rejects_corrupted_gross_and_timestamp_fields_without_raising(self):
+        current = self.current("10")
+        cases = []
+        for field, value in (
+            ("gross_excess_spread_bps", Decimal("NaN")),
+            ("gross_excess_spread_bps", 3),
+            ("observation_time_utc", "not-a-datetime"),
+        ):
+            corrupted_current = replace(current)
+            object.__setattr__(corrupted_current, field, value)
+            cases.append((f"current_{field}_{value!r}", corrupted_current, history(self.profiles["mean_0_sd_5_252"])))
+
+            corrupted_prior = history(self.profiles["mean_0_sd_5_252"])
+            object.__setattr__(corrupted_prior[-1], field, value)
+            cases.append((f"prior_{field}_{value!r}", current, corrupted_prior))
+
+        for name, corrupted_current, corrupted_prior in cases:
+            with self.subTest(case=name):
+                try:
+                    result = causal_zscore(corrupted_current, corrupted_prior)
+                except Exception as error:  # pragma: no cover - an exception is the failure detail
+                    self.fail(f"causal_zscore raised {error!r}")
+                self.assertIsNone(result)
+
     # Mutation caught: retaining or accepting later observations after a valid result is calculated.
     def test_later_future_observation_cannot_change_saved_result(self):
         prior = history(self.profiles["mean_0_sd_5_252"])
@@ -501,6 +526,31 @@ class SignalDecisionTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case):
                 self.assertIsNone(generate_signal_decision(*case))
+
+    # Mutation caught: treating corrupted exact-model history as valid but unavailable data.
+    def test_corrupted_current_and_prior_are_malformed_not_data_decisions(self):
+        valid_current = self.current("10", "2")
+        cases = []
+        for field, value in (
+            ("gross_excess_spread_bps", Decimal("NaN")),
+            ("gross_excess_spread_bps", 3),
+            ("observation_time_utc", "not-a-datetime"),
+        ):
+            corrupted_current = replace(valid_current)
+            object.__setattr__(corrupted_current, field, value)
+            cases.append((f"current_{field}_{value!r}", corrupted_current, self.standard_prior()))
+
+            corrupted_prior = self.standard_prior()
+            object.__setattr__(corrupted_prior[-1], field, value)
+            cases.append((f"prior_{field}_{value!r}", valid_current, corrupted_prior))
+
+        for name, corrupted_current, corrupted_prior in cases:
+            with self.subTest(case=name):
+                try:
+                    decision = self.decision(corrupted_current, corrupted_prior)
+                except Exception as error:  # pragma: no cover - an exception is the failure detail
+                    self.fail(f"generate_signal_decision raised {error!r}")
+                self.assertIsNone(decision)
 
 
 class OpportunityRankingTests(unittest.TestCase):

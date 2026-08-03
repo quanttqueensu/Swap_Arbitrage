@@ -23,7 +23,7 @@ def _nonblank_text(value: object) -> bool:
 
 def causal_zscore(current: SpreadObservation, prior: object) -> Decimal | None:
     """Return the 252-observation causal z-score, or ``None`` when unusable."""
-    if type(current) is not SpreadObservation:
+    if not _valid_observation(current):
         return None
     if current.observation_time_utc.utcoffset() != timedelta(0):
         return None
@@ -33,7 +33,7 @@ def causal_zscore(current: SpreadObservation, prior: object) -> Decimal | None:
     values: list[Decimal] = []
     previous_time = None
     for observation in prior:
-        if type(observation) is not SpreadObservation:
+        if not _valid_observation(observation):
             return None
         if observation.maturity != current.maturity or observation.source_quality_ok is not True:
             return None
@@ -138,7 +138,7 @@ def _valid_prior(value: object) -> bool:
     return (
         not isinstance(value, str)
         and isinstance(value, Sequence)
-        and all(type(item) is SpreadObservation for item in value)
+        and all(_valid_observation(item) for item in value)
     )
 
 
