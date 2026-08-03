@@ -115,6 +115,7 @@ class StrategyModelTests(unittest.TestCase):
         cases = (
             (SpreadObservation, ("", NOW, Decimal("12.5"), Decimal("3"), Decimal("9.5"), Decimal("1.2"), Decimal("1.4"), Decimal("8.3"), Decimal("-10.9"), None, 60, True, True)),
             (SpreadObservation, ("2Y", datetime(2026, 8, 3, 21), Decimal("12.5"), Decimal("3"), Decimal("9.5"), Decimal("1.2"), Decimal("1.4"), Decimal("8.3"), Decimal("-10.9"), None, 60, True, True)),
+            (SpreadObservation, ("2Y", datetime(2026, 8, 3, 21, tzinfo=timezone(timedelta(hours=1))), Decimal("12.5"), Decimal("3"), Decimal("9.5"), Decimal("1.2"), Decimal("1.4"), Decimal("8.3"), Decimal("-10.9"), None, 60, True, True)),
             (SpreadObservation, ("2Y", NOW, Decimal("NaN"), Decimal("3"), Decimal("9.5"), Decimal("1.2"), Decimal("1.4"), Decimal("8.3"), Decimal("-10.9"), None, 60, True, True)),
             (SpreadObservation, ("2Y", NOW, Decimal("12.5"), Decimal("3"), Decimal("9.5"), Decimal("-1"), Decimal("1.4"), Decimal("8.3"), Decimal("-10.9"), None, 60, True, True)),
             (SpreadObservation, ("2Y", NOW, Decimal("12.5"), Decimal("3"), Decimal("9.5"), Decimal("1.2"), Decimal("1.4"), Decimal("8.3"), Decimal("-10.9"), None, -1, True, True)),
