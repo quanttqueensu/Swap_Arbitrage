@@ -6,16 +6,17 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-CACHE_DIR = DATA_DIR / "cache"
+RAW_DATA_DIR = DATA_DIR / "raw_data"
+CACHE_DIR = RAW_DATA_DIR / "cache"
 
-RATES_FILE = DATA_DIR / "treasury_rates.csv"
-SWAP_RATES_FILE = DATA_DIR / "swap_rates.csv"
-CME_SWAP_DATA_FILE = DATA_DIR / "cme_swap_data.csv"
-TREASURY_FUTURES_FILE = DATA_DIR / "treasury_futures.csv"
-TREASURY_FUTURES_DATA_FILE = DATA_DIR / "treasury_futures_data.csv"
-RAW_PRICE_DATA_FILE = DATA_DIR / "raw_price_data.csv"
-SIGNAL_DATA_FILE = DATA_DIR / "signal_data.csv"
-RISK_DATA_FILE = DATA_DIR / "risk_data.csv"
+RATES_FILE = RAW_DATA_DIR / "treasury_rates.csv"
+SWAP_RATES_FILE = RAW_DATA_DIR / "swap_rates.csv"
+CME_SWAP_DATA_FILE = RAW_DATA_DIR / "cme_swap_data.csv"
+TREASURY_FUTURES_FILE = RAW_DATA_DIR / "treasury_futures.csv"
+TREASURY_FUTURES_DATA_FILE = RAW_DATA_DIR / "treasury_futures_data.csv"
+RAW_PRICE_DATA_FILE = RAW_DATA_DIR / "raw_price_data.csv"
+SIGNAL_DATA_FILE = RAW_DATA_DIR / "signal_data.csv"
+RISK_DATA_FILE = RAW_DATA_DIR / "risk_data.csv"
 
 
 # ============================================================

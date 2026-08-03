@@ -6,9 +6,8 @@ __pycache__/
 
 .idea/
 
-data/*.csv
-data/cache/
-data/staging/
+data/raw_data/*.csv
+data/raw_data/cache/
 agents/*/logs/
 agents/*/state/*.json
 agents/*/orders/*.csv

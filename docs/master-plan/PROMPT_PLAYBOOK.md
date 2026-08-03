@@ -299,7 +299,7 @@ development path is dry-run and cannot submit an order.
 Ask a broker-safety reviewer to trace every path that could submit or cancel
 and a data reviewer to compare CSV output with the approved schema. Run only
 fake-broker tests. Hand the reviewed evidence to P24; do not request MG4 until
-P24's staged migration is also ready. The user, not the development agent,
+P24's canonical data and schema evidence are also ready. The user, not the development agent,
 performs any later IBKR paper connectivity check.
 ```
 
@@ -309,24 +309,17 @@ performs any later IBKR paper connectivity check.
 Execute only master-plan prompt P24 after MG3 approves the schemas and
 migration preview and P23 passes its fake-broker safety and schema reviews.
 
-Implement canonicalization, manifest generation, and the approved migration
-from P21 using only the approved FRED, CME Group, IBKR, and existing local
-source artifacts. Do not add Quantt/Cloudflare ingestion. First run the entire
-migration into a new staging directory. Compare source and staged row counts,
-time coverage, unique keys, hashes, schema versions, and numerical spot checks.
-Demonstrate that rerunning unchanged input is deterministic.
-
-Generate a machine-readable migration report showing every original path,
-staged replacement, action, validation result, and recovery path. Stop and
-report any mismatch; never coerce an invalid field silently. After the user
-approves the staging report, perform only the approved recoverable moves and
-canonical writes. Preserve source caches and legacy results until a separate
-cleanup phase.
+Implement canonicalization and schema validation using only the approved FRED,
+CME Group, IBKR, and existing local source artifacts. Do not add
+Quantt/Cloudflare ingestion. Write validated canonical partitions directly to
+`data/rates/`, `data/futures/`, `data/market/`, and `data/contract_risk/`; keep
+original inputs under `data/raw_data/`. Demonstrate deterministic output when
+rerunning unchanged input and never coerce an invalid field silently.
 
 Ask a data-quality reviewer to rerun validations and a migration reviewer to
 check that all resolved paths stay inside the repository data directory.
-Stop at MG4 with the canonical data tree, manifests, and old artifacts still
-recoverable.
+Stop at MG4 with the five-folder durable data layout and schema evidence ready
+for inspection.
 ```
 
 ## Phase 4 prompts

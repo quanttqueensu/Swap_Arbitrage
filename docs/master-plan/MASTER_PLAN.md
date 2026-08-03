@@ -102,7 +102,6 @@ data_pipeline/
   cme_source.py             approved futures settlements and contract metadata
   ibkr_paper_source.py      paper quote, order, fill, and position capture
   canonicalize.py           source-specific data to canonical narrow CSVs
-  manifests.py              row counts, time ranges, hashes, and provenance
 
 backtesting/
   engine.py                 causal replay of the complete strategy
@@ -122,18 +121,20 @@ tests/
   agents/                   broker fakes, safety, reconciliation, and behavior deltas
 
 data/
-  source/                   source-specific, narrow, immutable CSV captures
-  canonical/                strategy-ready CSVs with stable schemas
+  raw_data/                 original wide inputs and provider cache
+  futures/                  year-partitioned futures settlements
+  rates/                    year-partitioned historical rates
+  market/                   year-partitioned daily market observations
+  contract_risk/            year-partitioned contract risk observations
   paper/                    IBKR paper quotes, orders, fills, and positions
   results/
     backtests/              complete-strategy outputs only
     agents/                 one directory per paper-agent run
-  manifests/                provenance and validation summaries
-  cache/                    vendor response cache, excluded from canonical inputs
 ```
 
-The migration must not move or rewrite the existing `data/` tree until the
-inventory, schema proposal, and migration preview pass a manual gate.
+Canonicalizers validate before writing directly into the durable domain folders;
+the raw input bytes remain in `data/raw_data/` and no staging or manifest tree
+is persisted.
 
 ## Workstreams and dependency order
 
@@ -293,16 +294,15 @@ Quantt/Cloudflare ingestion integration will be built.
   any future source gap requires a separate reviewed change rather than a
   Cloudflare fallback.
 - IBKR paper quote/order/fill/position recorder with paper-account enforcement.
-- Deterministic canonicalization and manifest generation.
+- Deterministic canonicalization and schema validation.
 - Schema, uniqueness, ordering, timezone, unit, coverage, and freshness checks.
-- Dry-run migration followed by an approved migration of current data.
+- Direct publication of validated partitions into the durable data folders.
 
 **Manual gate:** `MG4`. Inspect representative source and canonical samples by
 hand before strategy use.
 
-**Exit criteria:** Re-running ingestion on unchanged inputs produces identical
-canonical files and manifests; no secret or unnecessary source column is
-written.
+**Exit criteria:** Re-running canonicalization on unchanged inputs produces
+identical canonical files; no secret or unnecessary source column is written.
 
 ### Phase 4: Build the shared strategy core
 

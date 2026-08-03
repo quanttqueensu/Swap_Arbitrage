@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import csv
-import re
 import tempfile
 import unittest
 from pathlib import Path
 
 from data_pipeline.contracts import (
-    APPROVED_ERIS_SYMBOL_PATTERN,
-    ERIS_SETTLEMENT_FILENAME_PATTERN,
-    MIGRATION_RULES,
     SCHEMAS,
     SchemaValidationError,
-    migration_rule_for,
     validate_csv,
 )
 
@@ -35,8 +30,6 @@ REQUIRED_SCHEMA_IDS = {
     "backtest_trades",
     "backtest_positions",
     "backtest_summary",
-    "run_manifest",
-    "run_inputs",
 }
 
 
@@ -85,8 +78,8 @@ class SchemaCatalogTests(unittest.TestCase):
     def test_historical_contracts_route_only_approved_sources(self) -> None:
         rates = SCHEMAS["historical_rates"]
         settlements = SCHEMAS["historical_futures_settlements"]
-        self.assertEqual(rates.path_pattern, "data/source/rates/rates_YYYY.csv")
-        self.assertEqual(settlements.path_pattern, "data/source/futures/futures_settlements_YYYY.csv")
+        self.assertEqual(rates.path_pattern, "data/rates/rates_YYYY.csv")
+        self.assertEqual(settlements.path_pattern, "data/futures/futures_settlements_YYYY.csv")
         self.assertEqual(rates.consumers[0], "data_pipeline.rates_source")
         self.assertEqual(settlements.consumers[0], "data_pipeline.futures_source")
         for contract in (rates, settlements):
@@ -94,21 +87,8 @@ class SchemaCatalogTests(unittest.TestCase):
                 header = [column.name for column in contract.columns]
                 self.assertIn("source", header)
                 self.assertIn("source", contract.unique_key)
-        expected_destinations = {
-            "eris_vendor_cache": "data/source/futures/futures_settlements_YYYY.csv",
-            "cme_swap_master": "data/source/futures/futures_settlements_YYYY.csv and data/canonical/reference/contract_risk_YYYY.csv",
-            "treasury_futures_master": "data/source/futures/futures_settlements_YYYY.csv and data/canonical/reference/contract_risk_YYYY.csv",
-            "treasury_rates": "data/source/rates/rates_YYYY.csv and data/canonical/market/daily_market_YYYY.csv",
-        }
-        destinations = {rule.rule_id: rule.destination for rule in MIGRATION_RULES}
-        for rule_id, destination in expected_destinations.items():
-            with self.subTest(rule_id=rule_id):
-                self.assertEqual(destinations[rule_id], destination)
-        self.assertFalse(any(provider in destination.lower() for destination in destinations.values() for provider in ("quantt", "cloudflare")))
-        self.assertEqual(
-            destinations["r2_inventory"],
-            "r2_objects.csv (in place; excluded from canonical manifests)",
-        )
+        self.assertEqual(SCHEMAS["contract_risk"].path_pattern, "data/contract_risk/contract_risk_YYYY.csv")
+        self.assertEqual(SCHEMAS["daily_market"].path_pattern, "data/market/daily_market_YYYY.csv")
 
 
 class CsvValidationTests(unittest.TestCase):
@@ -272,43 +252,6 @@ class CsvValidationTests(unittest.TestCase):
             row = [f"t-{direction}", "d", "2Y", direction, "2026-07-30T20:00:00Z", "", "0", "0", "0"]
             with self.assertRaisesRegex(SchemaValidationError, "trade direction"):
                 validate_csv(trades, self.write_rows(f"trade-{direction}.csv", header, [row]))
-
-
-class MigrationCoverageTests(unittest.TestCase):
-    def test_every_p20_artifact_matches_exactly_one_nonexecuting_rule(self) -> None:
-        inventory = Path("docs/data/current-inventory.md").read_text(encoding="utf-8")
-        paths = re.findall(r"^### `([^`]+)`$", inventory, re.MULTILINE)
-        self.assertEqual(len(paths), 1487)
-        allowed_actions = {
-            "keep immutable source",
-            "regenerate",
-            "archive labelled legacy",
-            "supersede after validation",
-        }
-        counts = {rule.rule_id: 0 for rule in MIGRATION_RULES}
-        for path in paths:
-            rule = migration_rule_for(path)
-            counts[rule.rule_id] += 1
-            self.assertIn(rule.action, allowed_actions)
-            self.assertFalse(rule.performs_action)
-            self.assertTrue(rule.destination)
-            self.assertTrue(rule.row_expectation)
-            self.assertTrue(rule.column_expectation)
-            self.assertTrue(rule.recovery)
-            self.assertTrue(rule.reconciliation)
-        self.assertEqual(sum(counts.values()), 1487)
-        self.assertEqual(counts["eris_vendor_cache"], 1474)
-        self.assertEqual(sum(count for key, count in counts.items() if key != "eris_vendor_cache"), 13)
-        eris = next(rule for rule in MIGRATION_RULES if rule.rule_id == "eris_vendor_cache")
-        self.assertEqual(APPROVED_ERIS_SYMBOL_PATTERN, r"^(?:YIT|YIW)[HMUZ]\d{2}$")
-        self.assertEqual(ERIS_SETTLEMENT_FILENAME_PATTERN, r"^Eris_Instruments_(\d{8})_Settles\.csv$")
-        self.assertIn(APPROVED_ERIS_SYMBOL_PATTERN, eris.selection_predicate)
-        self.assertIn(ERIS_SETTLEMENT_FILENAME_PATTERN, eris.selection_predicate)
-        self.assertIn("EvaluationDate,Symbol", eris.reconciliation)
-
-    def test_unknown_or_overlapping_artifact_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "exactly one migration rule"):
-            migration_rule_for("data/unknown.csv")
 
 
 if __name__ == "__main__":

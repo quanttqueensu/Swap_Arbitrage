@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+import importlib
+import unittest
+from pathlib import Path
+
+from config import (
+    CME_SWAP_DATA_FILE,
+    DATA_DIR,
+    RAW_PRICE_DATA_FILE,
+    RATES_FILE,
+    RISK_DATA_FILE,
+    SIGNAL_DATA_FILE,
+    SWAP_RATES_FILE,
+    TREASURY_FUTURES_DATA_FILE,
+    TREASURY_FUTURES_FILE,
+)
+from data_pipeline.contracts import SCHEMAS
+
+
+class DataLayoutTests(unittest.TestCase):
+    def test_raw_inputs_use_the_raw_data_folder(self) -> None:
+        for path in (
+            RATES_FILE,
+            SWAP_RATES_FILE,
+            CME_SWAP_DATA_FILE,
+            TREASURY_FUTURES_FILE,
+            TREASURY_FUTURES_DATA_FILE,
+            RAW_PRICE_DATA_FILE,
+            SIGNAL_DATA_FILE,
+            RISK_DATA_FILE,
+        ):
+            with self.subTest(path=path.name):
+                self.assertEqual(path.parent, DATA_DIR / "raw_data")
+
+    def test_canonical_contracts_use_flat_named_folders(self) -> None:
+        self.assertEqual(SCHEMAS["historical_rates"].path_pattern, "data/rates/rates_YYYY.csv")
+        self.assertEqual(SCHEMAS["historical_futures_settlements"].path_pattern, "data/futures/futures_settlements_YYYY.csv")
+        self.assertEqual(SCHEMAS["contract_risk"].path_pattern, "data/contract_risk/contract_risk_YYYY.csv")
+        self.assertEqual(SCHEMAS["daily_market"].path_pattern, "data/market/daily_market_YYYY.csv")
+
+    def test_manifest_and_staging_subsystems_are_removed(self) -> None:
+        self.assertFalse((DATA_DIR / "manifests").exists())
+        self.assertFalse((DATA_DIR / "staging").exists())
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("data_pipeline.manifests")
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("data_pipeline.migration")
+
+    def test_durable_data_has_only_the_requested_folders(self) -> None:
+        folders = {path.name for path in DATA_DIR.iterdir() if path.is_dir()}
+        self.assertEqual(folders, {"raw_data", "futures", "rates", "market", "contract_risk"})
+
+
+if __name__ == "__main__":
+    unittest.main()

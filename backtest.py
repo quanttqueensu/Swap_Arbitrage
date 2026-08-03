@@ -349,7 +349,7 @@ def scenario_suffix(config: BacktestConfig) -> str:
 
 def output_path(start: pd.Timestamp, end: pd.Timestamp, config: BacktestConfig) -> object:
     stem = f"swap_arb_backtest_{start.date().isoformat()}_{end.date().isoformat()}{scenario_suffix(config)}"
-    return DATA_DIR / f"{stem}.csv"
+    return DATA_DIR / "raw_data" / f"{stem}.csv"
 
 
 def run_backtest(
@@ -368,7 +368,7 @@ def run_backtest(
 
     backtest = add_equity_curve(backtest, config)
 
-    DATA_DIR.mkdir(exist_ok=True)
+    (DATA_DIR / "raw_data").mkdir(parents=True, exist_ok=True)
     path = output_path(start_ts, end_ts, config)
     backtest = save_derived_csv(backtest, path)
 

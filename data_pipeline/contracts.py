@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import io
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -10,10 +9,6 @@ from pathlib import Path
 
 
 SCHEMA_VERSION = "1.0.0"
-APPROVED_ERIS_SYMBOL_PATTERN = r"^(?:YIT|YIW)[HMUZ]\d{2}$"
-ERIS_SETTLEMENT_FILENAME_PATTERN = r"^Eris_Instruments_(\d{8})_Settles\.csv$"
-
-
 class SchemaValidationError(ValueError):
     pass
 
@@ -44,23 +39,6 @@ class CsvContract:
     validation_rules: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class MigrationRule:
-    rule_id: str
-    pattern: str
-    action: str
-    destination: str
-    row_expectation: str
-    column_expectation: str
-    recovery: str
-    selection_predicate: str = "all source rows"
-    reconciliation: str = "exact source-to-output key and value reconciliation"
-    performs_action: bool = False
-
-    def matches(self, path: str) -> bool:
-        return re.fullmatch(self.pattern, path) is not None
-
-
 def _column(
     spec: str,
     schema_id: str,
@@ -82,7 +60,7 @@ def _column(
         "backtest_decisions": "shared strategy decision during replay",
         "backtest_orders": "backtest order-intent adapter",
         "backtest_fills": "backtest fill simulator",
-    }.get(schema_id, "backtest accounting or run manifest derivation")
+    }.get(schema_id, "backtest accounting or pipeline derivation")
     if name == "available_at_utc":
         reason = "causal publication cutoff"
     elif name == "ibkr_order_id":
@@ -127,8 +105,8 @@ def _schema(
     )
 
 
-RATE_SOURCE_PATH = "data/source/rates/rates_YYYY.csv"
-FUTURES_SOURCE_PATH = "data/source/futures/futures_settlements_YYYY.csv"
+RATE_SOURCE_PATH = "data/rates/rates_YYYY.csv"
+FUTURES_SOURCE_PATH = "data/futures/futures_settlements_YYYY.csv"
 
 
 SCHEMAS = {
@@ -146,22 +124,22 @@ SCHEMAS = {
         ("data_pipeline.futures_source", "data_pipeline.canonicalize"), ("positive_dv01_if_present",),
     ),
     "contract_reference": _schema(
-        "contract_reference", "data/canonical/reference/contracts.csv",
+        "contract_reference", "data/contract_risk/contracts.csv",
         ("instrument_id|string|instrument_id", "source|string|source_id", "asset_class|string|asset_class", "root|string|instrument_root", "contract_month|string|year_month", "maturity|string|maturity", "currency|string|currency", "exchange|string|exchange", "price_multiplier|decimal|usd_per_price_point", "tick_size|decimal|price_points", "valid_from|date|date", "valid_to|date|date"),
         ("instrument_id", "valid_from"), ("instrument_id", "valid_from"), "on approved reference change", "retain every validity interval",
         ("data_pipeline.canonicalize", "strategy.position_sizing", "backtesting.engine", "agents.shared"),
     ),
     "contract_risk": _schema(
-        "contract_risk", "data/canonical/reference/contract_risk_YYYY.csv",
+        "contract_risk", "data/contract_risk/contract_risk_YYYY.csv",
         ("observation_date|date|date", "instrument_id|string|instrument_id", "dv01_usd_per_bp|decimal|usd_per_bp", "rate_sensitivity_sign|integer|sign", "dv01_method|string|method"),
-        ("observation_date", "instrument_id"), ("observation_date", "instrument_id"), "daily by year", "retain with input manifests",
+        ("observation_date", "instrument_id"), ("observation_date", "instrument_id"), "daily by year", "immutable canonical output",
         ("strategy.position_sizing", "strategy.risk_signals", "backtesting.engine", "agents.shared"), ("rate_sensitivity_sign_domain", "positive_dv01_if_present"),
     ),
     "daily_market": _schema(
-        "daily_market", "data/canonical/market/daily_market_YYYY.csv",
+        "daily_market", "data/market/daily_market_YYYY.csv",
         ("observation_date|date|date", "series_id|string|series_id|nullable", "instrument_id|string|instrument_id|nullable", "value|decimal|declared_by_value_unit", "value_unit|string|unit", "source_observation_time_utc|datetime_utc|utc", "available_at_utc|datetime_utc|utc", "source|string|source_id", "classification|string|classification", "proxy_label|string|label|nullable"),
         ("observation_date", "series_id", "instrument_id", "source", "available_at_utc"),
-        ("observation_date", "series_id", "instrument_id", "source", "available_at_utc"), "daily by year", "retain with input manifests",
+        ("observation_date", "series_id", "instrument_id", "source", "available_at_utc"), "daily by year", "immutable canonical output",
         ("strategy.spread", "strategy.signal_generation", "backtesting.engine"),
         ("one_market_identity", "available_not_before_observation", "classification_lineage"),
     ),
@@ -237,34 +215,7 @@ SCHEMAS = {
         ("run_id",), ("run_id",), "once per completed backtest run", "immutable run artifact",
         ("backtesting.reports",),
     ),
-    "run_manifest": _schema(
-        "run_manifest", "data/manifests/run_id.csv",
-        ("run_id|string|run_id", "run_type|string|run_type", "agent_id|string|agent_id|nullable", "strategy_version|string|version", "config_hash|string|sha256", "code_commit|string|git_commit", "input_manifest_hash|string|sha256", "started_at_utc|datetime_utc|utc", "ended_at_utc|datetime_utc|utc|nullable", "row_count|integer|rows", "status|string|status"),
-        ("run_id",), ("run_id",), "one row per run", "permanent audit record",
-        ("backtesting.reports", "agents.shared", "data_pipeline.manifests"),
-    ),
-    "run_inputs": _schema(
-        "run_inputs", "data/manifests/run_id_inputs.csv",
-        ("run_id|string|run_id", "path|string|repo_relative_path", "sha256|string|sha256", "row_count|integer|rows", "start_time|string|date_or_utc", "end_time|string|date_or_utc", "schema_version|string|version"),
-        ("run_id", "path"), ("run_id", "path"), "one row per run input", "permanent audit record",
-        ("backtesting.reports", "agents.shared", "data_pipeline.manifests"),
-    ),
 }
-
-
-MIGRATION_RULES = (
-    MigrationRule("eris_vendor_cache", r"data/cache/eris_sofr_settlements_v3/[^/]+\.csv", "keep immutable source", FUTURES_SOURCE_PATH, "one output row per unique approved instrument/date key; source rows remain unchanged", "64 vendor columns to 4-5 consumed source columns", "use untouched cache file and its P20 SHA-256", f"Symbol matches {APPROVED_ERIS_SYMBOL_PATTERN}; filename matches {ERIS_SETTLEMENT_FILENAME_PATTERN}; EvaluationDate equals the parsed YYYYMMDD date; block the complete file on a duplicate (EvaluationDate,Symbol) key", "for every file, output keys equal exactly the unique allowed (EvaluationDate,Symbol) keys and output count equals that key-set size"),
-    MigrationRule("cme_swap_master", r"data/cme_swap_data\.csv", "regenerate", f"{FUTURES_SOURCE_PATH} and data/canonical/reference/contract_risk_YYYY.csv", "2,948 source rows split by year without silent loss", "4 current columns mapped to settlement and risk contracts", "retain current file until staged hashes and spot checks pass"),
-    MigrationRule("treasury_futures_master", r"data/treasury_futures_data\.csv", "regenerate", f"{FUTURES_SOURCE_PATH} and data/canonical/reference/contract_risk_YYYY.csv", "2,942 proxy rows retained with explicit proxy lineage", "4 current columns mapped to settlement and risk contracts", "retain current file until staged hashes and spot checks pass"),
-    MigrationRule("swap_rates", r"data/swap_rates\.csv", "regenerate", "data/canonical/market/daily_market_YYYY.csv", "1,474 dates expand to long consumed price observations", "5 wide columns become long market rows; returns are recomputed features", "retain current file until staged row reconciliation passes"),
-    MigrationRule("treasury_futures", r"data/treasury_futures\.csv", "regenerate", "data/canonical/market/daily_market_YYYY.csv", "1,471 dates expand to long proxy price observations", "5 wide columns become long market rows; returns are recomputed features", "retain current file until staged row reconciliation passes"),
-    MigrationRule("treasury_rates", r"data/treasury_rates\.csv", "regenerate", f"{RATE_SOURCE_PATH} and data/canonical/market/daily_market_YYYY.csv", "2,143 dates expand to one long row per present consumed series", "16 wide columns become 5-column source and 10-column canonical rows", "retain current file until staged row and value spot checks pass"),
-    MigrationRule("raw_wide", r"data/raw_price_data\.csv", "supersede after validation", "data/canonical/market/daily_market_YYYY.csv", "2,154 dates reconstructed by keyed long observations", "24 copied columns replaced by narrow long rows", "restore or continue using untouched current file"),
-    MigrationRule("signal_wide", r"data/signal_data\.csv", "supersede after validation", "data/results/backtests/run_id/decisions.csv", "1,471 historical proxy dates remain reproducible as legacy evidence", "40 copied/feature columns replaced by market inputs plus decision rows", "restore or continue using untouched current file"),
-    MigrationRule("risk_wide", r"data/risk_data\.csv", "supersede after validation", "data/results/backtests/run_id/positions.csv and decisions.csv", "1,471 historical proxy dates remain reproducible as legacy evidence", "72 copied/risk columns replaced by narrow decision and position rows", "restore or continue using untouched current file"),
-    MigrationRule("legacy_backtests", r"data/swap_arb_backtest_.+\.csv", "archive labelled legacy", "data/results/legacy_proxy/<original_filename>", "preserve each original row count: 2,148; 1,471; 756; or 753", "retain original 85/99-column shape under explicit legacy-proxy label", "move archived file back by exact original name; P20 hash proves identity"),
-    MigrationRule("r2_inventory", r"r2_objects\.csv", "keep immutable source", "r2_objects.csv (in place; excluded from canonical manifests)", "preserve all 2,117 metadata rows", "retain 9 inventory columns; never treat as market input", "use untouched top-level manifest and its P20 SHA-256"),
-)
 
 
 def _parse_value(column: ColumnContract, value: str, row_number: int) -> object:
@@ -360,21 +311,8 @@ def _validate_csv_reader(contract: CsvContract, reader: csv.DictReader) -> int:
     return count
 
 
-def validate_csv_bytes(contract: CsvContract, data: bytes) -> int:
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError as error:
-        raise SchemaValidationError("CSV must be UTF-8") from error
-    return _validate_csv_reader(contract, csv.DictReader(io.StringIO(text, newline="")))
-
-
 def validate_csv(contract: CsvContract, path: Path) -> int:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return _validate_csv_reader(contract, csv.DictReader(handle))
 
-
-def migration_rule_for(path: str) -> MigrationRule:
-    matches = [rule for rule in MIGRATION_RULES if rule.matches(path)]
-    if len(matches) != 1:
-        raise ValueError(f"expected exactly one migration rule for {path}; found {len(matches)}")
-    return matches[0]
+# End of schema contract definitions.

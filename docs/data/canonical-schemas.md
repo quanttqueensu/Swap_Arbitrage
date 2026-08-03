@@ -22,10 +22,9 @@ The P21 fixture validator enforces exact header, lexical types, required
 values, key, ordering, and the table-local rules below. Cross-table contract
 validity (an instrument's validity interval covering an observation) and the
 decision cutoff (no source observation or publication after the consuming
-decision) require reference/snapshot context and are explicitly deferred to
-P23-P24 recorder/writer/integration validators. Those later writers must
-enforce them before atomic replacement. Manifest hashes and coverage are also
-required at P23-P24.
+decision) require reference/snapshot context and are enforced by the
+canonicalizers. Durable manifest files are intentionally not part of this
+layout; provenance is carried by source fields and immutable Git history.
 Secrets, credentials, account identifiers, and unused vendor columns are
 forbidden.
 
@@ -46,7 +45,7 @@ complete executable canonical-column mapping; P20's
 
 ### `historical_rates` 1.0.0
 
-- Path: `data/source/rates/rates_YYYY.csv`
+- Path: `data/rates/rates_YYYY.csv`
 - Header: `observation_date,source,series_id,maturity,rate_bps`
 - Types/units: `date/date`, `string/source_id`, `string/series_id`,
   `string/maturity`, `decimal/basis_points`
@@ -58,7 +57,7 @@ complete executable canonical-column mapping; P20's
 
 ### `historical_futures_settlements` 1.0.0
 
-- Path: `data/source/futures/futures_settlements_YYYY.csv`
+- Path: `data/futures/futures_settlements_YYYY.csv`
 - Header: `observation_date,source,instrument_id,settlement_price,dv01_usd_per_bp`
 - Types/units: `date/date`, `string/source_id`, `string/instrument_id`,
   `decimal/price_points`, nullable `decimal/usd_per_bp`
@@ -73,7 +72,7 @@ complete executable canonical-column mapping; P20's
 
 ### `contract_reference` 1.0.0
 
-- Path: `data/canonical/reference/contracts.csv`
+- Path: `data/contract_risk/contracts.csv`
 - Header: `instrument_id,source,asset_class,root,contract_month,maturity,currency,exchange,price_multiplier,tick_size,valid_from,valid_to`
 - Types/units: identifiers and classifications are strings; multipliers are
   `decimal/usd_per_price_point`; tick size is `decimal/price_points`; validity
@@ -86,13 +85,13 @@ complete executable canonical-column mapping; P20's
 
 ### `contract_risk` 1.0.0
 
-- Path: `data/canonical/reference/contract_risk_YYYY.csv`
+- Path: `data/contract_risk/contract_risk_YYYY.csv`
 - Header: `observation_date,instrument_id,dv01_usd_per_bp,rate_sensitivity_sign,dv01_method`
 - Types/units: `date/date`, `string/instrument_id`, `decimal/usd_per_bp`,
   `integer/sign`, `string/method`
 - Key and ordering: `observation_date,instrument_id`
 - Frequency: daily by year
-- Retention: with every consuming input manifest
+- Retention: immutable canonical output
 - Consumers: sizing, risk, replay, and paper adapter
 - Sample: `2026-07-30,ERIS-YIT-202609,39.8,-1,eris_settlement_dv01`
 - Rule: `rate_sensitivity_sign` is exactly `-1` or `+1`.
@@ -100,13 +99,13 @@ complete executable canonical-column mapping; P20's
 
 ### `daily_market` 1.0.0
 
-- Path: `data/canonical/market/daily_market_YYYY.csv`
+- Path: `data/market/daily_market_YYYY.csv`
 - Header: `observation_date,series_id,instrument_id,value,value_unit,source_observation_time_utc,available_at_utc,source,classification,proxy_label`
 - Types/units: date; nullable series/instrument identifiers; finite decimal;
   declared unit; two UTC timestamps; source; classification; nullable label.
 - Key and ordering: `observation_date,series_id,instrument_id,source,available_at_utc`
 - Frequency: daily by year
-- Retention: with every consuming input manifest
+- Retention: immutable canonical output
 - Consumers: spread equations, causal signals, and replay
 - Sample: `2026-07-30,US-CMT-2Y,,388.5,basis_points,2026-07-30T20:00:00Z,2026-07-30T20:01:00Z,UST,exact,`
 - Rules: exactly one of `series_id` and `instrument_id`; publication
@@ -254,32 +253,12 @@ complete executable canonical-column mapping; P20's
 - Consumer: reports
 - Sample: `run-1,swap-arb-v1,2026-01-02,2026-07-30,145,12,500,1000500,-200,-0.02`
 
-## Manifests
-
-### `run_manifest` 1.0.0
-
-- Path: `data/manifests/run_id.csv`
-- Header: `run_id,run_type,agent_id,strategy_version,config_hash,code_commit,input_manifest_hash,started_at_utc,ended_at_utc,row_count,status`
-- Nullable: `agent_id` for backtests; `ended_at_utc` while running
-- Key and ordering: `run_id`
-- Frequency/retention: one row per run; permanent audit record
-- Consumers: manifest writer, replay reports, and paper runner
-- Sample: `run-1,backtest,,swap-arb-v1,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,0123456789abcdef0123456789abcdef01234567,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,2026-07-30T20:00:00Z,2026-07-30T20:10:00Z,145,complete`
-
-### `run_inputs` 1.0.0
-
-- Path: `data/manifests/run_id_inputs.csv`
-- Header: `run_id,path,sha256,row_count,start_time,end_time,schema_version`
-- Key and ordering: `run_id,path`
-- Frequency/retention: one row per run input; permanent audit record
-- Consumers: manifest writer, replay reports, and paper runner
-- Sample: `run-1,data/canonical/market/daily_market_2026.csv,cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc,145,2026-01-02,2026-07-30,1.0.0`
-
 ## Known limits at MG3
 
 This freeze defines shapes and validation, not source availability. Exact 2Y
 and 5Y CMS, collateral-consistent repo, the production business calendar,
 forward funding, and validated 10Y/30Y inputs remain unavailable. Existing
 continuous Treasury futures and EFFR-SOFR remain explicitly labelled proxies.
-P23-P24 must prove source meaning, row conversions, atomic writes, manifests,
-and deterministic staging before these schemas contain canonical project data.
+P23-P24 prove source meaning, row conversions, and schema validation before
+these schemas contain canonical project data. Canonical files are written
+directly into their durable folders after validation.

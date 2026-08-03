@@ -408,7 +408,7 @@ no implicit index.
 ### Historical rates
 
 Path:
-`data/source/rates/rates_YYYY.csv`
+`data/rates/rates_YYYY.csv`
 
 Columns:
 
@@ -422,7 +422,7 @@ Unique key:
 ### Historical futures settlements
 
 Path:
-`data/source/futures/futures_settlements_YYYY.csv`
+`data/futures/futures_settlements_YYYY.csv`
 
 Columns:
 
@@ -440,7 +440,7 @@ instrument/date.
 ### Contract reference
 
 Path:
-`data/canonical/reference/contracts.csv`
+`data/contract_risk/contracts.csv`
 
 Columns:
 
@@ -454,7 +454,7 @@ Unique key:
 ### Contract risk
 
 Path:
-`data/canonical/reference/contract_risk_YYYY.csv`
+`data/contract_risk/contract_risk_YYYY.csv`
 
 Columns:
 
@@ -468,7 +468,7 @@ Unique key:
 ### Canonical daily market input
 
 Path:
-`data/canonical/market/daily_market_YYYY.csv`
+`data/market/daily_market_YYYY.csv`
 
 Columns:
 
@@ -551,24 +551,6 @@ observation_date,gross_pnl_usd,transaction_cost_usd,financing_cost_usd,net_pnl_u
 
 Trades, fills, and positions belong in separate CSVs in the same run directory
 instead of widening `daily.csv`.
-
-### Run manifest
-
-Path:
-`data/manifests/run_id.csv`
-
-Columns:
-
-```text
-run_id,run_type,agent_id,strategy_version,config_hash,code_commit,input_manifest_hash,started_at_utc,ended_at_utc,row_count,status
-```
-
-One row describes one immutable run. Detailed input-file hashes are stored in
-`data/manifests/run_id_inputs.csv` with:
-
-```text
-run_id,path,sha256,row_count,start_time,end_time,schema_version
-```
 
 ## Data validation invariants
 

@@ -1,2 +1,0 @@
-run_id,run_type,agent_id,strategy_version,config_hash,code_commit,input_manifest_hash,started_at_utc,ended_at_utc,row_count,status
-p24-canonical-migration-8f2aab33,canonical_migration,,p24-canonical-migration-v1,a551497c88bf0978f9c2ce526d5a139d89d57acacbc97686e15d974166ab4fb2,8f2aab33b142e80ea8491e8b571c81a65fc3fd18,b7c4674d0a8019c315fe541a0fb3b9f64a3acef9ceea9c722baff15c9ebb471f,2026-08-02T20:58:21.420744Z,2026-08-02T20:58:23.324852Z,26146,complete
