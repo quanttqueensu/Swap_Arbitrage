@@ -83,4 +83,4 @@
 
 - [x] Review `git status` and rename detection.
 - [x] Stage the organization changes.
-- [x] Commit on `main` with a focused message.
+- [ ] Commit on `main` with a focused message.
