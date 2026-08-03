@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from decimal import Decimal, getcontext
+from decimal import Decimal, getcontext, setcontext
 import hashlib
 import json
 from pathlib import Path
@@ -210,6 +210,40 @@ class SpreadBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(dict(after.flags), dict(before.flags))
         self.assertEqual(dict(after.traps), dict(before.traps))
+
+    def test_public_functions_preserve_caller_context_under_rounding_pressure(self) -> None:
+        original = getcontext().copy()
+        try:
+            context = getcontext()
+            context.prec = 2
+            calls = (
+                ("rate", lambda: rate_decimal_to_bps(Decimal("1.234")), Decimal("12340")),
+                ("quote", lambda: treasury_fractional_quote_to_points(1, 0, 1), Decimal("1.00390625")),
+                ("tick", lambda: tick_value_usd(Decimal("1.234"), Decimal("1.234")), Decimal("1.522756")),
+                ("fixed", lambda: fixed_swap_spread_bps(Decimal("1.234"), Decimal("0.001")), Decimal("1.233")),
+                ("funding", lambda: funding_spread_bps(Decimal("1.234"), Decimal("0.001")), Decimal("1.233")),
+                ("expected", lambda: expected_funding_bps([Decimal("1.234")] * 40), Decimal("1.234")),
+                ("gross", lambda: gross_excess_spread_bps(Decimal("1.234"), Decimal("0.001")), Decimal("1.233")),
+                ("cost", lambda: directional_cost_buffer_bps(*((Decimal("1.234"),) * 6), Decimal("1")), Decimal("7.404")),
+                ("net", lambda: net_opportunity_bps(TradeDirection.TRADITIONAL, Decimal("1.234"), Decimal("0.001")), Decimal("1.233")),
+            )
+            failures = []
+            for name, call, expected in calls:
+                context.clear_flags()
+                before = self._context_state(context)
+                result = call()
+                if result != expected or self._context_state(context) != before:
+                    failures.append(name)
+            self.assertEqual(failures, [])
+        finally:
+            setcontext(original)
+
+    @staticmethod
+    def _context_state(context: object) -> tuple[object, ...]:
+        return (
+            context.prec, context.rounding, context.Emin, context.Emax,
+            context.capitals, context.clamp, dict(context.flags), dict(context.traps),
+        )
 
 
 if __name__ == "__main__":

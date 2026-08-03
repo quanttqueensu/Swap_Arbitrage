@@ -11,3 +11,10 @@
 - Files: added `strategy/spread.py` and `docs/tests/test_spread.py`; updated `strategy/__init__.py`; fixture SHA-256 remains `3fb9da5fc9ad255587ce93ea9770552f42566d56070f68ad1661709c030fbd76`.
 - Commit: `feat: add P31 spread and funding equations`.
 - Caveat: this is explicit-input arithmetic only; the P11 source matrix and production calendar remain unavailable.
+
+## Task 1 follow-up — Decimal caller-context isolation
+
+- Finding: direct Decimal arithmetic inherited caller precision and set caller flags outside `localcontext()`.
+- RED: precision-2 regression failed for all 9 Task 1 public functions (`rate`, `quote`, `tick`, `fixed`, `funding`, `expected`, `gross`, `cost`, `net`).
+- GREEN: the regression passed (1 test); focused suite passed 12 tests; docs suite passed 194 tests; `git diff --check` passed.
+- Commit: `fix: isolate P31 Decimal arithmetic`.
