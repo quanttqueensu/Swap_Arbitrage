@@ -69,17 +69,17 @@ not a criticism and not evidence that the strategy succeeds or fails.
 | Area | Observed state | Consequence |
 |---|---|---|
 | Runtime | `.venv` points to a missing Windows Store Python; no dependency manifest exists | No test result is currently reproducible from a clean machine |
-| Tests | `tests/test_dv01_pipeline.py` contains 28 research-pipeline tests | The data/risk/backtest path has meaningful tests, but the only agent has none |
+| Tests | `docs/tests/test_dv01_pipeline.py` contains the research-pipeline tests | The data/risk/backtest path has meaningful tests; Agent 0 tests live with `agents/agent_0` |
 | Agent 0 | Paper-only IBKR implementation exists under `agents/agent_0/` | Preserve its safety controls while establishing a tested baseline |
 | Agent 0 settings | Code and `SETTINGS.md` use 5 orders/day (50/week); an older design says 20/day (100/week); an older plan says 50/day (250/week) | Resolve the authoritative setting explicitly; do not infer it from old prose |
 | Hypothesis | Defines `CMS - CMT`, expected funding spread, excess spread, z-score, DV01 matching, volatility scaling, and maturity ranking | This is the economic target that later agents and full backtests should approach |
 | Current signal | Uses rolling residuals of Eris swap-futures prices against Treasury-futures prices | This is a useful proxy experiment, not yet the stated excess-spread strategy |
 | Maturities | Code supports 2Y and 5Y; hypothesis also names 10Y and 30Y | Treat 10Y/30Y as a later expansion after 2Y/5Y correctness is proven |
-| Historical data | Current top-level derived CSVs range from 4 to 99 columns; cache contains 1,474 Eris files and public-rate/vendor files | Define narrow dataset contracts and separate source, canonical, and result data |
-| Legacy R2 inventory | `r2_database_names.py` inventories objects to `r2_objects.csv` | Retain it only as historical metadata; do not build a Quantt/Cloudflare ingestion dependency |
+| Historical data | Original wide inputs and provider cache live in `data/raw_data/`; canonical partitions use domain folders | Keep raw inputs separate from validated historical partitions |
+| Legacy R2 inventory | `docs/archive/r2_database_names.py` inventories `docs/archive/r2_objects.csv` | Retain it only as historical metadata; do not build a Quantt/Cloudflare ingestion dependency |
 | Backtest | Uses contract price changes and supports configurable costs, but both cost defaults are zero | Separate naive fixed assumptions from realistic bid/ask, commissions, roll, and slippage |
 | Treasury master | Public continuous symbols and proxy DV01 are explicitly labelled research limitations | Do not promote realistic results until executable contract and CTD assumptions are validated |
-| Working tree | Existing user changes include `.gitignore`, deletion of `cloudflare_r2_test.py`, and untracked `r2_database_names.py` | Every task must preserve these unrelated changes |
+| Working tree | Runtime code is separate from archived conversation/support artifacts | Keep historical R2/Cloudflare material out of runtime imports |
 
 ## Target project shape
 
@@ -98,10 +98,8 @@ strategy/
 
 data_pipeline/
   contracts.py              CSV schemas, units, unique keys, and validation
-  fred_source.py            approved historical rates and publication metadata
-  cme_source.py             approved futures settlements and contract metadata
-  ibkr_paper_source.py      paper quote, order, fill, and position capture
-  canonicalize.py           source-specific data to canonical narrow CSVs
+  historical_data_pipeline/ FRED/CME canonicalization and validation
+  live_data_pipeline/       IBKR paper-data recording and storage
 
 backtesting/
   engine.py                 causal replay of the complete strategy
@@ -114,11 +112,9 @@ agents/
   agent_0/                  random baseline
   agent_1/ ... agent_10/    one approved incremental behavior per agent
 
-tests/
-  strategy/                 equations, signals, sizing, risk, and invariants
-  data_pipeline/            schemas, causality, uniqueness, lineage, and fixtures
-  backtesting/              fills, accounting, costs, rolls, and no-lookahead
-  agents/                   broker fakes, safety, reconciliation, and behavior deltas
+docs/tests/
+  strategy/data/backtest     equations, schemas, causality, lineage, and fixtures
+agents/agent_0/tests/        Agent 0 broker fakes, safety, and behavior characterization
 
 data/
   raw_data/                 original wide inputs and provider cache
@@ -126,10 +122,6 @@ data/
   rates/                    year-partitioned historical rates
   market/                   year-partitioned daily market observations
   contract_risk/            year-partitioned contract risk observations
-  paper/                    IBKR paper quotes, orders, fills, and positions
-  results/
-    backtests/              complete-strategy outputs only
-    agents/                 one directory per paper-agent run
 ```
 
 Canonicalizers validate before writing directly into the durable domain folders;

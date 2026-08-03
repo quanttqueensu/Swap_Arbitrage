@@ -12,7 +12,7 @@
 ## CLI command contract
 
 ```text
-python -m tools.data_audit --repo-root <repo-root> --data-root <data-root> --inventory-output <repo-root>/docs/data/current-inventory.md --lineage-output <repo-root>/docs/data/current-column-lineage.csv
+python -m docs.tools.data_audit --repo-root <repo-root> --data-root <data-root> --inventory-output <repo-root>/docs/data/current-inventory.md --lineage-output <repo-root>/docs/data/current-column-lineage.csv
 ```
 - Repository root identity: `<repo-root>`
 - Data root identity: `<data-root>`

@@ -145,7 +145,8 @@ Phase P01 freezes the exact environment command. Thereafter each verification
 record includes:
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m unittest discover -s docs/tests -v
+python -m unittest discover -s agents/agent_0/tests -v
 python raw_price_data.py --self-check
 python signal_data.py --self-check
 python risk_data.py --self-check

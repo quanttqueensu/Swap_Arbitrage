@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.data_audit import (
+from docs.tools.data_audit import (
     KeyRule,
     ProfileFailure,
     SourceChangedError,
@@ -42,15 +42,17 @@ class AuditBoundaryTests(unittest.TestCase):
                 self.repo_root / "lineage.csv",
             )
 
-    def test_discovers_data_csvs_and_top_level_r2_manifest_in_stable_order(self) -> None:
+    def test_discovers_data_csvs_and_archived_r2_manifest_in_stable_order(self) -> None:
         (self.data_root / "data" / "z.csv").write_text("z\n1\n", encoding="utf-8")
         (self.data_root / "data" / "nested" / "a.csv").write_text(
             "a\n2\n", encoding="utf-8"
         )
-        (self.data_root / "r2_objects.csv").write_text("object_key\nx\n", encoding="utf-8")
+        r2_path = self.data_root / "docs" / "archive" / "r2_objects.csv"
+        r2_path.parent.mkdir(parents=True)
+        r2_path.write_text("object_key\nx\n", encoding="utf-8")
         self.assertEqual(
             [path.relative_to(self.data_root).as_posix() for path in discover_artifacts(self.data_root)],
-            ["data/nested/a.csv", "data/z.csv", "r2_objects.csv"],
+            ["data/nested/a.csv", "data/z.csv", "docs/archive/r2_objects.csv"],
         )
 
     def test_excludes_artifact_in_symlinked_data_directory(self) -> None:
@@ -109,7 +111,8 @@ class AuditBoundaryTests(unittest.TestCase):
     def test_excludes_a_symlinked_r2_manifest(self) -> None:
         linked_target = self.root / "linked-r2.csv"
         linked_target.write_text("object_key\nx\n", encoding="utf-8")
-        link = self.data_root / "r2_objects.csv"
+        link = self.data_root / "docs" / "archive" / "r2_objects.csv"
+        link.parent.mkdir(parents=True)
         try:
             os.symlink(linked_target, link)
         except OSError as error:
@@ -220,12 +223,12 @@ class CsvProfilingTests(unittest.TestCase):
         self.assertEqual(result.key_rule, KeyRule())
         self.assertIsNone(result.duplicate_key_count)
 
-from tools.data_audit import SourceEvidence, build_lineage, scan_source_evidence
+from docs.tools.data_audit import SourceEvidence, build_lineage, scan_source_evidence
 import csv
 import io
 from unittest.mock import patch
 
-from tools.data_audit import (
+from docs.tools.data_audit import (
     CURRENT_KEY_RULES,
     atomic_write,
     build_parser,
@@ -472,14 +475,14 @@ class AuditCommandTests(unittest.TestCase):
         report = inventory.read_text(encoding="utf-8")
         self.assertIn("## CLI command contract", report)
         self.assertIn(
-            "python -m tools.data_audit --repo-root <repo-root> --data-root <data-root>",
+            "python -m docs.tools.data_audit --repo-root <repo-root> --data-root <data-root>",
             report,
         )
         self.assertIn("- Repository root identity: `<repo-root>`", report)
         self.assertIn("- Data root identity: `<data-root>`", report)
         self.assertIn("## Discovery scope", report)
         self.assertIn("`data/**/*.csv`", report)
-        self.assertIn("optional top-level `r2_objects.csv`", report)
+        self.assertIn("optional archived `docs/archive/r2_objects.csv`", report)
         self.assertIn("## Source, cache, and R2 summary", report)
         self.assertIn("| Source/cache CSVs | 0 |", report)
         self.assertIn("| R2 manifests | 0 |", report)
@@ -523,7 +526,7 @@ class AuditCommandTests(unittest.TestCase):
     def test_atomic_write_preserves_existing_output_when_replace_fails(self) -> None:
         output = self.repo / "report.md"
         output.write_text("old", encoding="utf-8")
-        with patch("tools.data_audit.os.replace", side_effect=OSError("blocked")):
+        with patch("docs.tools.data_audit.os.replace", side_effect=OSError("blocked")):
             with self.assertRaisesRegex(OSError, "blocked"):
                 atomic_write(output, "new")
         self.assertEqual(output.read_text(encoding="utf-8"), "old")

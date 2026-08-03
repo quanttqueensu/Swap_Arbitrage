@@ -25,13 +25,18 @@ _MODULE_SOCKET_GUARDS = [
 for _module_socket_guard in _MODULE_SOCKET_GUARDS:
     _module_socket_guard.start()
 
+
+def tearDownModule() -> None:
+    for _module_socket_guard in reversed(_MODULE_SOCKET_GUARDS):
+        _module_socket_guard.stop()
+
 from data_pipeline.contracts import SCHEMAS, validate_csv
-from data_pipeline.ibkr_paper_source import (
+from data_pipeline.live_data_pipeline.ibkr_paper_source import (
     IbkrPaperRecorder,
     PaperSafetyError,
     PaperSessionConfig,
 )
-from data_pipeline.paper_store import PaperEventStore
+from data_pipeline.live_data_pipeline.paper_store import PaperEventStore
 
 
 def quote(timestamp_utc: str, instrument_id: str, bid_price: str, ask_price: str) -> dict[str, object]:

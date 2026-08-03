@@ -6,7 +6,7 @@ import unittest
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
-from data_pipeline.canonicalize import (
+from data_pipeline.historical_data_pipeline.canonicalize import (
     CanonicalizationError,
     FuturesCanonicalization,
     SourceTiming,

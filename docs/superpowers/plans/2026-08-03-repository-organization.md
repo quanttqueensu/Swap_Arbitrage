@@ -27,9 +27,9 @@
 - Move: `data_pipeline/ibkr_paper_source.py` to `data_pipeline/live_data_pipeline/ibkr_paper_source.py`
 - Move: `data_pipeline/paper_store.py` to `data_pipeline/live_data_pipeline/paper_store.py`
 
-- [ ] Move the three pipeline modules and add package markers.
-- [ ] Search all imports and record every old module path before changing callers.
-- [ ] Confirm no CSV file under `data/` changes during the move.
+- [x] Move the three pipeline modules and add package markers.
+- [x] Search all imports and record every old module path before changing callers.
+- [x] Confirm no CSV file under `data/` changes during the move.
 
 ### Task 2: Rehome agent and development-only files
 
@@ -42,10 +42,10 @@
 - Move: `.superpowers/sdd/` to `docs/superpowers/sdd/`
 - Move: `r2_database_names.py` and `r2_objects.csv` to `docs/archive/`
 
-- [ ] Move general tests and fixtures to `docs/tests`.
-- [ ] Move Agent 0 characterization into the agent package.
-- [ ] Move audit tooling and historical R2 artifacts out of the runtime surface.
-- [ ] Leave only the approved runtime/configuration files at repository root.
+- [x] Move general tests and fixtures to `docs/tests`.
+- [x] Move Agent 0 characterization into the agent package.
+- [x] Move audit tooling and historical R2 artifacts out of the runtime surface.
+- [x] Leave only the approved runtime/configuration files at repository root.
 
 ### Task 3: Repair imports and test discovery
 
@@ -57,12 +57,12 @@
 - Modify: `docs/tests/test_data_audit.py`
 - Modify: `README.md`, `requirements.txt`, and active docs with test commands
 
-- [ ] Replace `data_pipeline.canonicalize` imports with `data_pipeline.historical_data_pipeline.canonicalize`.
-- [ ] Replace live recorder/store imports with `data_pipeline.live_data_pipeline.*`.
-- [ ] Replace `tools.data_audit` imports with `docs.tools.data_audit`.
-- [ ] Update audit inventory paths for `docs/archive/r2_objects.csv`.
-- [ ] Update test commands to use `-s docs/tests` plus the Agent 0 test package.
-- [ ] Add focused import/layout tests for the new paths.
+- [x] Replace `data_pipeline.canonicalize` imports with `data_pipeline.historical_data_pipeline.canonicalize`.
+- [x] Replace live recorder/store imports with `data_pipeline.live_data_pipeline.*`.
+- [x] Replace `tools.data_audit` imports with `docs.tools.data_audit`.
+- [x] Update audit inventory paths for `docs/archive/r2_objects.csv`.
+- [x] Update test commands to use `-s docs/tests` plus the Agent 0 test package.
+- [x] Add focused import/layout tests for the new paths.
 
 ### Task 4: Verify the organized repository
 
@@ -70,17 +70,17 @@
 - Verify: all moved files, imports, and docs
 - Test: `docs/tests` and `agents/agent_0/tests`
 
-- [ ] Run `git diff --check`.
-- [ ] Run Python compilation for moved modules and tests.
-- [ ] Run the complete discoverable suite and report any pre-existing optional dependency failures separately.
-- [ ] Confirm `data/` has exactly five folders and canonical CSV hashes are unchanged.
-- [ ] Confirm no runtime Python file imports from `docs`.
+- [x] Run `git diff --check`.
+- [x] Run Python compilation for moved modules and tests.
+- [x] Run the complete discoverable suite and report any pre-existing optional dependency failures separately.
+- [x] Confirm `data/` has exactly five folders and canonical CSV hashes are unchanged.
+- [x] Confirm no runtime Python file imports from `docs`.
 
 ### Task 5: Commit on main
 
 **Files:**
 - Commit all intended moves and import/documentation updates.
 
-- [ ] Review `git status` and rename detection.
-- [ ] Stage the organization changes.
-- [ ] Commit on `main` with a focused message.
+- [x] Review `git status` and rename detection.
+- [x] Stage the organization changes.
+- [x] Commit on `main` with a focused message.

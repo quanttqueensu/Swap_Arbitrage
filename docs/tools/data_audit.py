@@ -238,7 +238,7 @@ def discover_artifacts(data_root: Path) -> list[Path]:
     root = data_root
     data_directory = root / "data"
     artifacts = _csv_files(data_directory) if data_directory.is_dir() else []
-    r2_manifest = root / "r2_objects.csv"
+    r2_manifest = root / "docs" / "archive" / "r2_objects.csv"
     if r2_manifest.is_file() and not _is_link(r2_manifest):
         artifacts.append(r2_manifest)
     return sorted(artifacts, key=lambda path: path.relative_to(root).as_posix())
@@ -682,7 +682,7 @@ def render_inventory(
         "## CLI command contract",
         "",
         "```text",
-        "python -m tools.data_audit --repo-root <repo-root> --data-root <data-root> "
+        "python -m docs.tools.data_audit --repo-root <repo-root> --data-root <data-root> "
         "--inventory-output <repo-root>/docs/data/current-inventory.md "
         "--lineage-output <repo-root>/docs/data/current-column-lineage.csv",
         "```",
@@ -692,7 +692,7 @@ def render_inventory(
         "## Discovery scope",
         "",
         "- Recursively include `data/**/*.csv` beneath `<data-root>`.",
-        "- Include optional top-level `r2_objects.csv` beneath `<data-root>`.",
+        "- Include optional archived `docs/archive/r2_objects.csv` beneath `<data-root>`.",
         "",
         "## Source, cache, and R2 summary",
         "",

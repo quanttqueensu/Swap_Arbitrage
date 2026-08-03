@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 import re
 
-from data_pipeline.paper_store import PaperEventStore
+from data_pipeline.live_data_pipeline.paper_store import PaperEventStore
 
 
 _ACCOUNT_ID = re.compile(r"(?:^|\b)(?:DU|U)\d{3,}(?:\b|$)", re.IGNORECASE)

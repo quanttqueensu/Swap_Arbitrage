@@ -46,10 +46,26 @@ class DataLayoutTests(unittest.TestCase):
             importlib.import_module("data_pipeline.manifests")
         with self.assertRaises(ModuleNotFoundError):
             importlib.import_module("data_pipeline.migration")
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("data_pipeline.canonicalize")
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("data_pipeline.ibkr_paper_source")
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("data_pipeline.paper_store")
 
     def test_durable_data_has_only_the_requested_folders(self) -> None:
         folders = {path.name for path in DATA_DIR.iterdir() if path.is_dir()}
         self.assertEqual(folders, {"raw_data", "futures", "rates", "market", "contract_risk"})
+
+    def test_repository_support_files_use_the_approved_baskets(self) -> None:
+        self.assertTrue((Path("docs") / "tests").is_dir())
+        self.assertTrue((Path("docs") / "tools" / "data_audit.py").is_file())
+        self.assertTrue((Path("agents") / "agent_0" / "tests" / "test_characterization.py").is_file())
+        self.assertFalse(Path("tests").exists())
+        self.assertFalse((Path("tools") / "data_audit.py").exists())
+        self.assertTrue(importlib.import_module("data_pipeline.historical_data_pipeline.canonicalize"))
+        self.assertTrue(importlib.import_module("data_pipeline.live_data_pipeline.paper_store"))
+        self.assertTrue(importlib.import_module("data_pipeline.live_data_pipeline.ibkr_paper_source"))
 
 
 if __name__ == "__main__":
