@@ -9,9 +9,14 @@ from .models import (
     PaperPosition,
     PositionState,
     RateObservation,
+    RiskDecision,
+    SignalDecision,
+    SpreadObservation,
+    TargetPosition,
     TimeInForce,
     TradeDirection,
     WorkingOrder,
+    OrderIntent,
 )
 
 __all__ = [
@@ -25,7 +30,12 @@ __all__ = [
     "PaperPosition",
     "PositionState",
     "RateObservation",
+    "RiskDecision",
+    "SignalDecision",
+    "SpreadObservation",
+    "TargetPosition",
     "TimeInForce",
     "TradeDirection",
     "WorkingOrder",
+    "OrderIntent",
 ]
