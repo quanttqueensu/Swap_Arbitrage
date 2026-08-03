@@ -36,6 +36,7 @@ from .spread import (
     tick_value_usd,
     treasury_fractional_quote_to_points,
 )
+from .signal_generation import causal_zscore
 
 __all__ = [
     "ContractMetadata",
@@ -72,4 +73,5 @@ __all__ = [
     "dv01_hedge_quantities",
     "residual_dv01_usd_per_bp",
     "residual_fraction",
+    "causal_zscore",
 ]
