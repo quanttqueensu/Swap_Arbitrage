@@ -38,6 +38,12 @@
 ## Task 3 review correction â€” P2 basket evidence
 
 - Findings: the altered future leg was unused; the low-precision basket test restored rather than asserted the caller context; and the P31 hedge tie table abbreviated production output as `/ same`.
-- RED: a temporary mutant suppressing the altered new-leg price move failed `BasketPnlTests.test_roll_boundary_uses_only_the_old_leg` as expected: USD `13.0000` rather than literal USD `2023` (exit 1, one failure).
+- RED: two temporary mutants were restored. Dropping the future leg failed normal full-basket USD `13.0000` rather than USD `23`; the targeted causal-control mutant zeroed the entire altered new-leg price difference and failed USD `13.0000` rather than literal USD `2023` (exit 1, one failure). This was not a bump-only mutation: suppressing only the added `Decimal("1")` endpoint bump would make altered full basket equal normal full basket USD `23`.
 - GREEN: restored direct P&L arithmetic; strengthened control proves old-only boundary USD `13` is unchanged while the altered new leg changes full basket USD `23` to USD `2023`; context state is asserted before restoration; tie tuple is complete. Focused suite passed 25 tests; docs suite passed 207 tests; `git diff --check` passed.
 - Commit: `fix: strengthen P31 basket evidence` (separate review-correction commit; no amend).
+
+## Task 3 evidence correction â€” mutation description
+
+- Corrected P31 and this ledger to distinguish the actual temporary mutations from a hypothetical bump-only mutation. No runtime or test code was changed; the direct P&L expression remains restored.
+- Verification: focused suite and `git diff --check` were rerun for this evidence-only correction.
+- Commit: `docs: correct P31 mutation evidence` (separate evidence-only commit).
