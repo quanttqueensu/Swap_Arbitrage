@@ -425,7 +425,11 @@ class BasketPnlTests(unittest.TestCase):
         )
         future_leg = (*new_leg[:5], Decimal(new["end_price"]) + Decimal("1"))
         self.assertEqual(basket_pnl_usd((old_leg,), total_cost), boundary_pnl)
-        self.assertNotEqual(future_leg, new_leg)
+        self.assertEqual(basket_pnl_usd((old_leg, future_leg), total_cost), Decimal("2023"))
+        self.assertNotEqual(
+            basket_pnl_usd((old_leg, future_leg), total_cost),
+            basket_pnl_usd((old_leg, new_leg), total_cost),
+        )
 
     def test_reversal_cost_charges_exit_and_entry_turnover(self) -> None:
         example = self.fixture["pnl_examples"][3]
@@ -480,6 +484,7 @@ class BasketPnlTests(unittest.TestCase):
         original = getcontext().copy()
         try:
             getcontext().prec = 2
+            before = SpreadBoundaryTests._context_state(getcontext())
             self.assertEqual(
                 basket_pnl_usd(
                     (("YITH27", "YITH27", 1, Decimal("1.234"), Decimal("0.001"), Decimal("1.235")),),
@@ -487,6 +492,7 @@ class BasketPnlTests(unittest.TestCase):
                 ),
                 Decimal("1.522756"),
             )
+            self.assertEqual(SpreadBoundaryTests._context_state(getcontext()), before)
         finally:
             setcontext(original)
 

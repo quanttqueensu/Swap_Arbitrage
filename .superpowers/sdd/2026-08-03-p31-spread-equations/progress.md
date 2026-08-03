@@ -34,3 +34,10 @@
 - GREEN/final: focused suite passed 25 tests; docs suite passed 207 tests (with the existing `eventkit` deprecation warning); Agent 0 suite passed 25 tests; compileall and all four repository self-checks exited 0; `git diff --check` exited 0.
 - Files: added direct `basket_pnl_usd` and `contract_turnover_contracts` functions and exports; added fixture-driven/boundary/context tests; created `docs/verification/P31.md`. Fixture SHA-256 remains `3fb9da5fc9ad255587ce93ea9770552f42566d56070f68ad1661709c030fbd76`.
 - Caveats: explicit-input arithmetic only; P11 source matrix and production calendar remain unavailable. The existing ignored `agents/agent_0/orders` directory contains pre-existing July 2026 CSV fixtures; P31 neither used nor changed them. Final specialist and whole-branch review verdicts are intentionally left as evidence-only placeholders for the parent follow-up.
+
+## Task 3 review correction â€” P2 basket evidence
+
+- Findings: the altered future leg was unused; the low-precision basket test restored rather than asserted the caller context; and the P31 hedge tie table abbreviated production output as `/ same`.
+- RED: a temporary mutant suppressing the altered new-leg price move failed `BasketPnlTests.test_roll_boundary_uses_only_the_old_leg` as expected: USD `13.0000` rather than literal USD `2023` (exit 1, one failure).
+- GREEN: restored direct P&L arithmetic; strengthened control proves old-only boundary USD `13` is unchanged while the altered new leg changes full basket USD `23` to USD `2023`; context state is asserted before restoration; tie tuple is complete. Focused suite passed 25 tests; docs suite passed 207 tests; `git diff --check` passed.
+- Commit: `fix: strengthen P31 basket evidence` (separate review-correction commit; no amend).
