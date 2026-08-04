@@ -90,19 +90,16 @@ class CausalZScoreTests(unittest.TestCase):
 
     # Mutation caught: changing the calculation to a population denominator or wrong history values.
     def test_fixture_economic_examples_have_literal_zscores(self):
-        expected_scores = {
-            "traditional_2y": Decimal("2"),
-            "traditional_5y": Decimal("3"),
-            "reverse_2y": Decimal("-2"),
-            "reverse_5y": Decimal("-2.6"),
-        }
         for example in self.fixture["economic_examples"]:
             with self.subTest(example=example["id"]):
                 prior = history(self.profiles[example["gross_history_profile"]], example["maturity"])
                 current = self.current(
                     example["expected"]["gross_opportunity_bps"], example["maturity"]
                 )
-                self.assertEqual(causal_zscore(current, prior), expected_scores[example["id"]])
+                self.assertEqual(
+                    causal_zscore(current, prior),
+                    Decimal(example["expected"]["zscore"]),
+                )
 
     # Mutation caught: relaxing or changing the exact 252-observation window.
     def test_requires_exactly_252_prior_observations(self):
@@ -333,6 +330,33 @@ class SignalTransitionTests(unittest.TestCase):
                     (expected_state, expected_actions),
                 )
 
+    # Mutation caught: allowing direct transition comparisons to alter caller Decimal context.
+    def test_direct_transition_preserves_full_caller_decimal_context(self):
+        original = getcontext().copy()
+        constrained = original.copy()
+        constrained.prec = 2
+        constrained.rounding = ROUND_UP
+        constrained.Emin = -999
+        constrained.Emax = 999
+        constrained.capitals = 0
+        constrained.clamp = 1
+        constrained.clear_flags()
+        constrained.flags[Inexact] = True
+        constrained.traps[FloatOperation] = True
+        expected_context = context_snapshot(constrained)
+        try:
+            setcontext(constrained.copy())
+            self.assertEqual(
+                signal_transition(
+                    PositionState.FLAT, Decimal("2"), Decimal("0.0001"),
+                    Decimal("-0.0001"), True, False,
+                ),
+                (PositionState.TRADITIONAL, ("enter_traditional",)),
+            )
+            self.assertEqual(context_snapshot(getcontext()), expected_context)
+        finally:
+            setcontext(original)
+
     # Mutation caught: accepting non-exact state, Decimal, or bool boundary inputs.
     def test_malformed_transition_inputs_return_none(self):
         cases = (
@@ -411,6 +435,31 @@ class SignalDecisionTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             decision.reason_code = "changed"
 
+    # Mutation caught: requiring a declared z-score even when causal history computes one.
+    def test_nullable_declared_z_uses_computed_ready_decision(self):
+        decision = self.decision(
+            self.current("10", None, traditional="4.5", reverse="-1.5")
+        )
+        self.assertEqual(
+            decision,
+            SignalDecision(
+                decision_id="decision-1",
+                maturity="2Y",
+                decision_time_utc=BASE_TIME + timedelta(minutes=252),
+                prior_state=PositionState.FLAT,
+                new_state=PositionState.TRADITIONAL,
+                direction=TradeDirection.TRADITIONAL,
+                reason_code="enter_traditional",
+                feature_values=(
+                    NamedValue("z_score", Decimal("2"), "standard_deviations"),
+                    NamedValue("traditional_net_opportunity", Decimal("4.5"), "bps"),
+                    NamedValue("reverse_net_opportunity", Decimal("-1.5"), "bps"),
+                ),
+                strategy_version="p32",
+                configuration_version="config-1",
+            ),
+        )
+
     # Mutation caught: replacing no-action reason codes or losing supplied versions.
     def test_holds_and_flat_states_have_literal_reason_codes(self):
         cases = (
@@ -435,7 +484,47 @@ class SignalDecisionTests(unittest.TestCase):
             prior_state=PositionState.TRADITIONAL,
         )
         self.assertEqual(decision.new_state, PositionState.REVERSE)
+        self.assertEqual(decision.direction, TradeDirection.REVERSE)
         self.assertEqual(decision.reason_code, "exit_traditional_then_enter_reverse")
+
+    # Mutation caught: allowing integrated causal arithmetic to leak caller Decimal context.
+    def test_decision_generation_preserves_full_caller_decimal_context(self):
+        observation_value = self.current("10", None, traditional="4.5", reverse="-1.5")
+        prior = self.standard_prior()
+        expected_decision = SignalDecision(
+            decision_id="decision-1",
+            maturity="2Y",
+            decision_time_utc=BASE_TIME + timedelta(minutes=252),
+            prior_state=PositionState.FLAT,
+            new_state=PositionState.TRADITIONAL,
+            direction=TradeDirection.TRADITIONAL,
+            reason_code="enter_traditional",
+            feature_values=(
+                NamedValue("z_score", Decimal("2"), "standard_deviations"),
+                NamedValue("traditional_net_opportunity", Decimal("4.5"), "bps"),
+                NamedValue("reverse_net_opportunity", Decimal("-1.5"), "bps"),
+            ),
+            strategy_version="p32",
+            configuration_version="config-1",
+        )
+        original = getcontext().copy()
+        constrained = original.copy()
+        constrained.prec = 2
+        constrained.rounding = ROUND_UP
+        constrained.Emin = -999
+        constrained.Emax = 999
+        constrained.capitals = 0
+        constrained.clamp = 1
+        constrained.clear_flags()
+        constrained.flags[Inexact] = True
+        constrained.traps[FloatOperation] = True
+        expected_context = context_snapshot(constrained)
+        try:
+            setcontext(constrained.copy())
+            self.assertEqual(self.decision(observation_value, prior), expected_decision)
+            self.assertEqual(context_snapshot(getcontext()), expected_context)
+        finally:
+            setcontext(original)
 
     # Mutation caught: treating unavailable but valid observations as malformed or changing unavailable features.
     def test_valid_unavailable_data_uses_flatten_or_data_unavailable_outcomes(self):

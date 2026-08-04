@@ -179,7 +179,7 @@ def generate_signal_decision(
             and observation.is_fresh
             and observation.observation_count == 252
             and z_score is not None
-            and observation.z_score == z_score
+            and (observation.z_score is None or observation.z_score == z_score)
         )
         transition = signal_transition(
             prior_state,
