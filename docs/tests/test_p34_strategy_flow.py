@@ -9,6 +9,7 @@ from strategy import (
     evaluate_risk,
     naive_cost,
     net_opportunity_bps,
+    observed_cost,
     portfolio_dv01,
     rank_opportunities,
     select_portfolio_targets,
@@ -25,12 +26,12 @@ def observation(maturity, gross, net, z_score):
         observation_time_utc=DECISION,
         fixed_swap_spread_bps=D("0"),
         expected_funding_spread_bps=D("0"),
-        gross_excess_spread_bps=D(gross),
+        gross_excess_spread_bps=gross,
         traditional_cost_buffer_bps=D("0"),
         reverse_cost_buffer_bps=D("0"),
-        traditional_net_opportunity_bps=D(net),
-        reverse_net_opportunity_bps=-D(net),
-        z_score=D(z_score),
+        traditional_net_opportunity_bps=net,
+        reverse_net_opportunity_bps=-net,
+        z_score=z_score,
         observation_count=252,
         source_quality_ok=True,
         is_fresh=True,
@@ -60,37 +61,60 @@ def target(maturity, expected_cost_usd):
         max_swap_contracts=0,
         max_treasury_contracts=0,
         available_gross_dv01_usd_per_bp=D("10000"),
-        expected_cost_usd=D(expected_cost_usd),
+        expected_cost_usd=expected_cost_usd,
     )
 
 
 class P34StrategyFlowTests(unittest.TestCase):
     # Mutation caught: disconnecting an exported P34 component from the pure flow.
     def test_p34_pure_cost_to_allowed_portfolio_flow(self):
-        cost = naive_cost(
-            swap_bid_ask_usd=D("200"),
-            treasury_bid_ask_usd=D("300"),
+        two_year_cost = naive_cost(
+            swap_bid_ask_usd=D("250"),
+            treasury_bid_ask_usd=D("250"),
             commission_exchange_usd=D("100"),
-            slippage_usd=D("50"),
-            roll_close_usd=D("100"),
-            roll_open_usd=D("150"),
+            slippage_usd=D("200"),
+            roll_close_usd=D("50"),
+            roll_open_usd=D("50"),
             financing_not_in_funding_usd=D("100"),
             cost_base_dv01_usd_per_bp=D("1000"),
         )
-        self.assertIsNotNone(cost)
-        self.assertEqual((cost.total_cost_usd, cost.total_cost_bps), (D("1000"), D("1")))
-        self.assertEqual(
-            net_opportunity_bps(TradeDirection.TRADITIONAL, D("25"), cost.total_cost_bps),
-            D("24"),
+        five_year_cost = observed_cost(
+            swap_bid_ask_usd=D("600"),
+            treasury_bid_ask_usd=D("600"),
+            commission_exchange_usd=D("400"),
+            slippage_usd=D("800"),
+            roll_close_usd=D("200"),
+            roll_open_usd=D("200"),
+            financing_not_in_funding_usd=D("200"),
+            cost_base_dv01_usd_per_bp=D("1000"),
         )
+        self.assertIsNotNone(two_year_cost)
+        self.assertIsNotNone(five_year_cost)
+        self.assertEqual(
+            (two_year_cost.total_cost_usd, two_year_cost.total_cost_bps),
+            (D("1000"), D("1")),
+        )
+        self.assertEqual(
+            (five_year_cost.total_cost_usd, five_year_cost.total_cost_bps),
+            (D("3000"), D("3")),
+        )
+        two_year_net = net_opportunity_bps(
+            TradeDirection.TRADITIONAL, D("25"), two_year_cost.total_cost_bps
+        )
+        five_year_net = net_opportunity_bps(
+            TradeDirection.TRADITIONAL, D("15"), five_year_cost.total_cost_bps
+        )
+        self.assertEqual((two_year_net, five_year_net), (D("24"), D("12")))
 
-        two_year = target("2Y", "1000")
-        five_year = target("5Y", "3000")
+        two_year = target("2Y", two_year_cost.total_cost_usd)
+        five_year = target("5Y", five_year_cost.total_cost_usd)
         self.assertIsNotNone(two_year)
         self.assertIsNotNone(five_year)
+        self.assertEqual(two_year.expected_cost_usd, two_year_cost.total_cost_usd)
+        self.assertEqual(five_year.expected_cost_usd, five_year_cost.total_cost_usd)
         ranks = rank_opportunities((
-            observation("2Y", "25", "24", "2"),
-            observation("5Y", "15", "12", "3"),
+            observation("2Y", D("25"), two_year_net, D("2")),
+            observation("5Y", D("15"), five_year_net, D("3")),
         ))
         self.assertEqual(ranks, ("5Y", "2Y"))
         selected = select_portfolio_targets(ranks, (two_year, five_year), D("5000"), D("250"))
