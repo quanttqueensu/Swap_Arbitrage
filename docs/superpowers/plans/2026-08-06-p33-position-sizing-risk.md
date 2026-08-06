@@ -6,7 +6,7 @@
 
 **Architecture:** `strategy.position_sizing` contains four small Decimal scale functions and one target-position orchestrator that reuses the P31 hedge equations. `strategy.risk_signals` contains one explicit keyword-only risk evaluator; it records numeric evidence with existing P30 `NamedValue` and `RiskDecision` records. No file, clock, pandas, broker, network, or order path enters either module.
 
-**Tech Stack:** Python 3.12 standard library (`collections.abc`, `decimal`), existing `strategy.models`, existing `strategy.spread`, and `unittest`.
+**Tech Stack:** Python 3.12 standard library (`collections.abc`, `datetime`, `decimal`), existing `strategy.models`, existing `strategy.spread`, and `unittest`.
 
 ## Global Constraints
 
@@ -14,7 +14,7 @@
 - Preserve the existing `p10.strategy-equations.v1` economic strategy version.
 - Use exact finite `Decimal` inputs and exact built-in integer/boolean/text types; reject booleans as integers.
 - Use local Decimal precision 50 for arithmetic and preserve the complete caller context.
-- Volatility uses exactly 63 causal prior positive realized-volatility values.
+- Volatility uses exactly 63 strictly increasing prior aware-UTC timestamped positive realized-volatility values, all earlier than the decision timestamp.
 - Scales remain in `[0, 1]`; low volatility never increases risk above the base target.
 - Contract and gross-DV01 capacity limits scale risk; every other safety failure blocks.
 - Residual DV01 at exactly 5% is allowed; values above 5% are blocked.
@@ -33,7 +33,7 @@
 - Create: `docs/tests/test_position_sizing_and_risk.py`
 
 **Interfaces:**
-- Consumes: exact `Decimal` volatility and z-score values; non-string sequences; exact integer quantities and displayed sizes.
+- Consumes: an exact aware-UTC decision timestamp; exact `Decimal` volatility and z-score values; non-string sequences of exact `(datetime, Decimal)` pairs; exact integer quantities and displayed sizes.
 - Produces: `SIZING_RISK_VERSION`, `VOLATILITY_LOOKBACK`, `MAX_RESIDUAL_FRACTION`, `volatility_scale`, `signal_strength_scale`, `liquidity_scale`, and `scaled_target_dv01`.
 
 - [ ] **Step 1: Write failing scale tests**
@@ -41,6 +41,7 @@
 Create `docs/tests/test_position_sizing_and_risk.py` with imports and literal boundary cases:
 
 ```python
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, getcontext, setcontext
 import unittest
 
@@ -54,14 +55,22 @@ from strategy.position_sizing import (
 
 
 D = Decimal
+DECISION = datetime(2026, 1, 5, 21, 0, tzinfo=timezone.utc)
+
+
+def prior_vols(value=D("0.8")):
+    return tuple(
+        (DECISION - timedelta(days=63 - index), value)
+        for index in range(63)
+    )
 
 
 class ScaleTests(unittest.TestCase):
     def test_frozen_version_and_hand_examples(self):
-        prior = tuple(D("0.8") for _ in range(63))
+        prior = prior_vols()
         self.assertEqual(SIZING_RISK_VERSION, "p33.position-sizing-risk.v1")
-        self.assertEqual(volatility_scale(D("1"), prior), D("0.8"))
-        self.assertEqual(volatility_scale(D("0.5"), prior), D("1"))
+        self.assertEqual(volatility_scale(DECISION, D("1"), prior), D("0.8"))
+        self.assertEqual(volatility_scale(DECISION, D("0.5"), prior), D("1"))
         self.assertEqual(signal_strength_scale(D("0")), D("0"))
         self.assertEqual(signal_strength_scale(D("1")), D("0.5"))
         self.assertEqual(signal_strength_scale(D("2")), D("1"))
@@ -73,12 +82,20 @@ class ScaleTests(unittest.TestCase):
         )
 
     def test_volatility_requires_exact_causal_window(self):
-        valid = tuple(D(index + 1) for index in range(63))
-        self.assertIsNotNone(volatility_scale(D("64"), valid))
+        valid = tuple(
+            (DECISION - timedelta(days=63 - index), D(index + 1))
+            for index in range(63)
+        )
+        self.assertIsNotNone(volatility_scale(DECISION, D("64"), valid))
         for invalid in (valid[:-1], valid + (D("64"),), "not-a-sequence"):
-            self.assertIsNone(volatility_scale(D("64"), invalid))
+            self.assertIsNone(volatility_scale(DECISION, D("64"), invalid))
+        future = valid[:-1] + ((DECISION, D("63")),)
+        reversed_pair = valid[:30] + (valid[31], valid[30]) + valid[32:]
+        naive = valid[:-1] + ((datetime(2026, 1, 4, 21, 0), D("63")),)
+        for invalid in (future, reversed_pair, naive):
+            self.assertIsNone(volatility_scale(DECISION, D("64"), invalid))
         for invalid in (D("0"), D("-1"), D("NaN"), 1, True):
-            self.assertIsNone(volatility_scale(invalid, valid))
+            self.assertIsNone(volatility_scale(DECISION, invalid, valid))
 
     def test_zero_interior_and_full_scale_boundaries(self):
         self.assertEqual(liquidity_scale(10, -4, 0, 4), D("0"))
@@ -95,7 +112,7 @@ class ScaleTests(unittest.TestCase):
             context.rounding = "ROUND_DOWN"
             before = context.copy()
             self.assertEqual(
-                volatility_scale(D("3"), tuple(D("2") for _ in range(63))),
+                volatility_scale(DECISION, D("3"), prior_vols(D("2"))),
                 D("0.66666666666666666666666666666666666666666666666667"),
             )
             after = getcontext()
@@ -112,7 +129,7 @@ class ScaleTests(unittest.TestCase):
 Run:
 
 ```powershell
-& 'C:\Users\jaydo_0v7vk2o\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest docs.tests.test_position_sizing_and_risk -v
+& '.\.venv\Scripts\python.exe' -m unittest docs.tests.test_position_sizing_and_risk -v
 ```
 
 Expected: exit `1` because `strategy.position_sizing` does not exist.
@@ -125,6 +142,7 @@ Create `strategy/position_sizing.py` with these public signatures and validation
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timedelta
 from decimal import Decimal, localcontext
 
 
@@ -148,17 +166,40 @@ def _scale(value: object) -> Decimal | None:
     return decimal if decimal is not None and decimal <= 1 else None
 
 
-def volatility_scale(current_realized_vol: object, prior_realized_vols: object) -> Decimal | None:
+def _utc(value: object) -> datetime | None:
+    return value if type(value) is datetime and value.utcoffset() == timedelta(0) else None
+
+
+def volatility_scale(
+    decision_time_utc: object,
+    current_realized_vol: object,
+    prior_realized_vols: object,
+) -> Decimal | None:
+    decision_time = _utc(decision_time_utc)
     current = _decimal(current_realized_vol, positive=True)
     if (
-        current is None
+        decision_time is None
+        or current is None
         or not isinstance(prior_realized_vols, Sequence)
         or isinstance(prior_realized_vols, str)
         or len(prior_realized_vols) != VOLATILITY_LOOKBACK
-        or any(_decimal(value, positive=True) is None for value in prior_realized_vols)
     ):
         return None
-    median = sorted(prior_realized_vols)[VOLATILITY_LOOKBACK // 2]
+    timestamps = []
+    values = []
+    for item in prior_realized_vols:
+        if type(item) is not tuple or len(item) != 2:
+            return None
+        timestamp, value = item
+        timestamp = _utc(timestamp)
+        value = _decimal(value, positive=True)
+        if timestamp is None or value is None or timestamp >= decision_time:
+            return None
+        timestamps.append(timestamp)
+        values.append(value)
+    if any(left >= right for left, right in zip(timestamps, timestamps[1:])):
+        return None
+    median = sorted(values)[VOLATILITY_LOOKBACK // 2]
     with localcontext() as context:
         context.prec = 50
         return min(Decimal("1"), median / current)
@@ -254,8 +295,9 @@ def target_kwargs(**overrides):
         treasury_instrument_id="ZTH27",
         direction=TradeDirection.TRADITIONAL,
         base_target_dv01_usd_per_bp=D("1000"),
+        decision_time_utc=DECISION,
         current_realized_vol=D("1"),
-        prior_realized_vols=tuple(D("1") for _ in range(63)),
+        prior_realized_vols=prior_vols(D("1")),
         z_score=D("2"),
         swap_available_contracts=100,
         treasury_available_contracts=100,
@@ -265,7 +307,7 @@ def target_kwargs(**overrides):
         current_treasury_quantity_contracts=0,
         max_swap_contracts=0,
         max_treasury_contracts=0,
-        available_gross_dv01_usd_per_bp=D("5000"),
+        available_gross_dv01_usd_per_bp=D("10000"),
         expected_cost_usd=D("0"),
     )
     values.update(overrides)
@@ -330,8 +372,8 @@ Run the Task 1 focused command. Expected: import failure for
 
 - [ ] **Step 3: Implement the target orchestrator minimally**
 
-Add imports from `.models` and `.spread`, a private `_capacity_scale`, and this
-exact public signature:
+Add imports from `.models` and `.spread`, a private bounded basket selector,
+and this exact public signature:
 
 ```python
 def build_target_position(
@@ -341,6 +383,7 @@ def build_target_position(
     treasury_instrument_id: object,
     direction: object,
     base_target_dv01_usd_per_bp: object,
+    decision_time_utc: object,
     current_realized_vol: object,
     prior_realized_vols: object,
     z_score: object,
@@ -360,7 +403,7 @@ def build_target_position(
 Implement the approved sequence without new records or abstractions:
 
 ```python
-vol = volatility_scale(current_realized_vol, prior_realized_vols)
+vol = volatility_scale(decision_time_utc, current_realized_vol, prior_realized_vols)
 strength = signal_strength_scale(z_score)
 pre_liquidity_target = scaled_target_dv01(
     base_target_dv01_usd_per_bp, vol, strength, Decimal("1")
@@ -372,29 +415,35 @@ liquidity = liquidity_scale(*provisional, swap_available_contracts, treasury_ava
 liquid_target = scaled_target_dv01(
     base_target_dv01_usd_per_bp, vol, strength, liquidity
 )
-liquid_quantities = dv01_hedge_quantities(
-    direction, liquid_target, swap_dv01, treasury_dv01
-)
-capacity = _capacity_scale(
-    *liquid_quantities,
-    swap_dv01,
-    treasury_dv01,
-    max_swap_contracts,
-    max_treasury_contracts,
-    available_gross,
-)
-final_target = scaled_target_dv01(liquid_target, Decimal("1"), Decimal("1"), capacity)
-swap_quantity, treasury_quantity = dv01_hedge_quantities(
-    direction, final_target, swap_dv01, treasury_dv01
+bounded = _bounded_target(
+    direction=direction,
+    liquid_target=liquid_target,
+    swap_dv01=swap_dv01,
+    treasury_dv01=treasury_dv01,
+    swap_available_contracts=swap_available_contracts,
+    treasury_available_contracts=treasury_available_contracts,
+    max_swap_contracts=max_swap_contracts,
+    max_treasury_contracts=max_treasury_contracts,
+    available_gross=available_gross,
 )
 ```
 
-`_capacity_scale` validates exact nonnegative integer caps and nonnegative
-available gross DV01, calculates actual provisional gross leg DV01, and returns
-the minimum applicable ratio. After the final hedge, explicitly reject a zero
-leg, a remaining configured cap breach, gross DV01 above available capacity,
-or `residual_fraction(...) > MAX_RESIDUAL_FRACTION`. Construct
-`TargetPosition` directly and calculate turnover as:
+`_bounded_target` validates exact nonnegative integer caps and displayed sizes
+and nonnegative available gross DV01. Under local precision 50, calculate the
+largest swap magnitude that does not exceed `liquid_target / swap_dv01` using
+`ROUND_FLOOR`, then reduce it by displayed swap size, a nonzero configured swap
+cap, and the swap-only gross upper bound. Search from that magnitude down to
+one. For each candidate target `Decimal(magnitude) * swap_dv01`, reuse
+`dv01_hedge_quantities`, then reject the candidate when either leg is zero,
+displayed Treasury size or a configured contract cap is exceeded, gross DV01
+exceeds available capacity, or
+`residual_fraction(...) > MAX_RESIDUAL_FRACTION`. Return the first valid
+`(target, swap_quantity, treasury_quantity, gross, residual)` tuple or `None`.
+This descending bounded search is the minimal monotonic solution: tighter
+capacity can never select a larger basket.
+
+Construct `TargetPosition` directly from the bounded tuple and calculate
+turnover as:
 
 ```python
 abs(swap_quantity - current_swap_quantity_contracts) + abs(
@@ -404,7 +453,9 @@ abs(swap_quantity - current_swap_quantity_contracts) + abs(
 
 Use `rounding_diagnostic="minimum_residual"` and either
 `cap_diagnostic="within_capacity"` or
-`cap_diagnostic="scaled_to_capacity"`.
+`cap_diagnostic="scaled_to_capacity"`. The latter applies when the selected
+target is below the unrestricted whole-swap target solely because a displayed
+size, configured contract cap, or gross-DV01 capacity bound reduced it.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -461,7 +512,9 @@ def risk_kwargs(**overrides):
         margin_reserve_ok=True,
         residual_fraction=D("0.05"),
         max_residual_fraction=D("0.05"),
-        portfolio_net_dv01_usd_per_bp=D("250"),
+        portfolio_gross_dv01_usd_per_bp=D("1950"),
+        max_portfolio_gross_dv01_usd_per_bp=D("5000"),
+        portfolio_net_dv01_usd_per_bp=D("-250"),
         max_portfolio_net_dv01_usd_per_bp=D("250"),
         orders_submitted=0,
         max_orders=5,
@@ -548,6 +601,9 @@ class RiskSignalTests(unittest.TestCase):
         self.assertIsNone(evaluate_risk(**risk_kwargs(capacity_scale=D("1.1"))))
         self.assertIsNone(evaluate_risk(**risk_kwargs(data_fresh=1)))
         self.assertIsNone(evaluate_risk(**risk_kwargs(max_orders=True)))
+        self.assertIsNone(evaluate_risk(**risk_kwargs(
+            portfolio_gross_dv01_usd_per_bp=D("5000.1"),
+        )))
 ```
 
 - [ ] **Step 2: Run the focused risk test and verify RED**
@@ -555,7 +611,7 @@ class RiskSignalTests(unittest.TestCase):
 Run:
 
 ```powershell
-& 'C:\Users\jaydo_0v7vk2o\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest docs.tests.test_position_sizing_and_risk -v
+& '.\.venv\Scripts\python.exe' -m unittest docs.tests.test_position_sizing_and_risk -v
 ```
 
 Expected: exit `1` because `strategy.risk_signals` does not exist.
@@ -581,6 +637,8 @@ def evaluate_risk(
     margin_reserve_ok: object,
     residual_fraction: object,
     max_residual_fraction: object,
+    portfolio_gross_dv01_usd_per_bp: object,
+    max_portfolio_gross_dv01_usd_per_bp: object,
     portfolio_net_dv01_usd_per_bp: object,
     max_portfolio_net_dv01_usd_per_bp: object,
     orders_submitted: object,
@@ -595,9 +653,12 @@ def evaluate_risk(
 ```
 
 Validate all booleans with `type(value) is bool`, counters with exact
-nonnegative integers, the capacity scale in `[0, 1]`, signed session P&L as a
-finite Decimal, and every other Decimal as finite and nonnegative. Require
-positive session-loss and drawdown limits. Return `None` for malformed inputs.
+nonnegative integers, the capacity scale in `[0, 1]`, signed session P&L and
+signed portfolio net DV01 as finite Decimals, and gross DV01, residual,
+drawdown, and numeric limits as finite nonnegative Decimals. Require positive
+session-loss and drawdown limits. Post-scale portfolio gross DV01 above its
+declared maximum is an inconsistent caller state and returns `None`; Task 2
+must scale it before risk evaluation. Return `None` for every malformed input.
 
 Return explicit emergency or scheduled decisions before evaluating other
 conditions. Otherwise append the exact reason codes from the test in the same
@@ -621,15 +682,15 @@ return `allowed=True`, the validated capacity scale, reason
 Construct stable `limits` in this order:
 
 ```text
-max_residual_fraction, max_portfolio_net_dv01, max_orders,
-max_working_orders, max_session_loss, max_drawdown
+max_residual_fraction, max_portfolio_gross_dv01, max_portfolio_net_dv01,
+max_orders, max_working_orders, max_session_loss, max_drawdown
 ```
 
 Construct stable `measured_values` in this order:
 
 ```text
-capacity_scale, residual_fraction, portfolio_net_dv01, orders_submitted,
-working_orders, session_pnl, drawdown
+capacity_scale, portfolio_gross_dv01, residual_fraction, portfolio_net_dv01,
+orders_submitted, working_orders, session_pnl, drawdown
 ```
 
 Convert exact integer counters to `Decimal` only when building `NamedValue`.
@@ -678,18 +739,21 @@ from strategy import (
 )
 ```
 
-Add an AST-based test reading only the two production module source files and
-asserting that their top-level imports are limited to `__future__`,
-`collections.abc`, `decimal`, `models`, and `spread`. This test prevents file,
-clock, pandas, IBKR, broker, network, and order coupling without importing any
-external package.
+Add a behavior test that launches `sys.executable -S -c` in a fresh process,
+imports `strategy.position_sizing` and `strategy.risk_signals`, and asserts
+that `sys.modules` contains none of `pandas`, `ib_insync`, `requests`,
+`urllib3`, `socket`, `pathlib`, `agents.agent_0.broker`, or
+`agents.agent_0.orders`. Assert the subprocess exits zero and prints an empty
+loaded-forbidden list. Do not inspect or grep production source text. Direct
+review verifies that the two P33 modules do not use wall-clock or file APIs;
+the reused P30 models legitimately import `datetime` for immutable records.
 
 - [ ] **Step 2: Run both focused modules and verify RED**
 
 Run:
 
 ```powershell
-& 'C:\Users\jaydo_0v7vk2o\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest docs.tests.test_position_sizing_and_risk -v
+& '.\.venv\Scripts\python.exe' -m unittest docs.tests.test_position_sizing_and_risk -v
 ```
 
 Expected: public imports fail because `strategy/__init__.py` does not export
@@ -713,7 +777,7 @@ configuration version and do not reinterpret `p10.strategy-equations.v1`.
 Run all commands and retain their literal exit codes and test counts:
 
 ```powershell
-$python = 'C:\Users\jaydo_0v7vk2o\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+$python = '.\.venv\Scripts\python.exe'
 & $python -m unittest docs.tests.test_position_sizing_and_risk -v
 & $python -m unittest discover -s docs/tests -v
 & $python -m unittest discover -s agents/agent_0/tests -v

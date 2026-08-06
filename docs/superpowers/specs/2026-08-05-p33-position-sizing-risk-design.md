@@ -30,18 +30,21 @@ integers.
 
 ### Volatility scale
 
-`volatility_scale(current_realized_vol, prior_realized_vols)` requires a
-positive finite current volatility and exactly 63 positive finite prior
-realized-volatility observations in causal order. The reference volatility is
-the median of the 63 prior observations, so no interpolation convention is
-needed. The scale is:
+`volatility_scale(decision_time_utc, current_realized_vol,
+prior_realized_vols)` requires an exact aware UTC decision time, a positive
+finite current volatility, and exactly 63 `(timestamp_utc, volatility)`
+tuples. History timestamps must be exact aware UTC datetimes, strictly
+increasing, unique, and earlier than the decision time. Every volatility must
+be a positive finite Decimal. The reference volatility is the median of the
+63 prior values, so no interpolation convention is needed. The scale is:
 
 ```text
 min(1, prior_median_volatility / current_realized_volatility)
 ```
 
-Missing, malformed, nonpositive, short, or long history returns `None`. Low
-volatility never increases risk above the base target.
+Missing, malformed, nonpositive, short, long, non-UTC, duplicate, reversed,
+or noncausal history returns `None`. Low volatility never increases risk above
+the base target.
 
 ### Signal-strength scale
 
@@ -87,8 +90,9 @@ The result is in USD per basis point. Any invalid input returns `None`.
 
 ### Hand-worked scale examples
 
-- Sixty-three prior volatilities with median `0.8` and current volatility `1`
-  produce volatility scale `0.8`; current volatility `0.5` produces `1`.
+- Sixty-three strictly increasing prior UTC observations with volatility
+  median `0.8` and current volatility `1` produce volatility scale `0.8`;
+  current volatility `0.5` produces `1`.
 - Z-scores `0`, `1`, `2`, and `-3` produce strength scales `0`, `0.5`, `1`,
   and `1`.
 - Provisional quantities `10` and `-4` with displayed sizes `5` and `4`
@@ -106,24 +110,28 @@ capacity, and an explicit nonnegative expected cost.
 
 Construction proceeds in this order:
 
-1. Calculate volatility and strength scales.
+1. Validate the decision timestamp and calculate volatility and strength
+   scales.
 2. Calculate the pre-liquidity target and call the P31
    `dv01_hedge_quantities` selector.
 3. Calculate the liquidity scale from the provisional integer basket.
 4. Recalculate the target and integer basket after liquidity scaling.
-5. Calculate one capacity scale as the minimum of 1 and every applicable
-   swap-contract, Treasury-contract, and available portfolio gross-DV01 ratio.
-   A contract cap of zero retains the repository's existing convention of no
-   configured cap.
-6. Recalculate the target and integer basket once after capacity scaling.
-7. Verify both legs are nonzero, all configured caps are satisfied, gross
-   DV01 is within available capacity, and residual DV01 is at most 5% of the
-   final target, inclusive.
+5. Convert the liquid target to the largest whole swap-contract magnitude that
+   does not exceed it, then search downward to one contract. A contract cap of
+   zero retains the repository's existing convention of no configured cap.
+6. For each candidate, reuse the P31 hedge selector with candidate target
+   `swap_quantity * swap_dv01`, then verify displayed size, both configured
+   contract caps, available portfolio gross DV01, and the inclusive 5%
+   residual rule. Select the first valid candidate.
+7. Define capacity scale as selected target divided by the liquid target. If
+   no nonzero two-leg candidate is valid, return `None` because zero risk is
+   the only valid result.
 
-For example, provisional quantities `10` and `-4`, provisional gross DV01
-`4800`, a swap cap of `5`, no Treasury cap, and available portfolio gross
-capacity `3000` produce capacity scale `min(1, 5/10, 3000/4800) = 0.5` before
-the final integer basket is recalculated.
+For example, a liquid target that permits ten swap contracts and a swap cap of
+five starts the bounded search at five. The first five-contract basket that
+also satisfies the Treasury cap, displayed sizes, gross capacity, and 5%
+residual rule is selected. Tightening any capacity input can only retain or
+reduce the selected integer basket; it cannot increase risk.
 
 Capacity constraints reduce the target; they do not independently block it.
 If integer rounding leaves no nonzero two-leg basket within all limits, the
@@ -139,8 +147,9 @@ equations.
 ## Risk decisions
 
 `evaluate_risk(...)` is a keyword-only pure function using explicit booleans,
-integer counters, and Decimal limits and measurements. It does not inspect
-files, wall-clock time, broker objects, or environment state.
+integer counters, and Decimal limits and measurements. Portfolio gross DV01
+is nonnegative; portfolio net DV01 and session P&L are signed. It does not
+inspect files, wall-clock time, broker objects, or environment state.
 
 Capacity-only inputs use the scale calculated by position sizing. Every other
 failure blocks new risk:
@@ -182,15 +191,19 @@ emergency flatten. Explicit scheduled flatten returns only
 returns only `emergency_flatten` with emergency urgency.
 
 Every `RiskDecision` includes stable `NamedValue` tuples for the numeric limits
-and measured values actually used. This preserves auditability without adding
-new configuration dataclasses.
+and measured values actually used, including post-scale portfolio gross DV01
+and signed portfolio net DV01. A gross measurement above its declared limit is
+an inconsistent caller state and returns `None`; capacity must be applied by
+position sizing before risk evaluation. This preserves auditability without
+adding new configuration dataclasses.
 
 ## Validation and testing
 
 Focused `unittest` modules cover:
 
 - scale values at 0, interior values, and 1;
-- exact 63-observation volatility warm-up and future-row exclusion;
+- exact 63-observation volatility warm-up, strict UTC ordering, and future-row
+  exclusion;
 - malformed, nonfinite, nonpositive, and wrong-type inputs;
 - both trade directions and integer hedge rounding;
 - inclusive 5% residual tolerance and just-over-boundary rejection;
@@ -200,7 +213,9 @@ Focused `unittest` modules cover:
 - turnover from current to target positions;
 - every risk reason, precedence, flatten urgency, and stable evidence values;
 - preservation of the complete caller Decimal context; and
-- absence of file, clock, broker, IBKR, pandas, and network imports.
+- a fresh-process runtime check proving P33 does not load pandas, IBKR, broker,
+  order, or network packages; file/clock purity remains a direct code-review
+  requirement because the reused P30 model module legitimately loads datetime.
 
 Final verification runs the focused P33 tests, all `docs/tests`, Agent 0 tests,
 `compileall`, the existing self-checks, and `git diff --check`. P33 stops at
