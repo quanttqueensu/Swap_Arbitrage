@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, getcontext, setcontext
 import unittest
 
-from strategy import TradeDirection
+from strategy import FlattenUrgency, TradeDirection
 from strategy.position_sizing import (
     SIZING_RISK_VERSION,
     build_target_position,
@@ -11,6 +11,7 @@ from strategy.position_sizing import (
     signal_strength_scale,
     volatility_scale,
 )
+from strategy.risk_signals import evaluate_risk
 
 
 D = Decimal
@@ -45,6 +46,38 @@ def target_kwargs(**overrides):
         max_treasury_contracts=0,
         available_gross_dv01_usd_per_bp=D("10000"),
         expected_cost_usd=D("0"),
+    )
+    values.update(overrides)
+    return values
+
+
+def risk_kwargs(**overrides):
+    values = dict(
+        capacity_scale=D("1"),
+        has_open_position=False,
+        emergency_flatten=False,
+        scheduled_flatten=False,
+        data_fresh=True,
+        bid_ask_valid=True,
+        market_fields_valid=True,
+        broker_connected=True,
+        reconciled=True,
+        roll_allowed=True,
+        margin_reserve_ok=True,
+        residual_fraction=D("0.05"),
+        max_residual_fraction=D("0.05"),
+        portfolio_gross_dv01_usd_per_bp=D("1950"),
+        max_portfolio_gross_dv01_usd_per_bp=D("5000"),
+        portfolio_net_dv01_usd_per_bp=D("-250"),
+        max_portfolio_net_dv01_usd_per_bp=D("250"),
+        orders_submitted=0,
+        max_orders=5,
+        working_orders=0,
+        max_working_orders=5,
+        session_pnl_usd=D("0"),
+        max_session_loss_usd=D("1000"),
+        drawdown_usd=D("0"),
+        max_drawdown_usd=D("1500"),
     )
     values.update(overrides)
     return values
@@ -191,3 +224,85 @@ class TargetPositionTests(unittest.TestCase):
         self.assertIsNotNone(target)
         self.assertEqual(target.target_dv01_usd_per_bp, D("200"))
         self.assertEqual(target.cap_diagnostic, "within_capacity")
+
+
+class RiskSignalTests(unittest.TestCase):
+    # Mutation caught: treating capacity reductions as a safety block or omitting audit evidence.
+    def test_allowed_capacity_scale_and_evidence(self):
+        decision = evaluate_risk(**risk_kwargs(capacity_scale=D("0.5")))
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.scale, D("0.5"))
+        self.assertEqual(decision.reason_codes, ("capacity_scaled",))
+        self.assertFalse(decision.flatten_requested)
+        self.assertEqual(decision.urgency, FlattenUrgency.NONE)
+        self.assertEqual(decision.limits[0].name, "max_residual_fraction")
+        self.assertEqual(decision.measured_values[0].name, "capacity_scale")
+
+    # Mutation caught: leaving new-risk permission enabled or flattening without exposure on hard failures.
+    def test_hard_failure_blocks_and_flattens_existing_exposure(self):
+        flat = evaluate_risk(**risk_kwargs(data_fresh=False))
+        exposed = evaluate_risk(**risk_kwargs(data_fresh=False, has_open_position=True))
+        self.assertEqual(flat.reason_codes, ("stale_market_data",))
+        self.assertFalse(flat.flatten_requested)
+        self.assertEqual(exposed.scale, D("0"))
+        self.assertTrue(exposed.flatten_requested)
+        self.assertEqual(exposed.urgency, FlattenUrgency.EMERGENCY)
+
+    # Mutation caught: allowing later risk checks to override explicit flatten priority.
+    def test_explicit_flatten_precedence(self):
+        emergency = evaluate_risk(**risk_kwargs(
+            emergency_flatten=True, scheduled_flatten=True, data_fresh=False,
+            has_open_position=True,
+        ))
+        scheduled = evaluate_risk(**risk_kwargs(
+            scheduled_flatten=True, data_fresh=False, has_open_position=True,
+        ))
+        self.assertEqual(emergency.reason_codes, ("emergency_flatten",))
+        self.assertEqual(emergency.urgency, FlattenUrgency.EMERGENCY)
+        self.assertEqual(scheduled.reason_codes, ("scheduled_flatten",))
+        self.assertEqual(scheduled.urgency, FlattenUrgency.SCHEDULED)
+
+    # Mutation caught: reordering or dropping simultaneous hard-failure reason codes.
+    def test_all_hard_failures_have_stable_ordered_reasons(self):
+        decision = evaluate_risk(**risk_kwargs(
+            data_fresh=False,
+            bid_ask_valid=False,
+            market_fields_valid=False,
+            broker_connected=False,
+            reconciled=False,
+            roll_allowed=False,
+            session_pnl_usd=D("-1000"),
+            drawdown_usd=D("1500"),
+            margin_reserve_ok=False,
+            residual_fraction=D("0.0501"),
+            portfolio_net_dv01_usd_per_bp=D("250.1"),
+            orders_submitted=5,
+            working_orders=5,
+        ))
+        self.assertEqual(decision.reason_codes, (
+            "stale_market_data",
+            "invalid_bid_ask",
+            "missing_or_nonpositive_market_field",
+            "broker_disconnected",
+            "reconciliation_mismatch",
+            "roll_restricted",
+            "session_loss_limit",
+            "drawdown_limit",
+            "margin_reserve_failure",
+            "residual_dv01_limit",
+            "portfolio_net_dv01_limit",
+            "order_rate_limit",
+            "working_order_limit",
+        ))
+
+    # Mutation caught: accepting equality breaches, wrong scalar types, or unscaled gross exposure.
+    def test_boundaries_and_malformed_inputs_fail_closed(self):
+        self.assertTrue(evaluate_risk(**risk_kwargs()).allowed)
+        self.assertFalse(evaluate_risk(**risk_kwargs(orders_submitted=5)).allowed)
+        self.assertFalse(evaluate_risk(**risk_kwargs(session_pnl_usd=D("-1000"))).allowed)
+        self.assertIsNone(evaluate_risk(**risk_kwargs(capacity_scale=D("1.1"))))
+        self.assertIsNone(evaluate_risk(**risk_kwargs(data_fresh=1)))
+        self.assertIsNone(evaluate_risk(**risk_kwargs(max_orders=True)))
+        self.assertIsNone(evaluate_risk(**risk_kwargs(
+            portfolio_gross_dv01_usd_per_bp=D("5000.1"),
+        )))
