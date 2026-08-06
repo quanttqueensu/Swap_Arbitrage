@@ -603,3 +603,71 @@ equations and synthetic examples are the MG2-approved bounded contract pending
 later P11 validation; they do not fill any unavailable input with a proxy.
 
 ## MG2 manual recalculation checklist
+
+## P33 position sizing and risk
+
+P33 freezes the separate configuration version
+`p33.position-sizing-risk.v1`. These sizing and risk equations are additive:
+they do not reinterpret the P10 economic strategy version
+`p10.strategy-equations.v1`.
+
+For an exact 63-row causal history of strictly increasing aware-UTC positive
+realized-volatility values, each earlier than the supplied decision timestamp,
+the reference is the 32nd sorted value. P33 uses exactly these four formulas:
+
+\[
+s_{vol}=\min(1,\operatorname{median}(v_{t-63},\ldots,v_{t-1})/v_t)
+\]
+
+\[
+s_{signal}=\min(1,|z|/2)
+\]
+
+\[
+s_{liq}=\min(1,A_S/|n_S|,A_T/|n_T|)
+\]
+
+\[
+D^{target}=D^{base}s_{vol}s_{signal}s_{liq}.
+\]
+
+The P31 selector first makes a provisional integer basket for the
+pre-liquidity target, then supplies its nonzero signed quantities to the
+liquidity formula. The final target is converted to the greatest whole swap
+magnitude not exceeding it and searched downward. The binding capacity order
+is displayed swap size, nonzero configured swap cap, swap-only gross-DV01
+upper bound, then, for each candidate, displayed Treasury size, nonzero
+configured Treasury cap, full gross-DV01 capacity, and residual. Thus tighter
+capacity cannot increase selected risk. A configured cap of zero means no
+configured cap. Both legs must be nonzero and the P31 residual fraction is
+allowed at the inclusive boundary \(\rho\leq0.05\); \(\rho>0.05\) blocks the
+basket.
+
+Hard sizing failures are malformed or nonfinite inputs; non-UTC, noncausal,
+duplicate, reversed, or non-63-row volatility history; invalid direction or
+leg DV01; a zero provisional or bounded leg; and no capacity-valid basket.
+They return no target. P33 does not estimate costs: expected cost, bid/ask
+sizes, and all operational flags are causal values supplied by the caller.
+
+Risk decisions fail closed after exact-type and finite-domain validation. An
+inconsistent post-scale portfolio gross DV01 above its limit returns no
+decision. Otherwise reason precedence is: emergency flatten; scheduled
+flatten; data and market validity; broker, reconciliation, and roll state;
+session loss, drawdown, and margin; residual/net DV01 and order limits; then
+allowed risk (possibly capacity-scaled). A controlling explicit flatten emits
+only its own reason. Other hard failures retain every applicable reason in
+that declaration order, set scale to zero, and request an emergency flatten
+only when exposure exists.
+
+Approved hand examples are literal: 63 prior values with median `0.8` and
+current `1` give `0.8`, while current `0.5` gives `1`; z-scores `0`, `1`,
+`2`, and `-3` give `0`, `0.5`, `1`, and `1`; quantities `10` and `-4` with
+displayed sizes `5` and `4` give liquidity `0.5`; and
+`3000 * 0.8 * 0.5 * 0.5 = 600` USD/bp. For the traditional basket with target
+`1000`, swap DV01 `100`, and Treasury DV01 `950`, quantities are `10` and
+`-1`, gross DV01 is `1950`, and net DV01 is `-50`, so the residual is exactly
+`0.05` and is allowed. At Treasury DV01 `949.9`, the same integer basket has
+residual `0.0501` and is blocked. A valid risk input with capacity scale `0.5`
+is allowed with reason `capacity_scaled`; stale data blocks with
+`stale_market_data` and flattens only existing exposure; scheduled and
+emergency flags respectively take their controlling precedence.

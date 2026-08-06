@@ -42,6 +42,17 @@ from .signal_generation import (
     rank_opportunities,
     signal_transition,
 )
+from .position_sizing import (
+    MAX_RESIDUAL_FRACTION,
+    SIZING_RISK_VERSION,
+    VOLATILITY_LOOKBACK,
+    build_target_position,
+    liquidity_scale,
+    scaled_target_dv01,
+    signal_strength_scale,
+    volatility_scale,
+)
+from .risk_signals import evaluate_risk
 
 __all__ = [
     "ContractMetadata",
@@ -82,4 +93,13 @@ __all__ = [
     "signal_transition",
     "generate_signal_decision",
     "rank_opportunities",
+    "MAX_RESIDUAL_FRACTION",
+    "SIZING_RISK_VERSION",
+    "VOLATILITY_LOOKBACK",
+    "build_target_position",
+    "evaluate_risk",
+    "liquidity_scale",
+    "scaled_target_dv01",
+    "signal_strength_scale",
+    "volatility_scale",
 ]

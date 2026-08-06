@@ -1,17 +1,22 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, getcontext, setcontext
+import subprocess
+import sys
 import unittest
 
-from strategy import FlattenUrgency, TradeDirection
-from strategy.position_sizing import (
+from strategy import (
+    MAX_RESIDUAL_FRACTION,
     SIZING_RISK_VERSION,
+    VOLATILITY_LOOKBACK,
+    FlattenUrgency,
+    TradeDirection,
     build_target_position,
+    evaluate_risk,
     liquidity_scale,
     scaled_target_dv01,
     signal_strength_scale,
     volatility_scale,
 )
-from strategy.risk_signals import evaluate_risk
 
 
 D = Decimal
@@ -81,6 +86,43 @@ def risk_kwargs(**overrides):
     )
     values.update(overrides)
     return values
+
+
+class PublicApiTests(unittest.TestCase):
+    # Mutation caught: removing a supported P33 strategy-level import.
+    def test_strategy_exports_frozen_p33_api(self):
+        self.assertEqual(SIZING_RISK_VERSION, "p33.position-sizing-risk.v1")
+        self.assertEqual(VOLATILITY_LOOKBACK, 63)
+        self.assertEqual(MAX_RESIDUAL_FRACTION, D("0.05"))
+        self.assertTrue(all(callable(value) for value in (
+            volatility_scale,
+            signal_strength_scale,
+            liquidity_scale,
+            scaled_target_dv01,
+            build_target_position,
+            evaluate_risk,
+        )))
+
+    # Mutation caught: adding a forbidden runtime dependency to either P33 module.
+    def test_p33_modules_do_not_load_forbidden_runtime_dependencies(self):
+        program = """
+import sys
+import strategy.position_sizing
+import strategy.risk_signals
+forbidden = (
+    'pandas', 'ib_insync', 'requests', 'urllib3', 'socket', 'pathlib',
+    'agents.agent_0.broker', 'agents.agent_0.orders',
+)
+print([name for name in forbidden if name in sys.modules])
+"""
+        result = subprocess.run(
+            [sys.executable, "-S", "-c", program],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "[]\n")
 
 
 class ScaleTests(unittest.TestCase):
