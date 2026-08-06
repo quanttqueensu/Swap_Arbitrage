@@ -622,7 +622,7 @@ Update this table only after the user explicitly approves a gate.
 | MG1 | Approved 2026-07-29 | P01/P02 verification; authoritative 25/week (5/day) selected and approved |
 | MG2 | Approved 2026-07-31 | P10 equation examples, source coverage, and verification |
 | MG3 | Approved 2026-08-02 | P20/P21 inventory, 19 canonical schemas, durable five-folder layout, and verification |
-| MG4 | Not started | Adapter tests and canonical data/schema review |
+| MG4 | Approved 2026-08-06 | P23 adapter verification, canonical data/schema review, and user approval |
 | MG5 | Not started | Shared strategy golden/invariant evidence |
 | MG6 | Not started | Naive backtest manual reconciliation |
 | MG6A | Not started | Technical audit, approved cleanup, and onboarding documentation |
