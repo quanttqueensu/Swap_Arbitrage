@@ -258,13 +258,33 @@ def build_target_position(
     target, swap_quantity, treasury_quantity, gross, residual = bounded
     with localcontext() as context:
         context.prec = 50
-        unrestricted = _decimal(liquid_target, positive=True)
+        liquid = _decimal(liquid_target, positive=True)
         swap = _decimal(swap_dv01_usd_per_bp, positive=True)
-        if unrestricted is None or swap is None:
+        treasury = _decimal(treasury_dv01_usd_per_bp, positive=True)
+        if liquid is None or swap is None or treasury is None:
             return None
-        whole_swap_target = (
-            (unrestricted / swap).to_integral_value(rounding=ROUND_FLOOR) * swap
+        unrestricted_swap_available = int(
+            (liquid / swap).to_integral_value(rounding=ROUND_FLOOR)
         )
+        unrestricted_treasury_available = int(
+            (liquid / treasury).to_integral_value(rounding=ROUND_FLOOR)
+        ) + 1
+        unrestricted_gross = liquid + (
+            Decimal(unrestricted_treasury_available) * treasury
+        )
+    unrestricted = _bounded_target(
+        direction=direction,
+        liquid_target=liquid,
+        swap_dv01=swap,
+        treasury_dv01=treasury,
+        swap_available_contracts=unrestricted_swap_available,
+        treasury_available_contracts=unrestricted_treasury_available,
+        max_swap_contracts=0,
+        max_treasury_contracts=0,
+        available_gross=unrestricted_gross,
+    )
+    if unrestricted is None:
+        return None
     return TargetPosition(
         maturity=maturity,
         swap_instrument_id=swap_instrument_id,
@@ -281,6 +301,6 @@ def build_target_position(
         expected_cost_usd=expected_cost_usd,
         rounding_diagnostic="minimum_residual",
         cap_diagnostic=(
-            "scaled_to_capacity" if target < whole_swap_target else "within_capacity"
+            "scaled_to_capacity" if target < unrestricted[0] else "within_capacity"
         ),
     )

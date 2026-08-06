@@ -176,3 +176,18 @@ class TargetPositionTests(unittest.TestCase):
             )
         )
         self.assertEqual(target.expected_turnover_contracts, 6)
+
+    def test_residual_only_scaling_is_not_a_capacity_diagnostic(self):
+        target = build_target_position(
+            **target_kwargs(
+                base_target_dv01_usd_per_bp=D("300"),
+                swap_dv01_usd_per_bp=D("100"),
+                treasury_dv01_usd_per_bp=D("63.4"),
+                swap_available_contracts=10000,
+                treasury_available_contracts=10000,
+                available_gross_dv01_usd_per_bp=D("10000000"),
+            )
+        )
+        self.assertIsNotNone(target)
+        self.assertEqual(target.target_dv01_usd_per_bp, D("200"))
+        self.assertEqual(target.cap_diagnostic, "within_capacity")
