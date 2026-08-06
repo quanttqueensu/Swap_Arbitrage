@@ -671,3 +671,46 @@ residual `0.0501` and is blocked. A valid risk input with capacity scale `0.5`
 is allowed with reason `capacity_scaled`; stale data blocks with
 `stale_market_data` and flattens only existing exposure; scheduled and
 emergency flags respectively take their controlling precedence.
+
+## P34 costs and conservative portfolio selection
+
+P34 exposes the existing pure `CostEstimate`, `naive_cost`, `observed_cost`,
+`portfolio_dv01`, and `select_portfolio_targets` interfaces at the strategy
+boundary. For either cost entry point, the itemized USD total and its basis
+point buffer are exactly
+
+\[
+C= C^{swap}+C^{Treasury}+C^{commission}+C^{slippage}
+ +(C^{roll,close}+C^{roll,open})+C^{financing},
+\qquad TC=C/|DV01^{target}|.
+\]
+
+`observed_cost` does not infer, forecast, or reuse a constant: its six
+components are caller-supplied causal, directional USD inputs for the proposed
+trade. Every component and the positive USD/bp cost base must be present,
+finite, and nonnegative where applicable; a missing or invalid input blocks
+the cost result. Financing already represented in expected funding remains
+excluded from this cost input.
+
+For selected targets, portfolio DV01 is the direct sum
+
+\[
+DV01^{gross}_{portfolio}=\sum_i DV01^{gross}_i,
+\qquad DV01^{net}_{portfolio}=\sum_i DV01^{net}_i.
+\]
+
+Selection is conservative and rank-first. Iterate the eligible unique targets
+in the existing P32 rank order; append a target only when its candidate gross
+sum is at most the gross limit and the absolute candidate net sum is at most
+the net limit. A target that breaches either limit is skipped and lower-ranked
+targets are still considered. The routine does not re-rank, optimize, offset,
+or supply missing targets; malformed/mismatched rank or target inputs block
+the result.
+
+The approved pure 2Y flow has USD components `200 + 300 + 100 + 50 +
+(100 + 150) + 100 = 1000`, cost base `1000` USD/bp, cost buffer `1` bp, and
+traditional net opportunity `25 - 1 = 24` bp. With literal P32 rank
+`("5Y", "2Y")`, two P33 traditional baskets each have gross `1950` USD/bp
+and residual net `-50` USD/bp; both fit the `5000` gross and `250` absolute
+net limits, for portfolio `(3900, -100)` USD/bp. P34 stops at MG5: this
+example does not approve MG5.

@@ -53,6 +53,8 @@ from .position_sizing import (
     volatility_scale,
 )
 from .risk_signals import evaluate_risk
+from .costs import CostEstimate, naive_cost, observed_cost
+from .portfolio import portfolio_dv01, select_portfolio_targets
 
 __all__ = [
     "ContractMetadata",
@@ -98,6 +100,11 @@ __all__ = [
     "VOLATILITY_LOOKBACK",
     "build_target_position",
     "evaluate_risk",
+    "CostEstimate",
+    "naive_cost",
+    "observed_cost",
+    "portfolio_dv01",
+    "select_portfolio_targets",
     "liquidity_scale",
     "scaled_target_dv01",
     "signal_strength_scale",
