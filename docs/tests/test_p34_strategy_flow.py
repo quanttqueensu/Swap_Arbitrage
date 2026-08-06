@@ -20,17 +20,17 @@ D = Decimal
 DECISION = datetime(2026, 8, 3, 21, tzinfo=timezone.utc)
 
 
-def observation(maturity, gross, net, z_score):
+def observation(maturity, gross, cost_buffer, traditional_net, reverse_net, z_score):
     return SpreadObservation(
         maturity=maturity,
         observation_time_utc=DECISION,
         fixed_swap_spread_bps=D("0"),
         expected_funding_spread_bps=D("0"),
         gross_excess_spread_bps=gross,
-        traditional_cost_buffer_bps=D("0"),
-        reverse_cost_buffer_bps=D("0"),
-        traditional_net_opportunity_bps=net,
-        reverse_net_opportunity_bps=-net,
+        traditional_cost_buffer_bps=cost_buffer,
+        reverse_cost_buffer_bps=cost_buffer,
+        traditional_net_opportunity_bps=traditional_net,
+        reverse_net_opportunity_bps=reverse_net,
         z_score=z_score,
         observation_count=252,
         source_quality_ok=True,
@@ -104,7 +104,14 @@ class P34StrategyFlowTests(unittest.TestCase):
         five_year_net = net_opportunity_bps(
             TradeDirection.TRADITIONAL, D("15"), five_year_cost.total_cost_bps
         )
+        two_year_reverse_net = net_opportunity_bps(
+            TradeDirection.REVERSE, D("25"), two_year_cost.total_cost_bps
+        )
+        five_year_reverse_net = net_opportunity_bps(
+            TradeDirection.REVERSE, D("15"), five_year_cost.total_cost_bps
+        )
         self.assertEqual((two_year_net, five_year_net), (D("24"), D("12")))
+        self.assertEqual((two_year_reverse_net, five_year_reverse_net), (D("-26"), D("-18")))
 
         two_year = target("2Y", two_year_cost.total_cost_usd)
         five_year = target("5Y", five_year_cost.total_cost_usd)
@@ -112,10 +119,32 @@ class P34StrategyFlowTests(unittest.TestCase):
         self.assertIsNotNone(five_year)
         self.assertEqual(two_year.expected_cost_usd, two_year_cost.total_cost_usd)
         self.assertEqual(five_year.expected_cost_usd, five_year_cost.total_cost_usd)
-        ranks = rank_opportunities((
-            observation("2Y", D("25"), two_year_net, D("2")),
-            observation("5Y", D("15"), five_year_net, D("3")),
-        ))
+        observations = (
+            observation(
+                "2Y", D("25"), two_year_cost.total_cost_bps,
+                two_year_net, two_year_reverse_net, D("2"),
+            ),
+            observation(
+                "5Y", D("15"), five_year_cost.total_cost_bps,
+                five_year_net, five_year_reverse_net, D("3"),
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                (
+                    item.traditional_cost_buffer_bps,
+                    item.reverse_cost_buffer_bps,
+                    item.traditional_net_opportunity_bps,
+                    item.reverse_net_opportunity_bps,
+                )
+                for item in observations
+            ),
+            (
+                (D("1"), D("1"), D("24"), D("-26")),
+                (D("3"), D("3"), D("12"), D("-18")),
+            ),
+        )
+        ranks = rank_opportunities(observations)
         self.assertEqual(ranks, ("5Y", "2Y"))
         selected = select_portfolio_targets(ranks, (two_year, five_year), D("5000"), D("250"))
         self.assertEqual(selected, (five_year, two_year))
