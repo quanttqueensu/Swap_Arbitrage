@@ -707,9 +707,11 @@ targets are still considered. The routine does not re-rank, optimize, offset,
 or supply missing targets; malformed/mismatched rank or target inputs block
 the result.
 
-The approved pure 2Y flow has USD components `200 + 300 + 100 + 50 +
-(100 + 150) + 100 = 1000`, cost base `1000` USD/bp, cost buffer `1` bp, and
-traditional net opportunity `25 - 1 = 24` bp. With literal P32 rank
+The approved pure 2Y flow has USD components `250 + 250 + 100 + 200 +
+(50 + 50) + 100 = 1000`, cost base `1000` USD/bp, cost buffer `1` bp, and
+traditional net opportunity `25 - 1 = 24` bp. The caller-supplied observed
+5Y inputs `600 + 600 + 400 + 800 + (200 + 200) + 200` likewise total `3000`
+USD, give a `3` bp buffer, and leave `15 - 3 = 12` bp. With literal P32 rank
 `("5Y", "2Y")`, two P33 traditional baskets each have gross `1950` USD/bp
 and residual net `-50` USD/bp; both fit the `5000` gross and `250` absolute
 net limits, for portfolio `(3900, -100)` USD/bp. P34 stops at MG5: this
