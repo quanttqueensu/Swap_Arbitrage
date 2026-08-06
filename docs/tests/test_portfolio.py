@@ -45,6 +45,12 @@ class PortfolioDv01Tests(unittest.TestCase):
             with self.subTest(targets=targets):
                 self.assertIsNone(portfolio_dv01(targets))
 
+    # Mutation caught: hashing corrupted maturity data before TargetPosition revalidation.
+    def test_rejects_a_corrupted_unhashable_maturity_without_raising(self):
+        corrupted = target("2Y", "300", "0")
+        object.__setattr__(corrupted, "maturity", [])
+        self.assertIsNone(portfolio_dv01((corrupted,)))
+
     # Mutation caught: performing aggregation in, or changing, the caller Decimal context.
     def test_preserves_the_callers_decimal_context(self):
         original = getcontext().copy()
@@ -72,6 +78,13 @@ class PortfolioSelectionTests(unittest.TestCase):
         self.assertEqual(
             select_portfolio_targets(("5Y", "2Y"), (two_year, five_year), D("1000"), D("100")),
             (five_year, two_year),
+        )
+
+    # Mutation caught: accepting a target maturity omitted from the supplied P32 rank list.
+    def test_rejects_targets_missing_from_ranked_maturities(self):
+        targets = (target("2Y", "300", "0"), target("5Y", "400", "0"))
+        self.assertIsNone(
+            select_portfolio_targets(("2Y",), targets, D("1000"), D("100"))
         )
 
     # Mutation caught: stopping after a gross-limit breach instead of skipping it.

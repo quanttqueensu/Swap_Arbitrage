@@ -11,10 +11,10 @@ def _targets_by_maturity(targets: object) -> dict[str, TargetPosition] | None:
         return None
     result: dict[str, TargetPosition] = {}
     for target in targets:
-        if type(target) is not TargetPosition or target.maturity in result:
+        if type(target) is not TargetPosition:
             return None
         try:
-            TargetPosition(
+            validated = TargetPosition(
                 target.maturity,
                 target.swap_instrument_id,
                 target.treasury_instrument_id,
@@ -30,7 +30,9 @@ def _targets_by_maturity(targets: object) -> dict[str, TargetPosition] | None:
             )
         except (TypeError, ValueError):
             return None
-        result[target.maturity] = target
+        if validated.maturity in result:
+            return None
+        result[validated.maturity] = target
     return result
 
 
@@ -70,7 +72,7 @@ def select_portfolio_targets(
     if (
         any(type(maturity) is not str or not maturity.strip() for maturity in ranked_maturities)
         or len(set(ranked_maturities)) != len(ranked_maturities)
-        or any(maturity not in values for maturity in ranked_maturities)
+        or set(ranked_maturities) != set(values)
     ):
         return None
     with localcontext() as context:
