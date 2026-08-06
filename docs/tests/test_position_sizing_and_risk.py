@@ -304,17 +304,17 @@ class RiskSignalTests(unittest.TestCase):
         self.assertEqual(scheduled.reason_codes, ("scheduled_flatten",))
         self.assertEqual(scheduled.urgency, FlattenUrgency.SCHEDULED)
 
-    # Mutation caught: requesting an emergency action while no exposure exists.
+    # Mutation caught: erasing explicit urgency when no exposure exists.
     def test_explicit_flatten_without_exposure_does_not_request_flatten(self):
-        for flatten_flag, reason in (
-            ("emergency_flatten", "emergency_flatten"),
-            ("scheduled_flatten", "scheduled_flatten"),
+        for flatten_flag, reason, urgency in (
+            ("emergency_flatten", "emergency_flatten", FlattenUrgency.EMERGENCY),
+            ("scheduled_flatten", "scheduled_flatten", FlattenUrgency.SCHEDULED),
         ):
             with self.subTest(flatten_flag=flatten_flag):
                 decision = evaluate_risk(**risk_kwargs(**{flatten_flag: True}))
                 self.assertEqual(decision.reason_codes, (reason,))
                 self.assertFalse(decision.flatten_requested)
-                self.assertEqual(decision.urgency, FlattenUrgency.NONE)
+                self.assertEqual(decision.urgency, urgency)
 
     # Mutation caught: reordering or dropping simultaneous hard-failure reason codes.
     def test_all_hard_failures_have_stable_ordered_reasons(self):

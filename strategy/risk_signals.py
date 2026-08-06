@@ -108,10 +108,7 @@ def evaluate_risk(
             scale=Decimal("0"),
             reason_codes=("emergency_flatten" if emergency else "scheduled_flatten",),
             flatten_requested=has_open_position,
-            urgency=(
-                (FlattenUrgency.EMERGENCY if emergency else FlattenUrgency.SCHEDULED)
-                if has_open_position else FlattenUrgency.NONE
-            ),
+            urgency=FlattenUrgency.EMERGENCY if emergency else FlattenUrgency.SCHEDULED,
             limits=limits,
             measured_values=measured_values,
         )
