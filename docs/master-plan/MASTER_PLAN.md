@@ -1,9 +1,22 @@
 # Swap Arbitrage Master Plan
+### Worker context rule
 
-> **For agentic workers:** Read all four files in `docs/master-plan/` before
-> changing code or data. Execute only one numbered prompt from
-> `PROMPT_PLAYBOOK.md` at a time. Use tests first, preserve unrelated work, and
-> stop at every stated manual gate.
+For each numbered prompt, read only:
+
+1. The exact prompt being executed.
+2. The permanent project constraints in `PROJECT_CONTRACTS.md` relevant to the task.
+3. The current manual-gate status.
+4. Files directly affected by the task.
+
+Read all four master-plan documents only when:
+
+* starting a new phase;
+* preparing for a manual gate;
+* the prompt changes a permanent project contract;
+* requirements appear contradictory or ambiguous.
+
+Do not repeatedly load unchanged master-plan sections merely for context.
+
 
 **Goal:** Determine whether the swap-arbitrage hypothesis contains repeatable
 paper-trading alpha while building one causal, testable strategy core that can

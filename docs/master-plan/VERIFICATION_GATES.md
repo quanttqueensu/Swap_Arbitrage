@@ -177,21 +177,70 @@ Sub-agents are reviewers, not a substitute for manual project decisions.
 
 ### Required sequence
 
-1. The implementer completes focused tests and records the diff.
-2. A fresh requirements reviewer examines the prompt and diff read-only.
-3. The implementer fixes or evidence-rejects each finding and reruns tests.
-4. A fresh quality reviewer examines the corrected diff read-only.
-5. A specialist reviewer examines the domain-specific evidence.
-6. The implementer resolves findings, runs the full suite, and reports the
-   manual gate.
+## Review depth
 
-Do not run two code-writing sub-agents against the same files. A reviewer may
-create a report only when explicitly assigned a separate report path;
-otherwise it returns findings without editing.
+Use the minimum review level appropriate to the risk of the change.
 
-If multi-agent support is unavailable, the primary agent performs separate
-fresh-pass reviews in the same order and records that independent dispatch was
-unavailable.
+### Level 1 — Local / low risk
+
+Examples:
+
+* documentation;
+* logging;
+* formatting;
+* isolated bug fixes with an obvious regression test;
+* internal refactors that do not change strategy, risk, data, or broker behavior.
+
+Required:
+
+* focused test or validation;
+* inspect the final diff;
+* no sub-agent review unless uncertainty remains.
+
+### Level 2 — Behavioral
+
+Examples:
+
+* strategy behavior;
+* contract selection;
+* sizing;
+* accounting;
+* data transformation;
+* execution behavior that remains behind existing safety controls.
+
+Required:
+
+* test-first implementation;
+* focused tests;
+* one fresh consolidated review covering requirements and code quality;
+* relevant integration tests.
+
+Run the complete repository suite at the phase/manual gate rather than after every small prompt unless shared infrastructure was changed.
+
+### Level 3 — Critical
+
+Examples:
+
+* mathematical equations or signs;
+* DV01 calculations;
+* causality/lookahead;
+* risk limits;
+* broker submission/reconciliation;
+* paper-only safeguards;
+* schema migration;
+* statistical/alpha claims.
+
+Required:
+
+* test-first implementation;
+* focused and integration tests;
+* requirements review;
+* relevant specialist review;
+* full applicable suite;
+* manual gate where specified.
+
+A separate general quality reviewer is required only when the change is substantial or a specialist/requirements review identifies architectural concerns.
+
 
 ### Requirements review prompt
 
@@ -624,8 +673,8 @@ Update this table only after the user explicitly approves a gate.
 | MG3 | Approved 2026-08-02 | P20/P21 inventory, 19 canonical schemas, durable five-folder layout, and verification |
 | MG4 | Approved 2026-08-06 | P23 adapter verification, canonical data/schema review, and user approval |
 | MG5 | Approved 2026-08-09 | P30-P35 verification; user approval with P35 blockers retained |
-| MG6 | Not started | Naive backtest manual reconciliation |
-| MG6A | Not started | Technical audit, approved cleanup, and onboarding documentation |
+| MG6 | Approved 2026-08-09 | P40 synthetic golden mechanics reconciliation and user approval |
+| MG6A | Approved 2026-08-09 with recorded exceptions | P40A/P40B evidence; TF-002 option C, TF-003 option A, TF-004, and superseding TF-010 documentation pass; TF-007/008/011 remain accepted exceptions, not passed checks |
 | MG7 | Not started | Realistic backtest and robustness reviews |
 | MG8 | Not started | Paper-platform safety and Agent 0 pre-registration |
 | MG9 | Not started | One record per incremental agent |

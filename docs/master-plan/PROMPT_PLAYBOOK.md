@@ -35,9 +35,11 @@ Every worker must:
   change whenever the prompt changes architecture, interfaces, dependencies,
   APIs, specifications, equations, schemas, commands, outputs, or operations,
   and rerun every affected documented command;
-- run focused tests, the repository suite, self-checks, and `git diff --check`;
-- request a requirements review and then a code/data-quality review from fresh
-  sub-agents when multi-agent support is available;
+- run focused tests for every affected subsystem;
+- run the full repository suite at manual gates, phase boundaries, or when
+  shared infrastructure/interfaces change;
+- use the review depth defined in VERIFICATION_GATES.md;
+- require specialist review only for relevant high-risk domains;
 - keep reviewers read-only; one implementer owns edits at a time;
 - resolve every review finding or record evidence that it is invalid;
 - report exact commands and outcomes;
@@ -487,98 +489,238 @@ that window for manual reconciliation.
 
 ### P40A — Audit the technical foundation
 
-```text
 Execute only master-plan prompt P40A after the naive golden run passes MG6.
-Read all four master-plan documents and preserve unrelated work.
 
-Review the whole project without changing implementation, tests,
-configuration, data, or existing documentation. The only file this prompt may
-create or update is docs/audits/technical-foundation-audit.md. Exclude .git/,
-virtual environments, worktrees, generated caches, vendor data, and immutable
-results from line-by-line cleanup, while reviewing their interfaces,
-manifests, retention rules, and placement.
+This prompt is read-only. Do not change implementation, tests, configuration, data, or existing documentation. The only file that may be created or updated is:
 
-Map the actual repository against the target project shape. Trace setup,
-dependencies, canonical data, strategy decisions, risk, costs, accounting,
-naive-backtest execution, outputs, tests, and the planned IBKR-paper path.
-Review correctness and ambiguity, clarification opportunities, unnecessary
-complexity, duplication, dead or misplaced code, project boundaries,
-dependency/API requirements, technical specifications, complex syntax and
-conventions, mathematical units/signs/timing, test gaps, documentation gaps,
-and reproducibility.
+`docs/audits/technical-foundation-audit.md`
 
-For FRED, CME Group, IBKR, and other external APIs, verify requirements and
-common call patterns against primary vendor documentation and the pinned or
-installed package/API version. Record the source, version, and verification
-date. Do not connect to external market-data services or IBKR, do not submit or
-cancel any order, and do not reveal credentials. Reconcile mathematical claims with
-PROJECT_CONTRACTS.md, approved golden examples, and accounting identities.
+Preserve unrelated work. Do not connect to external market-data services or IBKR and do not submit, modify, or cancel orders.
 
-Write a ranked findings ledger. Every finding must have a stable ID, category,
-severity, exact file/line or command evidence, impact, smallest recommended
-action, validation method, and one proposed disposition: safe automatic
-cleanup, approval-required deletion/structural rewrite, documentation-only, or
-defer with reason. Include a proposed target tree and exact deletion/rewrite
-lists with affected consumers, risks, recovery methods, and verification.
-For every material ambiguity, include the exact clarification question,
-competing interpretations, recommended answer, affected components, and
-consequence of deferral; do not infer the answer.
-Optimization findings require a reproducible benchmark or complexity
-measurement; label unmeasured ideas speculative and defer them.
+## Context
 
-Ask a repository-structure reviewer, a dependency/API reviewer, a
-mathematics/accounting reviewer, and an onboarding-documentation reviewer to
-challenge the audit read-only. Resolve evidence errors in the report, then stop
-at the MG6A authorization checkpoint. The user must approve, reject, or defer
-every proposed deletion and structural rewrite and answer or defer every
-material clarification question before P40B begins.
-```
+Read:
 
-### P40B — Apply approved cleanup and create the technical documentation
+* this prompt;
+* the permanent project constraints;
+* the target project shape;
+* the MG6/MG6A requirements; and
+* only the sections of `PROJECT_CONTRACTS.md` relevant to findings being investigated.
 
-```text
-Execute only master-plan prompt P40B after the MG6A authorization checkpoint
-records a disposition for every P40A deletion and structural rewrite.
+Consult other master-plan material only when necessary to resolve a concrete requirement.
 
-Create characterization or focused failing tests before every
-behavior-sensitive rewrite. Apply the audit's safe automatic cleanup and only
-the exact deletions and structural rewrites approved at MG6A. Do not expand the
-approved list or infer an answer to a deferred clarification. Comments must
-explain a non-obvious reason, invariant, unit, timing rule, safety rule, or API
-constraint; do not restate code. Preserve public behavior unless the approved
-finding explicitly changes a contract.
-Apply a performance optimization only when its pre-change benchmark is
-reproducible, then rerun the same benchmark and report the comparison.
+## Audit scope
 
-Update each audit finding to fixed, accepted, rejected, or deferred with a
-reason and evidence. Search for all consumers before moving, rewriting, or
-removing anything, repair references, and record the recovery method for every
-deletion. Preserve paper-only enforcement and do not connect to external
-systems or transmit broker orders.
+Review these subsystems:
 
-Create docs/TECHNICAL_DOCUMENTATION.md as the single onboarding entry point
-for a capable contributor with no repository or swap-arbitrage context. Use
-layered language: a concise quick start followed by progressively deeper
-reference sections. Cover project purpose and vocabulary, paper-only
-boundaries, architecture and directory map, component ownership and data flow,
-environment setup, dependencies, secrets, API requirements and versions,
-canonical data and provenance, strategy/risk/cost/portfolio flow, backtest
-execution and outputs, mathematical notation/equations/units/signs/timing,
-verified commands, IBKR paper call patterns and lifecycle, safety and failure
-handling, testing, troubleshooting, and a glossary. Summarize and link to
-authoritative contracts rather than creating a conflicting source of truth.
-Record primary sources, package/API versions, and last-verified dates for
-volatile API facts.
+1. environment and dependencies;
+2. canonical data and schemas;
+3. strategy and signal logic;
+4. sizing and risk;
+5. costs, accounting, and naive backtesting;
+6. paper-agent architecture and safety boundaries;
+7. tests and reproducibility;
+8. documentation and onboarding.
 
-Run every command documented as available at this phase, focused tests, the
-full approved suite, schema and documentation checks, broken-reference
-searches, secret checks, git diff --check, and git status --short. Ask fresh
-repository-quality, mathematics/accounting, broker-safety, and newcomer
-onboarding reviewers to inspect the final diff and reproduce representative
-instructions. Stop at the MG6A completion sign-off with the audit dispositions,
-approved-versus-actual cleanup comparison, verification evidence, and
-technical documentation.
-```
+For each subsystem, record:
+
+* its current responsibility and main entry points;
+* whether it matches the target architecture;
+* material correctness or maintainability issues;
+* important missing tests or documentation;
+* concrete recommended actions.
+
+Exclude `.git/`, virtual environments, worktrees, generated caches, vendor datasets, and immutable results from line-by-line review. Inspect only their interfaces, placement, retention rules, or manifests when relevant.
+
+## Findings
+
+Create a finding only when an action, user decision, or explicit deferral is warranted.
+
+Each finding must include:
+
+* stable ID;
+* severity: critical, high, medium, or low;
+* category;
+* exact evidence;
+* impact;
+* smallest recommended action;
+* validation method;
+* proposed disposition:
+
+  * safe cleanup;
+  * approval-required structural change/deletion;
+  * documentation-only;
+  * defer.
+
+Do not include speculative style improvements or unrelated refactoring.
+
+For proposed deletions or structural rewrites, also record:
+
+* affected consumers;
+* risk;
+* recovery method;
+* verification required.
+
+For a material ambiguity that prevents a safe recommendation, record:
+
+* exact clarification question;
+* plausible interpretations;
+* recommended interpretation;
+* affected behavior;
+* consequence of deferral.
+
+Do not infer unresolved product, strategy, or risk decisions.
+
+## Technical verification
+
+Reconcile findings involving equations, units, signs, timing, or accounting against `PROJECT_CONTRACTS.md` and approved golden examples.
+
+Verify external API/package behavior against primary documentation only when:
+
+* current runtime correctness depends on that behavior; or
+* an audit finding specifically concerns an API/version assumption.
+
+Record the source, relevant version, and verification date for such findings.
+
+Performance work is out of scope unless an existing reproducible benchmark or measured performance problem demonstrates a material issue.
+
+## Architecture output
+
+Include:
+
+* a concise current architecture map;
+* a proposed target tree only where it differs materially from the current structure;
+* an exact list of proposed deletions and structural rewrites requiring approval.
+
+## Review
+
+After completing the audit, perform one fresh read-only technical review checking:
+
+* evidence quality;
+* requirement coverage;
+* scope discipline;
+* unnecessary proposed changes.
+
+Use an additional specialist review only for findings involving:
+
+* mathematical/accounting correctness;
+* broker safety; or
+* version-sensitive external API behavior.
+
+Correct evidence errors in the audit.
+
+Stop at the MG6A authorization checkpoint.
+
+The user must approve, reject, or defer every proposed deletion, structural rewrite, contract change, and unresolved material clarification before P40B begins.
+
+
+### P40B — Apply approved cleanup and create technical documentation
+
+Execute only master-plan prompt P40B after the MG6A authorization checkpoint records a disposition for every approval-required P40A finding.
+
+Implement only:
+
+* safe cleanup identified by P40A; and
+* deletions, structural rewrites, or contract changes explicitly approved at MG6A.
+
+Do not expand scope or infer answers to deferred clarifications.
+
+Preserve unrelated work and all paper-only protections. Do not connect to external systems or transmit broker orders.
+
+## Implementation
+
+Before a behavior-sensitive change, add or identify a focused characterization/regression test demonstrating the behavior that must remain stable.
+
+For each approved finding:
+
+1. inspect all known consumers;
+2. make the smallest approved change;
+3. repair affected references;
+4. run focused verification;
+5. update the audit finding with its final disposition and evidence.
+
+Comments should explain only non-obvious:
+
+* invariants;
+* units/signs;
+* timing rules;
+* safety rules;
+* external API constraints.
+
+Do not add comments that merely restate code.
+
+Do not perform speculative performance optimization. A performance change requires an existing reproducible baseline measurement and an equivalent post-change measurement.
+
+## Technical documentation
+
+Create:
+
+`docs/TECHNICAL_DOCUMENTATION.md`
+
+This becomes the primary onboarding entry point for a capable contributor unfamiliar with the repository.
+
+Use progressive detail:
+
+### Quick start
+
+* project purpose;
+* paper-only boundary;
+* environment setup;
+* important commands;
+* high-level architecture.
+
+### System reference
+
+* directory/component ownership;
+* data flow;
+* canonical data and provenance;
+* strategy → sizing/risk → execution flow;
+* backtest flow and outputs;
+* Agent/paper execution lifecycle;
+* testing and failure handling.
+
+### Technical reference
+
+* relevant equations, units, signs, and timing conventions;
+* configuration and dependency requirements;
+* external API/package facts that runtime behavior depends on;
+* troubleshooting;
+* glossary.
+
+Summarize and link to authoritative contracts instead of duplicating them. Record source/version/verification dates only for volatile external facts actually relied upon by the project.
+
+## Final verification
+
+After all approved changes are complete:
+
+* run focused tests for every changed subsystem;
+* run the full approved repository suite;
+* run applicable schema/documentation checks;
+* search for broken references;
+* run secret checks;
+* run `git diff --check`;
+* run `git status --short`;
+* run every command presented as currently supported in `TECHNICAL_DOCUMENTATION.md`.
+
+Perform one fresh consolidated repository-quality review of the final diff.
+
+Add a specialist review only when the final changes affect:
+
+* equations/accounting;
+* broker safety;
+* data schemas/migrations; or
+* external API assumptions.
+
+Resolve actionable findings and rerun affected verification.
+
+Stop at the MG6A completion sign-off with:
+
+* audit dispositions;
+* approved-versus-actual cleanup summary;
+* verification evidence;
+* `docs/TECHNICAL_DOCUMENTATION.md`;
+* remaining deferred issues.
+
 
 ## Phase 7 prompts
 
