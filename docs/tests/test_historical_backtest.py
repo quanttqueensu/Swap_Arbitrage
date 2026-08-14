@@ -75,6 +75,22 @@ class HistoricalEventTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "positive price/DV01 and ticker"):
             _events_from_frame(invalid)
 
+    # Mutation caught: allowing active swap or Treasury contracts through with
+    # a missing or nonpositive per-contract DV01.
+    def test_active_contracts_require_positive_swap_and_treasury_dv01(self):
+        for column, value in (
+            ("swap_dv01_per_contract_2y", float("nan")),
+            ("swap_dv01_per_contract_2y", 0.0),
+            ("treasury_dv01_per_contract_2y", float("nan")),
+            ("treasury_dv01_per_contract_2y", 0.0),
+        ):
+            with self.subTest(column=column, value=value):
+                invalid = historical_frame()
+                invalid.loc[1, column] = value
+
+                with self.assertRaisesRegex(RuntimeError, "positive price/DV01 and ticker"):
+                    _events_from_frame(invalid)
+
     def test_conflicting_duplicate_instruments_fail_closed(self):
         conflicting = historical_frame()
         conflicting["swap_ticker_5y"] = "YITH24"
@@ -191,6 +207,19 @@ class HistoricalRunTests(unittest.TestCase):
             "last_pre_roll_mark_zero_return",
         )
         self.assertTrue(any("roll" in item.reason_code for item in result.decisions))
+        self.assertEqual(result.daily[3].gross_pnl_usd, D("0"))
+        roll_fills = [
+            item for item in result.fills
+            if item.decision_id == "historical-2024-01-04-2y"
+        ]
+        self.assertEqual(
+            [
+                (item.instrument_id, item.filled_quantity_contracts, item.transaction_cost_usd)
+                for item in roll_fills
+            ],
+            [("YITH24", 2, D("34.000")), ("YITM24", 2, D("34.000"))],
+        )
+        self.assertEqual(result.daily[3].transaction_cost_usd, D("68.000"))
 
     # Mutation caught: opening a replacement leg before every retiring leg closes.
     def test_roll_closes_retiring_contracts_before_opening_replacements(self):

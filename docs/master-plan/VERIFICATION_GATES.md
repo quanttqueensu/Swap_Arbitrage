@@ -150,7 +150,7 @@ python -m unittest discover -s agents/agent_0/tests -v
 python -m data_pipeline.historical_data.historical_data_builder --self-check
 python signal_pipeline.py --self-check
 python risk_pipeline.py --self-check
-python backtest_engine.py --self-check
+python -m backtesting --self-check
 git diff --check
 git status --short
 ```
