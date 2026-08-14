@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
+import hashlib
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -308,6 +310,38 @@ def _upsert(items: tuple[tuple[str, str], ...], key: str, value: str) -> tuple[t
     return tuple(output)
 
 
+def _historical_input_sha256(event_input_sha256: str, frame: pd.DataFrame) -> str:
+    rows = []
+    for _, row in frame.sort_values("date").iterrows():
+        blocked = row.get("risk_allowed", 1) != 1
+        targets = {}
+        for maturity in MATURITIES:
+            m = clean_maturity(maturity)
+            targets[m] = {}
+            for leg in ("swap", "treasury"):
+                ticker_value = row.get(f"{leg}_ticker_{m}", "")
+                ticker = "" if pd.isna(ticker_value) else str(ticker_value).strip()
+                targets[m][leg] = {
+                    "ticker": ticker,
+                    "quantity_contracts": int(
+                        row.get(f"{leg}_futures_contracts_rounded_{m}", 0)
+                    ),
+                }
+        rows.append({
+            "date": pd.Timestamp(row["date"]).date().isoformat(),
+            "risk_blocked": bool(blocked),
+            "risk_reason_codes": [
+                item for item in str(row.get("risk_block_reason", "")).split("|") if item
+            ],
+            "targets": targets,
+        })
+    encoded = json.dumps({
+        "engine_event_sha256": event_input_sha256,
+        "historical_strategy_risk_inputs": rows,
+    }, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def run_historical_backtest(
     run_id: str,
     output_root: Path,
@@ -342,9 +376,17 @@ def run_historical_backtest(
     )
     risk_allowed = selected["risk_allowed"] if "risk_allowed" in selected else pd.Series(1, index=selected.index)
     blocked_days = int(risk_allowed.ne(1).sum())
+    manifest = result.manifest
+    for key, value in (
+        ("maturity_scope", "historical_signal_risk_proxy"),
+        ("evidence_class", "historical_research_proxy_only"),
+        ("input_sha256", _historical_input_sha256(dict(result.manifest)["input_sha256"], selected)),
+        ("risk_blocked_days", str(blocked_days)),
+    ):
+        manifest = _upsert(manifest, key, value)
     result = replace(
         result,
-        manifest=_upsert(result.manifest, "risk_blocked_days", str(blocked_days)) + (
+        manifest=manifest + (
             ("historical_input_mode", "legacy_signal_risk_adapter"),
             ("historical_roll_mark_policy", "last_pre_roll_mark_zero_return"),
         ),

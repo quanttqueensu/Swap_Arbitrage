@@ -173,6 +173,14 @@ The output files are checked against the required backtest data formats before b
 * assumptions used
 * any missing data
 
+For historical runs, `input_sha256` deterministically combines the replayed
+market events with the selected target quantities and upstream risk state/reason
+codes. Their manifest labels are `historical_signal_risk_proxy` and
+`historical_research_proxy_only`: they identify a legacy signal/risk research
+adapter, not complete canonical coverage, profitability evidence, or production
+readiness. The standalone engine keeps its synthetic-fixture labels for its
+synthetic replay contract.
+
 If market data is missing while a position is open, the backtest uses the data
 that is still available and records exactly what was missing. Contract rolls
 retain the previous mark with the explicit

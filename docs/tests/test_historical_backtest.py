@@ -122,6 +122,45 @@ class HistoricalEventTests(unittest.TestCase):
 
 
 class HistoricalRunTests(unittest.TestCase):
+    def _manifest_for(self, frame: pd.DataFrame) -> dict[str, str]:
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=frame):
+                result, _ = run_historical_backtest("historical-provenance", Path(directory))
+        return dict(result.manifest)
+
+    # Mutation caught: deriving historical provenance from replay market events
+    # alone, leaving the selected target quantities unauditable.
+    def test_historical_target_changes_change_input_provenance(self):
+        baseline = self._manifest_for(historical_frame())
+        changed_target = historical_frame()
+        changed_target.loc[1, "swap_futures_contracts_rounded_2y"] = 3
+        changed = self._manifest_for(changed_target)
+
+        self.assertNotEqual(baseline["input_sha256"], changed["input_sha256"])
+
+    # Mutation caught: omitting the effective upstream risk state or its reason
+    # from the provenance of a historical replay.
+    def test_historical_risk_state_and_reason_change_input_provenance(self):
+        baseline = self._manifest_for(historical_frame())
+        blocked = historical_frame()
+        blocked.loc[1, "risk_allowed"] = 0
+        blocked.loc[1, "risk_block_reason"] = "portfolio:net_dv01_limit"
+        changed_state = self._manifest_for(blocked)
+        changed_reason = blocked.copy()
+        changed_reason.loc[1, "risk_block_reason"] = "freshness:market_data"
+        changed_reason = self._manifest_for(changed_reason)
+
+        self.assertNotEqual(baseline["input_sha256"], changed_state["input_sha256"])
+        self.assertNotEqual(changed_state["input_sha256"], changed_reason["input_sha256"])
+
+    # Mutation caught: retaining the synthetic engine labels on a historical
+    # signal/risk proxy replay.
+    def test_historical_manifest_uses_research_proxy_labels(self):
+        manifest = self._manifest_for(historical_frame())
+
+        self.assertEqual(manifest["maturity_scope"], "historical_signal_risk_proxy")
+        self.assertEqual(manifest["evidence_class"], "historical_research_proxy_only")
+
     # Mutation caught: deriving active backtest targets from proxy exposure
     # instead of the rounded swap contracts that drive executable orders.
     def test_rounded_swap_contracts_define_the_active_historical_target(self):
