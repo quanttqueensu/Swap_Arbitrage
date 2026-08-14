@@ -111,11 +111,13 @@ class FillRecord:
 class TradeRecord:
     trade_id: str
     decision_id: str
-    fill_time_utc: datetime
-    instrument_id: str
-    signed_quantity_contracts: int
-    execution_price_points: Decimal
-    transaction_cost_usd: Decimal
+    maturity: str
+    direction: int
+    opened_at_utc: datetime
+    closed_at_utc: datetime | None
+    gross_pnl_usd: Decimal
+    cost_usd: Decimal
+    net_pnl_usd: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +128,8 @@ class PositionRecord:
     mark_price_points: Decimal
     multiplier_usd_per_point: Decimal
     dv01_usd_per_bp: Decimal
+    average_cost_points: Decimal
+    realized_pnl_usd: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +152,17 @@ class _PendingOrder:
     remaining: int
     created_at_utc: datetime
     is_roll: bool
+
+
+@dataclass(slots=True)
+class _OpenTrade:
+    trade_id: str
+    decision_id: str
+    maturity: str
+    direction: int
+    opened_at_utc: datetime
+    gross_pnl_usd: Decimal = Decimal("0")
+    cost_usd: Decimal = Decimal("0")
 
 
 def _maps(event: ReplayEvent):
@@ -230,12 +245,20 @@ def run_backtest(
     fills: list[FillRecord] = []
     trades: list[TradeRecord] = []
     position_rows: list[PositionRecord] = []
+    average_costs: dict[str, Decimal] = {}
+    realized_pnl: dict[str, Decimal] = {}
+    decision_signals: dict[str, SignalDecision] = {}
+    open_trades: dict[str, _OpenTrade] = {}
+    instrument_trades: dict[str, str] = {}
+    decision_open_trades: dict[str, str] = {}
+    next_trade_number = 1
     equity = initial_equity_usd
     peak = equity
     previous_time: datetime | None = None
     previous_marks: dict[str, Decimal] = {}
     previous_multipliers: dict[str, Decimal] = {}
     missing_input_count = 0
+    missing_input_locations: set[tuple[str, str, str]] = set()
     risk_blocked_days = 0
 
     for event in replay:
@@ -246,26 +269,41 @@ def run_backtest(
         gross_pnl = Decimal("0")
         financing_cost = Decimal("0")
         event_missing: set[str] = set()
+        observation_date = timestamp.date().isoformat()
         if previous_time is not None:
             elapsed_days = Decimal((timestamp.date() - previous_time.date()).days)
             for instrument_id, quantity in positions.items():
                 if instrument_id in marks and instrument_id in previous_marks:
                     multiplier = multipliers.get(instrument_id, previous_multipliers.get(instrument_id))
                     if multiplier is not None:
-                        gross_pnl += (
+                        leg_pnl = (
                             Decimal(quantity)
                             * multiplier
                             * (marks[instrument_id] - previous_marks[instrument_id])
                         )
+                        gross_pnl += leg_pnl
+                        trade_id = instrument_trades.get(instrument_id)
+                        if trade_id in open_trades:
+                            open_trades[trade_id].gross_pnl_usd += leg_pnl
                     else:
                         event_missing.add(instrument_id)
+                        if instrument_id not in multipliers:
+                            missing_input_locations.add((observation_date, instrument_id, "current_multiplier"))
+                        if instrument_id not in previous_multipliers:
+                            missing_input_locations.add((observation_date, instrument_id, "previous_multiplier"))
                 else:
                     event_missing.add(instrument_id)
-                financing_cost += (
+                    field = "current_mark" if instrument_id not in marks else "previous_mark"
+                    missing_input_locations.add((observation_date, instrument_id, field))
+                leg_financing = (
                     Decimal(abs(quantity))
                     * assumptions.financing_usd_per_contract_day
                     * elapsed_days
                 )
+                financing_cost += leg_financing
+                trade_id = instrument_trades.get(instrument_id)
+                if trade_id in open_trades:
+                    open_trades[trade_id].cost_usd += leg_financing
         still_pending: list[_PendingOrder] = []
         for queued in pending:
             intent_value = queued.intent
@@ -292,6 +330,10 @@ def run_backtest(
                 continue
             if intent_value.instrument_id not in marks or intent_value.instrument_id not in multipliers:
                 event_missing.add(intent_value.instrument_id)
+                if intent_value.instrument_id not in marks:
+                    missing_input_locations.add((observation_date, intent_value.instrument_id, "execution_mark"))
+                if intent_value.instrument_id not in multipliers:
+                    missing_input_locations.add((observation_date, intent_value.instrument_id, "execution_multiplier"))
                 still_pending.append(queued)
                 continue
             available = limits.get(intent_value.instrument_id, queued.remaining)
@@ -332,24 +374,102 @@ def run_backtest(
             event_cost += transaction_cost
             if filled:
                 signed = filled if intent_value.side is OrderSide.BUY else -filled
-                positions[intent_value.instrument_id] = positions.get(intent_value.instrument_id, 0) + signed
-                if positions[intent_value.instrument_id] == 0:
-                    del positions[intent_value.instrument_id]
-                trades.append(TradeRecord(
-                    f"trade-{len(trades) + 1}",
-                    intent_value.decision_id,
-                    timestamp,
-                    intent_value.instrument_id,
-                    signed,
-                    execution,
-                    transaction_cost,
-                ))
+                instrument_id = intent_value.instrument_id
+                old_quantity = positions.get(instrument_id, 0)
+                old_average = average_costs.get(instrument_id, execution)
+                closing_quantity = (
+                    min(abs(old_quantity), filled)
+                    if old_quantity and old_quantity * signed < 0
+                    else 0
+                )
+                opening_quantity = filled - closing_quantity
+                unit_cost = transaction_cost / Decimal(filled)
+                signal = decision_signals[intent_value.decision_id]
+                old_trade_id = instrument_trades.get(instrument_id)
+                if closing_quantity and old_trade_id in open_trades:
+                    open_trades[old_trade_id].cost_usd += Decimal(closing_quantity) * unit_cost
+
+                opening_trade_id = None
+                if opening_quantity:
+                    if old_quantity and old_quantity * signed > 0 and old_trade_id in open_trades:
+                        opening_trade_id = old_trade_id
+                    elif signal.new_state.value:
+                        if signal.new_state == signal.prior_state:
+                            opening_trade_id = next(
+                                (
+                                    trade_id
+                                    for trade_id, trade in open_trades.items()
+                                    if trade.maturity == signal.maturity
+                                    and trade.direction == signal.direction.value
+                                ),
+                                None,
+                            )
+                        else:
+                            opening_trade_id = decision_open_trades.get(signal.decision_id)
+                            if opening_trade_id not in open_trades:
+                                opening_trade_id = None
+                        if opening_trade_id is None:
+                            opening_trade_id = f"trade-{next_trade_number}"
+                            next_trade_number += 1
+                            open_trades[opening_trade_id] = _OpenTrade(
+                                opening_trade_id,
+                                signal.decision_id,
+                                signal.maturity,
+                                signal.direction.value,
+                                timestamp,
+                            )
+                            decision_open_trades[signal.decision_id] = opening_trade_id
+                        open_trades[opening_trade_id].cost_usd += (
+                            Decimal(opening_quantity) * unit_cost
+                        )
+
+                if closing_quantity:
+                    realized_pnl[instrument_id] = realized_pnl.get(instrument_id, Decimal("0")) + (
+                        Decimal(closing_quantity)
+                        * (execution - old_average)
+                        * multiplier
+                        * (Decimal("1") if old_quantity > 0 else Decimal("-1"))
+                    )
+                new_quantity = old_quantity + signed
+                if not old_quantity or old_quantity * signed > 0:
+                    average_costs[instrument_id] = (
+                        Decimal(abs(old_quantity)) * old_average
+                        + Decimal(filled) * execution
+                    ) / Decimal(abs(new_quantity))
+                elif not new_quantity:
+                    average_costs.pop(instrument_id, None)
+                elif old_quantity * new_quantity < 0:
+                    average_costs[instrument_id] = execution
+                positions[instrument_id] = new_quantity
+                if not new_quantity:
+                    del positions[instrument_id]
+                    instrument_trades.pop(instrument_id, None)
+                elif old_quantity and old_quantity * new_quantity > 0 and old_trade_id:
+                    instrument_trades[instrument_id] = old_trade_id
+                elif opening_trade_id:
+                    instrument_trades[instrument_id] = opening_trade_id
                 if intent_value.instrument_id in limits:
                     limits[intent_value.instrument_id] -= filled
             if status == "partial":
                 queued.remaining = remaining
                 still_pending.append(queued)
         pending = still_pending
+
+        assigned_trade_ids = set(instrument_trades.values())
+        for trade_id, active in tuple(open_trades.items()):
+            if trade_id not in assigned_trade_ids:
+                trades.append(TradeRecord(
+                    active.trade_id,
+                    active.decision_id,
+                    active.maturity,
+                    active.direction,
+                    active.opened_at_utc,
+                    timestamp,
+                    active.gross_pnl_usd,
+                    active.cost_usd,
+                    active.gross_pnl_usd - active.cost_usd,
+                ))
+                del open_trades[trade_id]
 
         snapshot = replace(
             event.snapshot,
@@ -370,6 +490,7 @@ def run_backtest(
         decision_by_id = {item.decision_id: item for item in result.decisions}
         if len(decision_by_id) != len(result.decisions):
             raise ValueError("decision IDs must be unique within an event")
+        decision_signals.update(decision_by_id)
         risk_by_maturity = dict(result.risk_decisions)
         if len(risk_by_maturity) != len(result.risk_decisions):
             raise ValueError("risk decisions must have unique maturities")
@@ -384,7 +505,7 @@ def run_backtest(
                 or signal.maturity in risk_by_maturity and not risk_by_maturity[signal.maturity].allowed
             ):
                 raise ValueError("intent must match an allowed current decision and run")
-            order_id = f"{intent_value.decision_id}:{index}"
+            order_id = f"order-{len(orders) + 1}"
             pending.append(_PendingOrder(
                 order_id,
                 intent_value,
@@ -408,6 +529,7 @@ def run_backtest(
                 contract = contracts.get(instrument_id)
                 if contract is None:
                     event_missing.add(instrument_id)
+                    missing_input_locations.add((observation_date, instrument_id, "contract_metadata"))
                     continue
                 exposure = Decimal(quantity) * contract.dv01_usd_per_bp * contract.rate_sensitivity_sign
                 gross_dv01 += exposure.copy_abs()
@@ -425,6 +547,15 @@ def run_backtest(
                 net_dv01,
             ))
         for instrument_id, quantity in sorted(positions.items()):
+            if instrument_id not in marks:
+                event_missing.add(instrument_id)
+                missing_input_locations.add((observation_date, instrument_id, "current_mark"))
+            if instrument_id not in multipliers:
+                event_missing.add(instrument_id)
+                missing_input_locations.add((observation_date, instrument_id, "current_multiplier"))
+            if instrument_id not in contracts:
+                event_missing.add(instrument_id)
+                missing_input_locations.add((observation_date, instrument_id, "contract_metadata"))
             if instrument_id in marks and instrument_id in multipliers and instrument_id in contracts:
                 position_rows.append(PositionRecord(
                     timestamp,
@@ -433,12 +564,27 @@ def run_backtest(
                     marks[instrument_id],
                     multipliers[instrument_id],
                     contracts[instrument_id].dv01_usd_per_bp,
+                    average_costs[instrument_id],
+                    realized_pnl.get(instrument_id, Decimal("0")),
                 ))
 
         missing_input_count += len(event_missing)
         previous_time = timestamp
         previous_marks = marks
         previous_multipliers = multipliers
+
+    for active in sorted(open_trades.values(), key=lambda item: (item.opened_at_utc, item.trade_id)):
+        trades.append(TradeRecord(
+            active.trade_id,
+            active.decision_id,
+            active.maturity,
+            active.direction,
+            active.opened_at_utc,
+            None,
+            active.gross_pnl_usd,
+            active.cost_usd,
+            active.gross_pnl_usd - active.cost_usd,
+        ))
 
     total_transaction_cost = sum((row.transaction_cost_usd for row in daily_rows), Decimal("0"))
     total_financing_cost = sum((row.financing_cost_usd for row in daily_rows), Decimal("0"))
@@ -463,8 +609,9 @@ def run_backtest(
         ("run_id", run_id),
         ("schema_version", "p40.backtest.v1"),
         ("mode", "naive"),
-        ("maturity_scope", "complete_2y_5y"),
+        ("maturity_scope", "synthetic_fixture"),
         ("evidence_class", "synthetic_mechanics_only"),
+        ("missing_input_locations", ";".join(":".join(item) for item in sorted(missing_input_locations))),
         ("window_policy", "start_flat"),
         ("input_sha256", _input_sha256(replay)),
         ("coverage_start_date", daily_rows[0].observation_date),
@@ -475,7 +622,7 @@ def run_backtest(
         ("fill_row_count", str(len(fills))),
         ("trade_row_count", str(len(trades))),
         ("position_row_count", str(len(position_rows))),
-        ("summary_row_count", str(len(summary))),
+        ("summary_row_count", "1"),
         ("strategy_version", ",".join(strategy_versions)),
         ("configuration_version", ",".join(configuration_versions)),
         ("bid_ask_half_spread_points", format(assumptions.bid_ask_half_spread_points, "f")),

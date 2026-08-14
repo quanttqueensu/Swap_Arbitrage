@@ -584,6 +584,9 @@ Every writer validates before replacing its output:
   execution/cost assumptions differ.
 - Missing realistic data never becomes zero cost. It blocks the trade or uses
   an approved conservative fallback recorded in results.
+- Synthetic mechanics runs retain available-leg accounting when a held input is
+  missing. Their manifest records each missing `date:instrument_id:field` location;
+  any such run is diagnostic mechanics evidence, not complete economic evidence.
 - Output includes inactive and risk-blocked dates so denominator choices are
   auditable.
 - Parameter sweeps report the full grid, not only the best run.

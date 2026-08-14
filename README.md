@@ -1,5 +1,8 @@
 # Swap Arbitrage
 
+Start with [Technical Documentation](docs/TECHNICAL_DOCUMENTATION.md) for the
+paper-only boundary, architecture, verified commands, and contributor runbook.
+
 ## Python environment
 
 Python 3.12 is the supported version for this repository. From PowerShell at

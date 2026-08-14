@@ -1,4 +1,5 @@
 import csv
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
@@ -6,11 +7,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from data_pipeline.contracts import SCHEMAS, validate_csv
 from backtesting import (
     NAIVE_ASSUMPTIONS,
     NaiveAssumptions,
     ReplayEvent,
     StrategyResult,
+    TradeRecord,
     run_backtest,
     write_results,
 )
@@ -158,6 +161,9 @@ class NaiveReplayTests(unittest.TestCase):
             [(row.instrument_id, row.quantity_contracts) for row in result.positions],
             [("YITH27", 2)],
         )
+        self.assertEqual(len(result.trades), 1)
+        self.assertIsNone(result.trades[0].closed_at_utc)
+        self.assertEqual(result.trades[0].cost_usd, D("32.000"))
 
     # Mutation caught: marking today's fills for yesterday or omitting financing/costs.
     def test_entry_exit_accounting_identity_equity_and_drawdown(self):
@@ -250,6 +256,107 @@ class NaiveReplayTests(unittest.TestCase):
             [(row.instrument_id, row.quantity_contracts) for row in result.positions if row.timestamp_utc == when(5)],
             [("YITH27", -2), ("ZTH27", 1)],
         )
+        self.assertEqual([row.direction for row in result.trades], [1, -1])
+        self.assertEqual(result.trades[0].closed_at_utc, when(5))
+        self.assertIsNone(result.trades[1].closed_at_utc)
+        self.assertEqual(
+            sum((row.cost_usd for row in result.trades), D("0")),
+            D("144.600"),
+        )
+
+    # Mutation caught: opening a zero-exposure reverse trade after only the closing orders fill.
+    def test_reversal_with_rejected_opening_orders_has_no_phantom_trade(self):
+        def strategy(snapshot):
+            timestamp = snapshot.decision_time_utc
+            if timestamp == when(2):
+                signal = decision(timestamp)
+                intents = (
+                    intent(timestamp, "YITH27", OrderSide.BUY, 2),
+                    intent(timestamp, "ZTH27", OrderSide.SELL, 1),
+                )
+            elif timestamp == when(4):
+                signal = decision(
+                    timestamp,
+                    "decision-2",
+                    "exit_traditional_enter_reverse",
+                    PositionState.TRADITIONAL,
+                    PositionState.REVERSE,
+                    TradeDirection.REVERSE,
+                )
+                intents = (
+                    intent(timestamp, "YITH27", OrderSide.SELL, 2, "decision-2"),
+                    intent(timestamp, "ZTH27", OrderSide.BUY, 1, "decision-2"),
+                    intent(timestamp, "YITH27", OrderSide.SELL, 2, "decision-2"),
+                    intent(timestamp, "ZTH27", OrderSide.BUY, 1, "decision-2"),
+                )
+            else:
+                return StrategyResult()
+            return StrategyResult((signal,), (("2Y", allowed_risk()),), intents)
+
+        result = run_backtest(
+            RUN_ID,
+            (
+                event(1),
+                event(2),
+                event(3),
+                event(4),
+                event(5, fill_limits=(("YITH27", 2), ("ZTH27", 1))),
+            ),
+            strategy,
+        )
+
+        self.assertFalse(any(row.timestamp_utc == when(5) for row in result.positions))
+        self.assertEqual([fill.status for fill in result.fills[-4:]], [
+            "filled", "filled", "rejected", "rejected",
+        ])
+        self.assertEqual(len(result.trades), 1)
+        self.assertEqual(result.trades[0].closed_at_utc, when(5))
+
+    # Mutation caught: assigning both sides' P&L to the old trade during a partial reversal.
+    def test_partial_reversal_attributes_each_held_instrument_to_its_trade(self):
+        def strategy(snapshot):
+            timestamp = snapshot.decision_time_utc
+            if timestamp == when(2):
+                signal = decision(timestamp)
+                intents = (
+                    intent(timestamp, "YITH27", OrderSide.BUY, 2),
+                    intent(timestamp, "ZTH27", OrderSide.SELL, 2),
+                )
+            elif timestamp == when(4):
+                signal = decision(
+                    timestamp,
+                    "decision-2",
+                    "exit_traditional_enter_reverse",
+                    PositionState.TRADITIONAL,
+                    PositionState.REVERSE,
+                    TradeDirection.REVERSE,
+                )
+                intents = (
+                    intent(timestamp, "YITH27", OrderSide.SELL, 4, "decision-2"),
+                    intent(timestamp, "ZTH27", OrderSide.BUY, 4, "decision-2"),
+                )
+            else:
+                return StrategyResult()
+            return StrategyResult((signal,), (("2Y", allowed_risk()),), intents)
+
+        result = run_backtest(
+            RUN_ID,
+            (
+                event(1),
+                event(2),
+                event(3),
+                event(4),
+                event(5, fill_limits=(("YITH27", 4), ("ZTH27", 1))),
+                event(6, "99", "101"),
+            ),
+            strategy,
+        )
+
+        self.assertEqual([row.direction for row in result.trades], [1, -1])
+        self.assertEqual(result.trades[0].closed_at_utc, when(6))
+        self.assertIsNone(result.trades[1].closed_at_utc)
+        self.assertEqual(result.trades[0].gross_pnl_usd, D("-1000"))
+        self.assertEqual(result.trades[1].gross_pnl_usd, D("2000"))
 
     # Mutation caught: treating roll close/open as ordinary fills without both roll charges.
     def test_roll_close_and_open_charge_each_filled_contract(self):
@@ -286,6 +393,9 @@ class NaiveReplayTests(unittest.TestCase):
             [(row.instrument_id, row.quantity_contracts) for row in result.positions if row.timestamp_utc == when(5)],
             [("YITM27", 2), ("ZTH27", -1)],
         )
+        self.assertEqual(len(result.trades), 1)
+        self.assertIsNone(result.trades[0].closed_at_utc)
+        self.assertEqual(result.trades[0].cost_usd, D("116.600"))
 
     # Mutation caught: leaking pre-window state or revising prior rows after future data arrives.
     def test_date_window_starts_flat_and_future_data_cannot_revise_history(self):
@@ -347,9 +457,21 @@ class NaiveReplayTests(unittest.TestCase):
         )
         result = run_backtest(RUN_ID, (event(1), event(2), event(3), missing_event), strategy)
         summary = dict(result.summary)
+        missing_day = result.daily[-1]
         self.assertEqual(summary["risk_blocked_days"], "1")
         self.assertEqual(summary["missing_input_count"], "1")
+        self.assertEqual(missing_day.gross_pnl_usd, D("0"))
+        self.assertEqual(missing_day.financing_cost_usd, D("0.10"))
+        self.assertEqual(
+            dict(result.manifest)["missing_input_locations"],
+            ";".join((
+                "2026-01-04:YITH27:contract_metadata",
+                "2026-01-04:YITH27:current_mark",
+                "2026-01-04:YITH27:current_multiplier",
+            )),
+        )
         self.assertEqual(dict(result.manifest)["evidence_class"], "synthetic_mechanics_only")
+        self.assertEqual(dict(result.manifest)["maturity_scope"], "synthetic_fixture")
 
     # Mutation caught: granting the full event capacity separately to sibling orders.
     def test_fill_capacity_is_shared_by_same_instrument_orders(self):
@@ -444,6 +566,148 @@ class NaiveReplayTests(unittest.TestCase):
 
 
 class NaiveReportTests(unittest.TestCase):
+    # Mutation caught: hashing only a version label while different run assumptions stay invisible.
+    def test_decision_config_hash_fingerprints_effective_run_configuration(self):
+        def strategy(snapshot):
+            signal = decision(snapshot.decision_time_utc)
+            return StrategyResult((signal,), (("2Y", allowed_risk()),), ())
+
+        first = run_backtest(RUN_ID, (event(1),), strategy)
+        second = run_backtest(
+            RUN_ID,
+            (event(1),),
+            strategy,
+            assumptions=replace(NAIVE_ASSUMPTIONS, commission_usd_per_contract=D("2")),
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first_dir = write_results(first, root / "first")
+            second_dir = write_results(second, root / "second")
+            with (first_dir / "decisions.csv").open(newline="", encoding="utf-8") as handle:
+                first_hash = next(csv.DictReader(handle))["config_hash"]
+            with (second_dir / "decisions.csv").open(newline="", encoding="utf-8") as handle:
+                second_hash = next(csv.DictReader(handle))["config_hash"]
+
+        self.assertNotEqual(first_hash, second_hash)
+
+    # Mutation caught: writing multi-maturity trades in close order instead of canonical open order.
+    def test_trade_report_sorts_by_open_time_before_validation(self):
+        result = run_backtest(RUN_ID, (event(1), event(2)), lambda snapshot: StrategyResult())
+        later_open = TradeRecord(
+            "trade-2", "decision-2", "5Y", 1, when(3), when(4), D("0"), D("0"), D("0")
+        )
+        earlier_open = TradeRecord(
+            "trade-1", "decision-1", "2Y", 1, when(2), when(5), D("0"), D("0"), D("0")
+        )
+        result = replace(result, trades=(later_open, earlier_open))
+
+        with TemporaryDirectory() as temp_dir:
+            run_dir = write_results(result, Path(temp_dir))
+            with (run_dir / "trades.csv").open(newline="", encoding="utf-8") as handle:
+                self.assertEqual(
+                    [row["trade_id"] for row in csv.DictReader(handle)],
+                    ["trade-1", "trade-2"],
+                )
+
+    # Mutation caught: validating reports against their own dataclasses instead of the approved catalog.
+    def test_generated_reports_match_approved_schema_catalog(self):
+        def strategy(snapshot):
+            timestamp = snapshot.decision_time_utc
+            if timestamp == when(2):
+                signal = decision(timestamp)
+                intents = (
+                    intent(timestamp, "YITH27", OrderSide.BUY, 2),
+                    intent(timestamp, "ZTH27", OrderSide.SELL, 1),
+                )
+            elif timestamp == when(4):
+                signal = decision(
+                    timestamp,
+                    "decision-2",
+                    "exit_traditional",
+                    PositionState.TRADITIONAL,
+                    PositionState.FLAT,
+                    TradeDirection.FLAT,
+                )
+                intents = (
+                    intent(timestamp, "YITH27", OrderSide.SELL, 2, "decision-2"),
+                    intent(timestamp, "ZTH27", OrderSide.BUY, 1, "decision-2"),
+                )
+            else:
+                return StrategyResult()
+            return StrategyResult((signal,), (("2Y", allowed_risk()),), intents)
+
+        result = run_backtest(
+            RUN_ID,
+            (event(1), event(2), event(3), event(4, "100.1", "99.98"), event(5, "100.1", "99.98")),
+            strategy,
+        )
+        schema_ids = {
+            "daily.csv": "backtest_daily",
+            "decisions.csv": "backtest_decisions",
+            "orders.csv": "backtest_orders",
+            "fills.csv": "backtest_fills",
+            "trades.csv": "backtest_trades",
+            "positions.csv": "backtest_positions",
+            "summary.csv": "backtest_summary",
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            run_dir = write_results(result, Path(temp_dir))
+            for filename, schema_id in schema_ids.items():
+                with self.subTest(filename=filename):
+                    self.assertGreaterEqual(validate_csv(SCHEMAS[schema_id], run_dir / filename), 0)
+
+            with (run_dir / "fills.csv").open(newline="", encoding="utf-8") as handle:
+                fill_rows = list(csv.DictReader(handle))
+            self.assertEqual([row["quantity"] for row in fill_rows], ["2", "-1", "-2", "1"])
+            self.assertEqual([row["commission_usd"] for row in fill_rows], ["2", "1", "2", "1"])
+
+            with (run_dir / "trades.csv").open(newline="", encoding="utf-8") as handle:
+                trade_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(trade_rows), 1)
+            self.assertEqual({
+                key: trade_rows[0][key]
+                for key in (
+                    "trade_id",
+                    "decision_id",
+                    "maturity",
+                    "direction",
+                    "opened_at_utc",
+                    "closed_at_utc",
+                )
+            }, {
+                "trade_id": "trade-1",
+                "decision_id": "decision-1",
+                "maturity": "2Y",
+                "direction": "1",
+                "opened_at_utc": "2026-01-03T21:00:00Z",
+                "closed_at_utc": "2026-01-05T21:00:00Z",
+            })
+            self.assertEqual(D(trade_rows[0]["gross_pnl_usd"]), D("220.00"))
+            self.assertEqual(D(trade_rows[0]["cost_usd"]), D("96.60"))
+            self.assertEqual(D(trade_rows[0]["net_pnl_usd"]), D("123.40"))
+
+            with (run_dir / "positions.csv").open(newline="", encoding="utf-8") as handle:
+                position_rows = {
+                    (row["observation_date"], row["instrument_id"]): row
+                    for row in csv.DictReader(handle)
+                }
+            day_four_yit = position_rows[("2026-01-04", "YITH27")]
+            day_four_zt = position_rows[("2026-01-04", "ZTH27")]
+            self.assertEqual(D(day_four_yit["market_value_usd"]), D("200200"))
+            self.assertEqual(D(day_four_yit["unrealized_pnl_usd"]), D("170"))
+            self.assertEqual(D(day_four_zt["market_value_usd"]), D("-99980"))
+            self.assertEqual(D(day_four_zt["unrealized_pnl_usd"]), D("5"))
+
+            with (run_dir / "summary.csv").open(newline="", encoding="utf-8") as handle:
+                summary_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(summary_rows), 1)
+            self.assertEqual(summary_rows[0]["run_id"], RUN_ID)
+            self.assertEqual(summary_rows[0]["row_count"], "5")
+            self.assertEqual(summary_rows[0]["trade_count"], "1")
+            self.assertEqual(D(summary_rows[0]["net_pnl_usd"]), D("123.40"))
+
     # Mutation caught: widening daily.csv, omitting an artifact, or making reruns nondeterministic.
     def test_writes_exact_validated_csv_set_deterministically(self):
         result = run_backtest(RUN_ID, (event(1), event(2)), lambda snapshot: StrategyResult())
@@ -478,8 +742,10 @@ class NaiveReportTests(unittest.TestCase):
                 manifest_rows = list(csv.DictReader(handle))
                 manifest = {row["key"]: row["value"] for row in manifest_rows}
             self.assertEqual(manifest["schema_version"], "p40.backtest.v1")
+            self.assertEqual(manifest["maturity_scope"], "synthetic_fixture")
+            self.assertNotIn("complete_2y_5y", manifest.values())
             self.assertEqual(manifest["daily_row_count"], "2")
-            self.assertEqual(manifest["summary_row_count"], "11")
+            self.assertEqual(manifest["summary_row_count"], "1")
             self.assertEqual(manifest["manifest_row_count"], str(len(manifest_rows)))
             self.assertEqual(manifest["coverage_start_date"], "2026-01-01")
             self.assertEqual(
