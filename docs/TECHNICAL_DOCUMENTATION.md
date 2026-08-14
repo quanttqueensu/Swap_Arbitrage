@@ -30,7 +30,7 @@ python -m unittest discover -s agents/agent_0/tests -v
 python -m compileall -q backtesting strategy data_pipeline agents/agent_0 docs/tests
 python signal_pipeline.py --self-check
 python risk_pipeline.py --self-check
-python backtest_engine.py --self-check
+python -m backtesting --self-check
 ```
 
 The full suite imports `ib_insync` to prove the pinned class is available, but
@@ -61,8 +61,10 @@ validated backtest CSVs
 IBKR paper session -> IbkrPaperRecorder -> validated paper CSVs
 IBKR paper session <- Agent 0 random policy/manual operator
 
-backtest run order:
-historical_data_builder -> signal_pipeline -> risk_pipeline -> backtest_engine
+maintained historical backtest flow:
+historical_data_builder -> signal_pipeline -> risk_pipeline
+    -> backtesting.historical -> backtesting.engine -> backtesting.reports
+    -> data/results/backtests/<run-id>/{manifest,daily,decisions,orders,fills,trades,positions,summary}.csv
 ```
 
 ## System reference
@@ -81,7 +83,9 @@ historical_data_builder -> signal_pipeline -> risk_pipeline -> backtest_engine
 | `data_pipeline/contracts.py`               | Defines and validates required data formats                              |
 | `data_pipeline/historical_data/`           | Downloads, cleans, and organizes historical market data                  |
 | `data_pipeline/live_data_pipeline/`        | Records IBKR paper quotes, orders, fills, and positions                  |
-| `backtesting/`                             | Simulates trades and calculates backtest results                         |
+| `backtesting/engine.py`                    | Sole simulation and accounting engine                                    |
+| `backtesting/historical.py`                | Adapts existing historical signal/risk output into causal replay events and writes canonical results. |
+| `backtesting/__main__.py`                  | Provides the single `python -m backtesting` CLI and offline self-check. |
 | `agents/agent_0/`                          | Runs the random weekly paper-trading experiment                          |
 | `docs/tests/`                              | Tests that the strategy and data behave as expected                      |
 | `docs/verification/`                       | Stores results and evidence from previous verification tests             |
@@ -115,12 +119,22 @@ Downloading the data and formatting it are kept separate. This allows tests to u
 
 If required data is invalid, missing, or stale, the strategy will not create a new trade. Risk limits such as DV01, available capacity, losses, drawdowns, margin, broker connection, reconciliation, and contract-roll restrictions can also block trading. This applies primarily for back-testing but will still occur for live.
 
-### Backtest flow and outputs
+### Historical backtest flow and outputs
 
-`backtesting.run_backtest` takes a run ID, a non-empty ordered sequence of
-typed `ReplayEvent` values, and a strategy callable. Optional start and end
-dates filter that supplied replay; it does not load historical data itself.
-For each event, it:
+The one maintained historical backtest command is:
+
+```powershell
+python -m backtesting --start auto --end auto
+```
+
+`backtesting.historical.run_historical_backtest` loads existing historical
+signal/risk output, adapts it into typed `ReplayEvent` values, runs the sole
+simulation/accounting engine, and writes canonical results. `--refresh-signals`
+is the only flag that rebuilds upstream signal/risk data. `--run-id`,
+`--output-root`, `--initial-equity`, and the cost flags make a run explicit;
+`--self-check` is offline.
+
+For each event, `backtesting.engine.run_backtest`:
 
 1. updates the value of existing positions;
 2. applies financing costs;
@@ -130,7 +144,10 @@ For each event, it:
 6. saves any new orders to be processed later; and
 7. records P&L, positions, and other accounting information.
 
-A trade decision cannot be filled immediately on the same event where it is created. P&L is calculated using the position that was already held before the price changed.
+A decision at event `t` cannot fill until a later event. P&L at each event uses
+only the position already held while the mark changed, before newly eligible
+orders are processed. A requested `start`/`end` window is always `start_flat`:
+it begins with the selected initial equity and no inherited position or P&L.
 
 When the strategy reverses direction, the existing position is closed first and the new position is opened based on the amount that was actually filled. This keeps P&L from the old and new positions separate.
 
@@ -156,7 +173,13 @@ The output files are checked against the required backtest data formats before b
 * assumptions used
 * any missing data
 
-If market data is missing while a position is open, the backtest uses the data that is still available and records exactly what was missing. Runs with missing required data should be treated as diagnostic results rather than complete backtest performance results.
+If market data is missing while a position is open, the backtest uses the data
+that is still available and records exactly what was missing. Contract rolls
+retain the previous mark with the explicit
+`last_pre_roll_mark_zero_return` research proxy so a causal retirement order
+can fill without fabricating a cross-contract return. Runs with missing required
+data or this research proxy should be treated as diagnostic results rather than
+complete executable-performance evidence.
 
 The main backtest assumptions and example tests are stored in `docs/tests/test_naive_backtest.py`.
 
@@ -286,8 +309,9 @@ The project's own tests and paper-trading guards are the immediate runtime safet
 
 The current project still has several important limitations:
 
-- A complete historical run of the **typed strategy** still requires full canonical contract/maturity data and an adapter into the replay engine.
-- Realistic transaction costs, funding costs, roll costs, and liquidity require validated historical data.
+- The historical adapter currently consumes the existing CSV signal/risk output;
+  canonical CSV-to-shared-strategy adaptation remains incomplete.
+- Realistic executable contract-roll and liquidity calibration remain incomplete.
 
 
 ### Glossary
@@ -327,7 +351,7 @@ python -m pip install -r requirements.txt
 python -m pip check
 python signal_pipeline.py --self-check
 python risk_pipeline.py --self-check
-python backtest_engine.py --self-check
+python -m backtesting --self-check
 ```
 
 The self-checks validate deterministic examples only; they do not download data,
@@ -352,43 +376,22 @@ from existing raw data, run:
 python risk_pipeline.py --refresh-signals
 ```
 
-### 3. Run the legacy historical research backtest
+### 3. Run the historical backtest
 
-After the derived data exists, run a selected date range and record explicit
-cost assumptions rather than relying on the zero-cost defaults:
-
-```powershell
-python backtest_engine.py `
-  --start 2021-01-01 `
-  --end 2025-12-31 `
-  --initial-equity 1000000 `
-  --swap-cost-bps 1.0 `
-  --treasury-cost-per-contract 2.50 `
-  --label realistic_costs
-```
-
-Use `--start auto --end auto` to cover every available derived-data date. The
-run writes a scenario-named daily CSV in `data/raw_data/` and prints P&L,
-return, volatility, Sharpe/Sortino, and drawdown statistics. This is a daily,
-settlement-price research replay, not an executable trading simulation: it does
-not model timestamped order handling, bid/ask, slippage, financing, liquidity,
-or CTD-derived Treasury risk.
-
-### 4. Run the causal synthetic replay checks
-
-The newer `backtesting/` package verifies order timing, fills, partial fills,
-costs, financing, reversals, accounting, and validated reports through supplied
-synthetic `ReplayEvent` fixtures. Run its offline test suite with:
+After the derived historical input exists, run the canonical causal replay:
 
 ```powershell
-python -m unittest docs.tests.test_naive_backtest -v
+python -m backtesting --start auto --end auto
 ```
 
-It is mechanics evidence only. A canonical historical-data adapter and command
-line interface have not yet been implemented, so this package has no complete
-historical-data CLI.
+Each run writes `manifest.csv`, `daily.csv`, `decisions.csv`, `orders.csv`,
+`fills.csv`, `trades.csv`, `positions.csv`, and `summary.csv` under
+`data/results/backtests/<run-id>/`. Use `--refresh-signals` only when the
+upstream signal/risk data needs rebuilding. The replay models delayed fills,
+costs, financing, and roll handling, but its current data adapter and roll/
+liquidity calibration remain research limitations.
 
-### 5. Run Agent 0's paper-only weekly order experiment
+### 4. Run Agent 0's paper-only weekly order experiment
 
 Agent 0 is separate from the swap-arbitrage strategy: it creates a constrained,
 random weekly paper-order plan. Before running it, a human must complete the

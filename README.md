@@ -29,7 +29,8 @@ Repository organization:
   its historical builder also fetches and assembles source datasets.
   `data_pipeline/live_data_pipeline/` contains IBKR paper-data recording.
 - Root strategy stages are named by purpose: `signal_pipeline.py`,
-  `risk_pipeline.py`, `backtest_engine.py`, `clean_data.py`, and `config.py`.
+  `risk_pipeline.py`, `clean_data.py`, and `config.py`. The `backtesting/`
+  package runs the canonical historical replay.
 - `docs/` contains tests, audit tooling, research/project documentation, and
   historical conversation artifacts. Runtime code does not import from it.
 - `data/` contains only the durable raw-data, rates, futures, market, and
@@ -39,3 +40,15 @@ The test suite and import smoke check are offline: they do not contact IBKR,
 Cloudflare/R2, or public market-data endpoints. Agent 0's lazy IBKR client is
 loaded only to confirm that its installed class is available; no broker
 connection is made.
+
+## Historical backtesting
+
+The supported historical backtest command is:
+
+```powershell
+python -m backtesting --start auto --end auto
+```
+
+Each run writes the validated canonical report set under
+`data/results/backtests/<run-id>/`. Use `--refresh-signals` only when the
+upstream signal/risk data should be rebuilt.
