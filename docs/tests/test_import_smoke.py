@@ -8,12 +8,12 @@ class ImportSmokeTests(unittest.TestCase):
         import data_pipeline.historical_data.historical_data_builder  # noqa: F401
         import signal_pipeline  # noqa: F401
         import risk_pipeline  # noqa: F401
-        import backtest_engine  # noqa: F401
+        import backtesting  # noqa: F401
+        import backtesting.__main__  # noqa: F401
         import agents.agent_0.run  # noqa: F401
         from agents.agent_0.broker import _load_ib_class
 
         self.assertIsNotNone(_load_ib_class())
-
 
 if __name__ == "__main__":
     unittest.main()

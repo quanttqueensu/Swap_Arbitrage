@@ -106,6 +106,20 @@ class HistoricalEventTests(unittest.TestCase):
 
 
 class HistoricalRunTests(unittest.TestCase):
+    # Mutation caught: deriving active backtest targets from proxy exposure
+    # instead of the rounded swap contracts that drive executable orders.
+    def test_rounded_swap_contracts_define_the_active_historical_target(self):
+        frame = historical_frame()
+        frame.loc[:, "proxy_position_2y"] = 0
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=frame):
+                result, _ = run_historical_backtest("rounded-target", Path(directory))
+
+        self.assertEqual(
+            [item.decision_time_utc.date().isoformat() for item in result.decisions],
+            ["2024-01-03", "2024-01-05"],
+        )
+
     # Mutation caught: executing target orders on their decision event or marking
     # P&L before the position is held.
     def test_targets_fill_later_and_pnl_uses_only_held_positions(self):
@@ -216,6 +230,37 @@ class HistoricalRunTests(unittest.TestCase):
             [2, 1],
         )
         self.assertFalse(any(item.timestamp_utc.date().isoformat() == "2024-01-08" for item in result.positions))
+
+    # Mutation caught: silently treating a missing current mark for a held
+    # contract as a valid zero-return observation.
+    def test_held_position_missing_current_mark_is_recorded_in_manifest(self):
+        frame = holding_frame()
+        frame.loc[3, "swap_price_2y"] = float("nan")
+        frame.loc[3, "swap_ticker_2y"] = ""
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=frame):
+                result, _ = run_historical_backtest("missing-mark", Path(directory))
+
+        self.assertIn(
+            "2024-01-05:YITH24:current_mark",
+            dict(result.manifest)["missing_input_locations"],
+        )
+
+    # Mutation caught: carrying pre-window equity or positions into a requested
+    # historical window instead of starting that replay flat.
+    def test_requested_window_starts_with_requested_initial_equity(self):
+        initial_equity = D("987654.32")
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=holding_frame()):
+                result, _ = run_historical_backtest(
+                    "window-start-flat",
+                    Path(directory),
+                    start="2024-01-03",
+                    end="2024-01-05",
+                    initial_equity_usd=initial_equity,
+                )
+
+        self.assertEqual(result.daily[0].equity_usd, initial_equity)
 
     # Mutation caught: resolving an earlier held ticker from a later row that reuses it.
     def test_future_ticker_reuse_cannot_revise_earlier_strategy_outputs(self):
