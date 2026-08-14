@@ -168,7 +168,8 @@ def _historical_strategy(run_id: str, frame: pd.DataFrame, assumptions: NaiveAss
         for _, row in frame.iterrows()
     }
     instrument_legs: dict[str, tuple[str, str]] = {}
-    for _, row in frame.iterrows():
+
+    def record_instrument_legs(row: pd.Series) -> None:
         for maturity in MATURITIES:
             m = clean_maturity(maturity)
             for leg in ("swap", "treasury"):
@@ -179,11 +180,12 @@ def _historical_strategy(run_id: str, frame: pd.DataFrame, assumptions: NaiveAss
 
     def strategy(snapshot: MarketSnapshot) -> StrategyResult:
         row = rows[snapshot.decision_time_utc]
+        record_instrument_legs(row)
         current = {item.instrument_id: item.quantity_contracts for item in snapshot.paper_positions}
         marks = {item.instrument_id: item.price_points for item in snapshot.instruments}
         blocked = row.get("risk_allowed", 1) != 1
         reasons = tuple(
-            item for item in str(row.get("risk_block_reason", "")).split(";") if item
+            item for item in str(row.get("risk_block_reason", "")).split("|") if item
         ) or ("upstream_risk_block",)
         has_exposure = any(current.values())
         decisions = []

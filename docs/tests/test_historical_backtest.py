@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import timezone
 from decimal import Decimal
 from pathlib import Path
@@ -8,7 +9,8 @@ from unittest.mock import patch
 import pandas as pd
 
 from backtesting import NAIVE_ASSUMPTIONS, NaiveAssumptions, run_historical_backtest
-from backtesting.historical import _events_from_frame
+from backtesting.historical import _events_from_frame, _historical_strategy
+from strategy import PaperPosition
 
 
 D = Decimal
@@ -29,6 +31,20 @@ def historical_frame():
         "swap_dv01_per_contract_2y": [19.0] * 4,
         "treasury_dv01_per_contract_2y": [38.0] * 4,
     })
+
+
+def holding_frame():
+    frame = historical_frame()
+    frame.loc[2, "swap_price_2y"] = 100.0
+    frame.loc[3, "swap_price_2y"] = 100.11
+    frame.loc[3, [
+        "swap_futures_contracts_rounded_2y",
+        "treasury_futures_contracts_rounded_2y",
+    ]] = 0
+    return pd.concat([
+        frame,
+        frame.iloc[[-1]].assign(date=pd.Timestamp("2024-01-08")),
+    ], ignore_index=True)
 
 
 class HistoricalEventTests(unittest.TestCase):
@@ -126,6 +142,24 @@ class HistoricalRunTests(unittest.TestCase):
         self.assertFalse(any(fill.remaining_quantity_contracts for fill in result.fills))
         self.assertEqual(dict(result.manifest)["risk_blocked_days"], "1")
 
+    # Mutation caught: treating the upstream pipe-separated reason string as one code.
+    def test_risk_block_preserves_each_upstream_reason_code(self):
+        frame = historical_frame()
+        frame.loc[2, "risk_allowed"] = 0
+        frame.loc[2, "risk_block_reason"] = "portfolio:net_dv01_limit|freshness:market_data"
+        events = _events_from_frame(frame)
+        snapshot = replace(
+            events[2].snapshot,
+            paper_positions=(PaperPosition("YITH24", 2), PaperPosition("ZTH24", -1)),
+        )
+
+        result = _historical_strategy("risk-reasons", frame, NAIVE_ASSUMPTIONS)(snapshot)
+
+        self.assertEqual(
+            dict(result.risk_decisions)["2Y"].reason_codes,
+            ("portfolio:net_dv01_limit", "freshness:market_data", "flatten_only"),
+        )
+
     # Mutation caught: losing a retiring mark before the causal close can fill.
     def test_roll_uses_explicit_zero_return_retiring_mark_policy(self):
         frame = historical_frame()
@@ -162,10 +196,8 @@ class HistoricalRunTests(unittest.TestCase):
         )
 
     # Mutation caught: calculating P&L from the desired, rather than filled, target.
-    def test_held_position_pnl_matches_hand_calculation(self):
-        frame = historical_frame()
-        frame.loc[2, "swap_price_2y"] = 100.0
-        frame.loc[3, "swap_price_2y"] = 100.11
+    def test_held_position_pnl_matches_hand_calculation_and_exits_flat(self):
+        frame = holding_frame()
         zero_costs = NaiveAssumptions(D("0"), D("0"), D("0"), D("0"), D("0"))
         with TemporaryDirectory() as directory:
             with patch("backtesting.historical._load_historical_frame", return_value=frame):
@@ -176,3 +208,43 @@ class HistoricalRunTests(unittest.TestCase):
         self.assertEqual(result.daily[3].gross_pnl_usd, D("220.0"))
         self.assertEqual(result.daily[3].net_pnl_usd, D("220.0"))
         self.assertEqual(result.daily[3].equity_usd, D("1000220.0"))
+        self.assertEqual(
+            [fill.filled_quantity_contracts for fill in result.fills if fill.fill_time_utc.date().isoformat() == "2024-01-08"],
+            [2, 1],
+        )
+        self.assertFalse(any(item.timestamp_utc.date().isoformat() == "2024-01-08" for item in result.positions))
+
+    # Mutation caught: resolving an earlier held ticker from a later row that reuses it.
+    def test_future_ticker_reuse_cannot_revise_earlier_strategy_outputs(self):
+        frame = historical_frame()
+        frame.loc[2, "risk_allowed"] = 0
+        frame.loc[2, "risk_block_reason"] = "portfolio:net_dv01_limit"
+        frame.loc[2, [
+            "swap_futures_contracts_rounded_2y",
+            "treasury_futures_contracts_rounded_2y",
+        ]] = 0
+        future = frame.iloc[[-1]].assign(date=pd.Timestamp("2024-01-08"))
+        future["swap_ticker_2y"] = ""
+        future["swap_ticker_5y"] = "YITH24"
+        future["swap_price_5y"] = 100.0
+        future["swap_dv01_per_contract_5y"] = 19.0
+        future["swap_futures_contracts_rounded_5y"] = 0
+        extended = pd.concat([frame, future], ignore_index=True)
+        extended["swap_futures_contracts_rounded_5y"] = extended[
+            "swap_futures_contracts_rounded_5y"
+        ].fillna(0)
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=frame):
+                baseline, _ = run_historical_backtest("prefix", Path(directory))
+            with patch("backtesting.historical._load_historical_frame", return_value=extended):
+                replayed, _ = run_historical_backtest("prefix", Path(directory))
+
+        cutoff = pd.Timestamp("2024-01-05").date()
+        self.assertEqual(
+            [item for item in baseline.decisions if item.decision_time_utc.date() <= cutoff],
+            [item for item in replayed.decisions if item.decision_time_utc.date() <= cutoff],
+        )
+        self.assertEqual(
+            [item for item in baseline.orders if item.earliest_submission_utc.date() <= cutoff],
+            [item for item in replayed.orders if item.earliest_submission_utc.date() <= cutoff],
+        )
