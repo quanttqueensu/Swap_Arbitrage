@@ -98,6 +98,12 @@ def load_sizing_caps() -> dict[str, SizingCap]:
         main_quantity, source = _main_quantity_from_frame(instrument, df)
         max_agent_quantity = _agent_quantity_cap(main_quantity)
 
+        # Paper-trading fallback:
+        # if no usable sizing data exists, allow 1 contract.
+        if max_agent_quantity <= 0:
+            max_agent_quantity = 1
+            source = f"{source}|paper_fallback"
+
         caps[instrument.symbol] = SizingCap(
             instrument=instrument,
             main_quantity=main_quantity,

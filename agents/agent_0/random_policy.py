@@ -24,7 +24,11 @@ class RandomPolicy:
         sizing_caps: dict[str, SizingCap],
         today: date,
     ) -> list[QueuedOrder]:
-        eligible = [cap for cap in sizing_caps.values() if cap.max_agent_quantity > 0]
+
+        eligible = [
+            cap for cap in sizing_caps.values()
+            if cap.max_agent_quantity > 0
+        ]
 
         if not eligible:
             raise RuntimeError("No instrument has a positive sizing cap.")

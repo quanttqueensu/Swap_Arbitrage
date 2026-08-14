@@ -46,13 +46,20 @@ def parse_contract_month(value: str) -> date | None:
 
     raw_value = str(value).strip()
 
-    for fmt in ("%Y%m%d", "%Y%m"):
-        try:
-            return datetime.strptime(raw_value, fmt).date()
-        except ValueError:
-            pass
+    if not raw_value.isdigit():
+        return None
 
-    return None
+    if len(raw_value) == 6:
+        fmt = "%Y%m"
+    elif len(raw_value) == 8:
+        fmt = "%Y%m%d"
+    else:
+        return None
+
+    try:
+        return datetime.strptime(raw_value, fmt).date()
+    except ValueError:
+        return None
 
 
 def pick_front_contracts(details: list[Any], count: int) -> list[Any]:
@@ -73,6 +80,45 @@ def pick_front_contracts(details: list[Any], count: int) -> list[Any]:
 
     candidates.sort(key=lambda item: item[0])
     return [contract for _, contract in candidates[:count]]
+
+def pick_eris_contracts(
+    details: list[Any],
+    count: int,
+    as_of: date | None = None,
+) -> list[Any]:
+    if count <= 0:
+        return []
+    if as_of is None:
+        as_of = date.today()
+
+    candidates = []
+
+    for item in details:
+        contract_month = parse_contract_month(
+            getattr(item, "contractMonth", "")
+        )
+
+        if contract_month is None:
+            continue
+
+        # Do not use forward-starting Eris vintages.
+        if contract_month > as_of:
+            continue
+
+        candidates.append(
+            (contract_month, item.contract)
+        )
+
+    # Newest effective vintage first.
+    candidates.sort(
+        key=lambda item: item[0],
+        reverse=True,
+    )
+
+    return [
+        contract
+        for _, contract in candidates[:count]
+    ]
 
 
 def resolve_futures(
@@ -102,7 +148,10 @@ def resolve_futures(
                 time.sleep(0.25)
                 continue
 
-            fronts = pick_front_contracts(details, count)
+            if instrument.kind == "swap_future":
+                fronts = pick_eris_contracts(details, count)
+            else:
+                fronts = pick_front_contracts(details, count)
 
             if len(fronts) < count:
                 time.sleep(0.25)

@@ -101,10 +101,9 @@ def allocate_contracts(
 
         contract = min(
             available,
-            key=lambda item: (
-                counts[(str(getattr(item, "conId", "")), record.side)],
-                str(getattr(item, "conId", "")),
-            ),
+            key=lambda item: counts[
+                (str(getattr(item, "conId", "")), record.side)
+            ],
         )
         contract_id = str(getattr(contract, "conId", ""))
         record.contract_id = contract_id
