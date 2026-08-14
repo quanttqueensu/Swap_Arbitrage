@@ -1,0 +1,31 @@
+# Swap Arbitrage Worker Brief
+
+CURRENT PHASE:
+Pxx
+
+CURRENT APPROVED GATE:
+MGx
+
+NON-NEGOTIABLES:
+- IBKR paper-only forever.
+- No production account/port/toggle.
+- No orders during development/tests.
+- Preserve unrelated user changes.
+- Strategy logic must remain broker-independent.
+- No future information in decisions.
+- Proxy signals must remain labelled proxies.
+- Agent 0 remains random unless current prompt explicitly changes it.
+
+WORKFLOW:
+1. Read current prompt.
+2. Read relevant PROJECT_CONTRACTS sections.
+3. Inspect affected code/tests.
+4. Write focused failing test for behavior changes.
+5. Make smallest implementation.
+6. Run focused verification.
+7. Apply risk-tier review policy.
+8. Stop at applicable gate.
+
+FULL MASTER DOCS:
+Only required at phase start, gate review, contract changes,
+or when requirements conflict.
