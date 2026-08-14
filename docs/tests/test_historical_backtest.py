@@ -1,9 +1,13 @@
 from datetime import timezone
 from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
+from backtesting import NAIVE_ASSUMPTIONS, NaiveAssumptions, run_historical_backtest
 from backtesting.historical import _events_from_frame
 
 
@@ -80,3 +84,95 @@ class HistoricalEventTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "integer contract quantity"):
             _events_from_frame(invalid)
+
+
+class HistoricalRunTests(unittest.TestCase):
+    # Mutation caught: executing target orders on their decision event or marking
+    # P&L before the position is held.
+    def test_targets_fill_later_and_pnl_uses_only_held_positions(self):
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=historical_frame()):
+                result, run_dir = run_historical_backtest(
+                    "historical-golden", Path(directory), assumptions=NAIVE_ASSUMPTIONS
+                )
+
+            self.assertEqual(
+                [fill.fill_time_utc.date().isoformat() for fill in result.fills[:2]],
+                ["2024-01-04", "2024-01-04"],
+            )
+            self.assertEqual(result.daily[1].gross_pnl_usd, D("0"))
+            self.assertEqual(result.daily[2].gross_pnl_usd, D("0"))
+            self.assertEqual(result.daily[3].gross_pnl_usd, D("0"))
+            self.assertEqual(
+                sorted(path.name for path in run_dir.iterdir()),
+                [
+                    "daily.csv", "decisions.csv", "fills.csv", "manifest.csv",
+                    "orders.csv", "positions.csv", "summary.csv", "trades.csv",
+                ],
+            )
+
+    # Mutation caught: accepting a blocked target that increases a held position.
+    def test_risk_block_can_flatten_but_cannot_open_exposure(self):
+        frame = historical_frame()
+        frame.loc[2, "risk_allowed"] = 0
+        frame.loc[2, "risk_block_reason"] = "portfolio:net_dv01_limit"
+        frame.loc[2, "swap_futures_contracts_rounded_2y"] = 0
+        frame.loc[2, "treasury_futures_contracts_rounded_2y"] = 0
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=frame):
+                result, _ = run_historical_backtest("risk-flatten", Path(directory))
+
+        self.assertTrue(any(item.reason_code == "risk_flatten" for item in result.decisions))
+        self.assertFalse(any(fill.remaining_quantity_contracts for fill in result.fills))
+        self.assertEqual(dict(result.manifest)["risk_blocked_days"], "1")
+
+    # Mutation caught: losing a retiring mark before the causal close can fill.
+    def test_roll_uses_explicit_zero_return_retiring_mark_policy(self):
+        frame = historical_frame()
+        frame.loc[2:, "swap_ticker_2y"] = "YITM24"
+        frame.loc[2:, "swap_price_2y"] = 125.0
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=frame):
+                result, _ = run_historical_backtest("roll", Path(directory))
+
+        self.assertEqual(
+            dict(result.manifest)["historical_roll_mark_policy"],
+            "last_pre_roll_mark_zero_return",
+        )
+        self.assertTrue(any("roll" in item.reason_code for item in result.decisions))
+
+    # Mutation caught: opening a replacement leg before every retiring leg closes.
+    def test_roll_closes_retiring_contracts_before_opening_replacements(self):
+        frame = historical_frame()
+        frame.loc[2:, "swap_ticker_2y"] = "YITM24"
+        frame.loc[2:, "treasury_ticker_2y"] = "ZTM24"
+        frame.loc[2:, "swap_price_2y"] = 125.0
+        frame.loc[2:, "treasury_price_2y"] = 103.0
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=frame):
+                result, _ = run_historical_backtest("roll-order", Path(directory))
+
+        roll_orders = [
+            item for item in result.orders
+            if item.decision_id == "historical-2024-01-04-2y"
+        ]
+        self.assertEqual(
+            [item.instrument_id for item in roll_orders],
+            ["YITH24", "ZTH24", "YITM24", "ZTM24"],
+        )
+
+    # Mutation caught: calculating P&L from the desired, rather than filled, target.
+    def test_held_position_pnl_matches_hand_calculation(self):
+        frame = historical_frame()
+        frame.loc[2, "swap_price_2y"] = 100.0
+        frame.loc[3, "swap_price_2y"] = 100.11
+        zero_costs = NaiveAssumptions(D("0"), D("0"), D("0"), D("0"), D("0"))
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=frame):
+                result, _ = run_historical_backtest(
+                    "historical-pnl", Path(directory), assumptions=zero_costs
+                )
+
+        self.assertEqual(result.daily[3].gross_pnl_usd, D("220.0"))
+        self.assertEqual(result.daily[3].net_pnl_usd, D("220.0"))
+        self.assertEqual(result.daily[3].equity_usd, D("1000220.0"))

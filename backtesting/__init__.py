@@ -10,6 +10,7 @@ from .engine import (
     run_backtest,
 )
 from .reports import write_results
+from .historical import run_historical_backtest
 
 __all__ = [
     "NAIVE_ASSUMPTIONS",
@@ -22,5 +23,6 @@ __all__ = [
     "StrategyResult",
     "TradeRecord",
     "run_backtest",
+    "run_historical_backtest",
     "write_results",
 ]
