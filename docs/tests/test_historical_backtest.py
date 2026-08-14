@@ -1,14 +1,17 @@
 from dataclasses import replace
+from contextlib import redirect_stdout
 from datetime import timezone
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, Mock, patch
 
 import pandas as pd
 
 from backtesting import NAIVE_ASSUMPTIONS, NaiveAssumptions, run_historical_backtest
+from backtesting.__main__ import main, parse_args
 from backtesting.historical import _events_from_frame, _historical_strategy
 from strategy import PaperPosition
 
@@ -248,3 +251,41 @@ class HistoricalRunTests(unittest.TestCase):
             [item for item in baseline.orders if item.earliest_submission_utc.date() <= cutoff],
             [item for item in replayed.orders if item.earliest_submission_utc.date() <= cutoff],
         )
+
+
+class HistoricalCliTests(unittest.TestCase):
+    # Mutation caught: treating a monetary CLI override as a float or omitting
+    # historical command-line options before dispatch.
+    def test_cli_parses_decimal_costs_and_dispatches_once(self):
+        args = parse_args([
+            "--run-id", "cli-run",
+            "--start", "2024-01-02",
+            "--end", "2024-01-05",
+            "--commission-usd-per-contract", "1.25",
+        ])
+        self.assertEqual(args.commission_usd_per_contract, D("1.25"))
+        with patch("backtesting.__main__.run_historical_backtest") as run:
+            run.return_value = (Mock(summary=()), Path("out/cli-run"))
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main([
+                    "--run-id", "cli-run",
+                    "--start", "2024-01-02",
+                    "--end", "2024-01-05",
+                    "--refresh-signals",
+                ]), 0)
+        run.assert_called_once_with(
+            "cli-run",
+            parse_args([]).output_root,
+            "2024-01-02",
+            "2024-01-05",
+            True,
+            ANY,
+            D("1000000"),
+        )
+
+    # Mutation caught: wiring --self-check to live historical-data refreshes.
+    def test_self_check_is_offline_and_passes(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(["--self-check"]), 0)
+        self.assertIn("[OK] backtesting self-check passed", output.getvalue())

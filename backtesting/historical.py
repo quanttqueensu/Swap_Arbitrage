@@ -67,6 +67,23 @@ def _load_historical_frame(refresh_signals: bool = False) -> pd.DataFrame:
     return output.sort_values("date").reset_index(drop=True)
 
 
+def _self_check_frame() -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"]),
+        "risk_allowed": [1, 1, 1, 1, 1],
+        "risk_block_reason": ["", "", "", "", ""],
+        "proxy_position_2y": [0, 1, 1, 0, 0],
+        "swap_futures_contracts_rounded_2y": [0, 2, 2, 0, 0],
+        "treasury_futures_contracts_rounded_2y": [0, -1, -1, 0, 0],
+        "swap_ticker_2y": ["YITH24"] * 5,
+        "treasury_ticker_2y": ["ZTH24"] * 5,
+        "swap_price_2y": [100.0, 100.0, 100.0, 100.11, 100.11],
+        "treasury_price_2y": [102.0, 102.0, 101.99, 101.99, 101.99],
+        "swap_dv01_per_contract_2y": [19.0] * 5,
+        "treasury_dv01_per_contract_2y": [38.0] * 5,
+    })
+
+
 def _events_from_frame(frame: pd.DataFrame) -> tuple[ReplayEvent, ...]:
     if "date" not in frame:
         raise RuntimeError("historical data must contain date")
