@@ -72,8 +72,8 @@ backtest workflow.
 | `data_pipeline/historical_data/`           | Downloads, cleans, and organizes historical market data                  |
 | `data_pipeline/live_data_pipeline/`        | Records IBKR paper quotes, orders, fills, and positions                  |
 | `backtesting/engine.py`                    | Sole simulation and accounting engine                                    |
-| `backtesting/historical.py`                | Adapts existing historical signal/risk output into causal replay events and writes canonical results. |
-| `backtesting/__main__.py`                  | Provides the single `python -m backtesting` CLI and offline self-check. |
+| backtesting/historical.py                  | Converts historical signals and risk data into replay events             |
+| backtesting/main.py                        | Adds the python -m backtesting command and offline self-check.           |
 | `agents/agent_0/`                          | Runs the random weekly paper-trading experiment                          |
 | `docs/tests/`                              | Tests that the strategy and data behave as expected                      |
 | `docs/verification/`                       | Stores results and evidence from previous verification tests             |
