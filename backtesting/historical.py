@@ -74,7 +74,9 @@ def _events_from_frame(frame: pd.DataFrame) -> tuple[ReplayEvent, ...]:
                 quantity_value = pd.to_numeric(
                     row.get(f"{leg}_futures_contracts_rounded_{m}", 0), errors="coerce"
                 )
-                quantity = 0 if pd.isna(quantity_value) else int(quantity_value)
+                if pd.isna(quantity_value) or not float(quantity_value).is_integer():
+                    raise RuntimeError(f"{maturity} {leg} requires an integer contract quantity")
+                quantity = int(quantity_value)
                 ticker_value = row.get(f"{leg}_ticker_{m}", "")
                 ticker = "" if pd.isna(ticker_value) else str(ticker_value).strip()
                 price = pd.to_numeric(row.get(f"{leg}_price_{m}"), errors="coerce")

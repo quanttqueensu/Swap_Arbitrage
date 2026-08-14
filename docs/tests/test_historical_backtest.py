@@ -60,3 +60,23 @@ class HistoricalEventTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "conflicting duplicate instrument"):
             _events_from_frame(conflicting)
+
+    def test_nonnumeric_contract_quantity_fails_closed(self):
+        invalid = historical_frame()
+        invalid["swap_futures_contracts_rounded_2y"] = invalid[
+            "swap_futures_contracts_rounded_2y"
+        ].astype(object)
+        invalid.loc[1, "swap_futures_contracts_rounded_2y"] = "not-a-quantity"
+
+        with self.assertRaisesRegex(RuntimeError, "integer contract quantity"):
+            _events_from_frame(invalid)
+
+    def test_fractional_contract_quantity_fails_closed(self):
+        invalid = historical_frame()
+        invalid["swap_futures_contracts_rounded_2y"] = invalid[
+            "swap_futures_contracts_rounded_2y"
+        ].astype(float)
+        invalid.loc[1, "swap_futures_contracts_rounded_2y"] = 1.5
+
+        with self.assertRaisesRegex(RuntimeError, "integer contract quantity"):
+            _events_from_frame(invalid)
