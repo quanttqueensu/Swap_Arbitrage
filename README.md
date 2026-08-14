@@ -33,8 +33,9 @@ Repository organization:
   package runs the canonical historical replay.
 - `docs/` contains tests, audit tooling, research/project documentation, and
   historical conversation artifacts. Runtime code does not import from it.
-- `data/` contains only the durable raw-data, rates, futures, market, and
-  contract-risk folders.
+- `data/` contains durable raw-data, rates, futures, market, and contract-risk
+  folders; `data/results/backtests/` contains canonical historical-backtest
+  report sets.
 
 The test suite and import smoke check are offline: they do not contact IBKR,
 Cloudflare/R2, or public market-data endpoints. Agent 0's lazy IBKR client is

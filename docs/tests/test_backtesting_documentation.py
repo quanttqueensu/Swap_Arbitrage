@@ -21,10 +21,23 @@ class BacktestingDocumentationTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertNotIn("python " + "backtest_engine.py", text)
                 self.assertNotIn("backtest_" + "engine.py", text)
+                self.assertNotIn("legacy " + "backtest", text)
                 self.assertIn("python -m backtesting", text)
 
         self.assertIn("run_historical_backtest", documents["FUNCTION_INVENTORY.md"])
         self.assertIn("backtesting/historical.py", documents["FILE_MAP.md"])
+        technical = " ".join(documents["TECHNICAL_DOCUMENTATION.md"].split())
+        self.assertIn(
+            "backtesting.historical.run_historical_backtest",
+            technical,
+        )
+        self.assertIn(
+            "Synthetic ReplayEvent fixtures are test mechanics",
+            technical,
+        )
+        for path, text in documents.items():
+            with self.subTest(output_path=path):
+                self.assertIn("data/results/backtests/<run-id>/", text)
 
 
 if __name__ == "__main__":

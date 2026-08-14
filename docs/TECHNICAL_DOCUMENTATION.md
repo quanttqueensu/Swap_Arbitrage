@@ -40,32 +40,20 @@ does not connect to IBKR.
 ### Architecture at a glance
 
 ```text
-public/captured sources
-        |
-        v
-data_pipeline/historical_data -> canonical CSV partitions -> schema validation
-                                                       |
-                          no CSV -> MarketSnapshot adapter
+historical_data_builder -> signal_pipeline -> risk_pipeline
+    -> backtesting.historical.run_historical_backtest
+    -> backtesting.engine.run_backtest -> backtesting.reports.write_results
+    -> data/results/backtests/<run-id>/{manifest,daily,decisions,orders,fills,trades,positions,summary}.csv
 
-strategy/*.py (pure records, equations, signals, sizing, risk, portfolio)
-        |
-        +--------------------------+
-        |                          |
-        v                          v
-backtesting/*.py              shared paper strategy adapter not implemented
-synthetic causal replay
-        |
-        v
-validated backtest CSVs
+synthetic ReplayEvent fixtures -> backtesting.engine.run_backtest
+    -> test mechanics only
 
 IBKR paper session -> IbkrPaperRecorder -> validated paper CSVs
 IBKR paper session <- Agent 0 random policy/manual operator
-
-maintained historical backtest flow:
-historical_data_builder -> signal_pipeline -> risk_pipeline
-    -> backtesting.historical -> backtesting.engine -> backtesting.reports
-    -> data/results/backtests/<run-id>/{manifest,daily,decisions,orders,fills,trades,positions,summary}.csv
 ```
+
+Synthetic ReplayEvent fixtures are test mechanics, not a separate historical
+backtest workflow.
 
 ## System reference
 
@@ -133,6 +121,18 @@ simulation/accounting engine, and writes canonical results. `--refresh-signals`
 is the only flag that rebuilds upstream signal/risk data. `--run-id`,
 `--output-root`, `--initial-equity`, and the cost flags make a run explicit;
 `--self-check` is offline.
+
+| CLI option | Default |
+| --- | --- |
+| `--run-id` | `historical-backtest` |
+| `--output-root` | `data/results/backtests` |
+| `--initial-equity` | `1000000` |
+| `--start`; `--end` | `auto`; `auto` |
+| `--bid-ask-half-spread-points` | `0.01` |
+| `--commission-usd-per-contract` | `1` |
+| `--slippage-points` | `0.005` |
+| `--financing-usd-per-contract-day` | `0.10` |
+| `--roll-usd-per-contract` | `1` |
 
 For each event, `backtesting.engine.run_backtest`:
 
@@ -366,7 +366,8 @@ rebuild the derived raw-data files, and calculate risk-sized signals:
 python risk_pipeline.py --refresh-raw --treasury --eris
 ```
 
-This produces the derived files consumed by the legacy backtest, including
+This produces the derived files consumed by the canonical historical adapter,
+including
 `data/raw_data/risk_data.csv`, swap settlement/DV01 data, and Treasury-futures
 data. It requires network access and its results depend on public-source
 availability, coverage, and revisions. To refresh only the signal/risk layer

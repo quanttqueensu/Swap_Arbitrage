@@ -3,6 +3,7 @@
 ## Maintained historical backtesting
 
 Use `python -m backtesting` for the supported historical workflow.
+Its default output root is `data/results/backtests/<run-id>/`.
 
 ### `backtesting/historical.py`
 
