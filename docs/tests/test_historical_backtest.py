@@ -1,12 +1,12 @@
 from dataclasses import replace
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import timezone
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
@@ -271,17 +271,34 @@ class HistoricalCliTests(unittest.TestCase):
                     "--run-id", "cli-run",
                     "--start", "2024-01-02",
                     "--end", "2024-01-05",
+                    "--output-root", "out/custom",
                     "--refresh-signals",
+                    "--initial-equity", "987654.32",
+                    "--bid-ask-half-spread-points", "0.125",
+                    "--commission-usd-per-contract", "1.25",
+                    "--slippage-points", "0.015",
+                    "--financing-usd-per-contract-day", "0.10",
+                    "--roll-usd-per-contract", "2.50",
                 ]), 0)
         run.assert_called_once_with(
             "cli-run",
-            parse_args([]).output_root,
+            Path("out/custom"),
             "2024-01-02",
             "2024-01-05",
             True,
-            ANY,
-            D("1000000"),
+            NaiveAssumptions(
+                D("0.125"), D("1.25"), D("0.015"), D("0.10"), D("2.50")
+            ),
+            D("987654.32"),
         )
+
+    # Mutation caught: accepting a negative, non-finite, or non-decimal cost.
+    def test_cli_rejects_invalid_decimal_values(self):
+        for value in ("-1", "NaN", "not-a-number"):
+            with self.subTest(value=value), redirect_stderr(StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    parse_args(["--commission-usd-per-contract", value])
+            self.assertEqual(error.exception.code, 2)
 
     # Mutation caught: wiring --self-check to live historical-data refreshes.
     def test_self_check_is_offline_and_passes(self):
