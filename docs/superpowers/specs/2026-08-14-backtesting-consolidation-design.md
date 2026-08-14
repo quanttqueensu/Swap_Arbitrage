@@ -150,10 +150,14 @@ passes its canonical schema validation.
 ## Compatibility and removal policy
 
 Output compatibility is behavioral, not byte-for-byte compatibility with the
-legacy 99-column CSV. A frozen zero-cost fixture must demonstrate equivalent
-dates, desired quantities, risk-block behavior, gross daily P&L, ending equity,
-and active-range behavior between the legacy calculations and the new
-historical adapter. New canonical reports remain the only supported output.
+legacy 99-column CSV. A frozen fixture must demonstrate equivalent desired
+quantities, risk-block behavior, validation, and active-range behavior. The
+causal engine's delayed-fill accounting is authoritative: exact date-by-date
+legacy P&L and ending equity are not compatibility requirements because the
+legacy DataFrame marks target positions one interval earlier than an order can
+causally fill. A separate zero-cost golden fixture reconciles gross daily P&L
+and ending equity against the positions the replay engine actually held. New
+canonical reports remain the only supported output.
 
 The root file is removed in the same migration only after those equivalence
 checks and all focused replay/report tests pass. No permanent shim or alias is
@@ -173,7 +177,8 @@ maintained cases from `BacktestMasterTests` and cover:
 - missing/nonpositive active-market field rejection;
 - ticker-roll close/open behavior;
 - date-window start-flat behavior;
-- zero-cost behavioral equivalence with the legacy fixture;
+- target/risk/validation equivalence with the legacy fixture;
+- zero-cost causal P&L and ending-equity reconciliation from actual fills;
 - canonical report generation from historical inputs; and
 - the exact `python -m backtesting --self-check` offline smoke path.
 
