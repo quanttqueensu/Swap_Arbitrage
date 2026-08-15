@@ -61,7 +61,7 @@ Gateway in paper mode, and set the approved paper account in the local
 environment:
 
 ```powershell
-$env:AGENT0_IBKR_ACCOUNT = "<your-approved-paper-account>"
+$env:AGENT0_IBKR_ACCOUNT = "<paper-account-id>"
 .venv\Scripts\python.exe agents\agent_0\run.py
 ```
 
@@ -76,8 +76,8 @@ orders and orders from other API clients, run:
 ```
 
 Cancellation resets local upcoming orders to `planned`; it does not create a
-replacement plan. Never use a live account or live port, and never store an
-account value in source control.
+replacement plan.
+
 
 ## System reference
 
@@ -151,9 +151,6 @@ broker data but does not connect, submit, cancel, or request positions itself.
 | Record positions | `IbkrPaperRecorder.record_positions(...)` | `positions()` | Caller gets the snapshot; recorder validates and stores it |
 | Record orders and fills | `record_order(...)`, `record_fill(...)` | Broker callbacks | Converts broker objects to canonical paper records |
 
-TWS or IB Gateway must already be open and authenticated. `ib_insync` is the
-pinned IBKR adapter; treat dependency changes as compatibility changes. IBKR's
-documentation remains authoritative for TWS and socket API behavior.
 
 ## Historical backtest reference
 
@@ -182,11 +179,6 @@ For each event, the engine:
 4. saves new orders for a later event; and
 5. records P&L, positions, and accounting data.
 
-A decision at event `t` cannot fill until a later event. A selected date window
-always starts with the chosen initial equity and no inherited position or P&L.
-When direction reverses, the engine closes the old position before opening the
-new one based on the filled quantity.
-
 Each run contains:
 
 - `manifest.csv`
@@ -201,15 +193,10 @@ Each run contains:
 The files are validated before they are saved. The manifest records versions,
 date range, row counts, hashes, assumptions, and missing data.
 
-For historical runs, `input_sha256` hashes the replay events, target quantities,
-and upstream risk state. The `historical_*_proxy` labels identify research
-inputs; they do not show complete coverage, profitability, or production
-readiness.
-
 If data is missing while a position is open, the run records the gap and uses
 the available data. During a contract roll, it carries forward the previous
 mark with `last_pre_roll_mark_zero_return` instead of inventing a cross-contract
-return. Treat runs with missing required data or this proxy as diagnostic.
+return. 
 
 Backtest assumptions and examples are tested in
 `docs/tests/test_naive_backtest.py`.
@@ -280,14 +267,6 @@ tests cover these sign rules.
 | Position-sizing/risk version | `p33.position-sizing-risk.v1` |
 | Agent 0 | Local IBKR paper session, port `7497`, client ID `30` |
 
-Dependency versions are pinned in [`requirements.txt`](../requirements.txt).
-The strategy version is defined in `strategy/spread.py`; the sizing version is
-defined in `strategy/position_sizing.py`.
-
-The root `config.py` belongs to the legacy DataFrame research pipeline. Agent 0
-has separate settings and paper-only safeguards. Do not put account IDs,
-passwords, credentials, or other secrets in configuration files or
-documentation.
 
 ## Testing and failure handling
 
