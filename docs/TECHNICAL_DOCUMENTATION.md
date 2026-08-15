@@ -2,348 +2,9 @@
 
 ## Quick start
 
-### Environment setup
-
-Python 3.12 is the supported interpreter. Runtime dependencies are pinned in
-[`requirements.txt`](../requirements.txt): NumPy 2.3.5, pandas 3.0.1, and
-ib_insync 0.9.86.
-
-From PowerShell in the repository root, create a fresh environment:
-
-```powershell
-& "C:\Path\To\Python312\python.exe" -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m pip check
-```
-
-## System reference
-
-### Directory and component ownership
-
-| Path                                       | Simplified responsibility                                                |
-| ------------------------------------------ | ------------------------------------------------------------------------ |
-| `strategy/models.py`                       | Defines shared data structures used across the strategy                  |
-| `strategy/spread.py`                       | Calculates spreads, trading costs, and hedge amounts                     |
-| `strategy/signal_generation.py`            | Calculates trading signals and tracks position changes                   |
-| `strategy/position_sizing.py`              | Determines how large positions should be and how many contracts to trade |
-| `strategy/risk_signals.py`                 | Checks risk limits and decides whether trading is allowed                |
-| `strategy/costs.py`                        | Estimates trading costs                                                  |
-| `strategy/portfolio.py`                    | Selects trades for the portfolio while enforcing risk limits             |
-| `data_pipeline/contracts.py`               | Defines and validates required data formats                              |
-| `data_pipeline/historical_data/`           | Downloads, cleans, and organizes historical market data                  |
-| `data_pipeline/live_data_pipeline/`        | Records IBKR paper quotes, orders, fills, and positions                  |
-| `backtesting/engine.py`                    | Simulation engine                                                        |
-| backtesting/historical.py                  | Converts historical signals and risk data into replay events             |
-| backtesting/main.py                        | Adds the python -m backtesting command and offline self-check.           |
-| `agents/agent_0/`                          | Runs the random weekly paper-trading experiment                          |
-| `docs/tests/`                              | Tests that the strategy and data behave as expected                      |
-| `docs/verification/`                       | Stores results and evidence from previous verification tests             |
-
-
-### IBKR operational API reference
-
-All broker activity is paper-only. The reusable recorder validates and stores
-broker data, while connection, order submission, and cancellation remain
-separate guarded operations.
-
-| Need | Project function | IBKR / `ib_insync` call | Notes |
-| --- | --- | --- | --- |
-| Connect and validate the paper session | `agents.agent_0.broker.connect(account_id)` | `IB.connect()`, `isConnected()`, `managedAccounts()` | Requires localhost, port `7497`, client ID `30`, and a `DU...` paper account. |
-| Find tradable futures contracts | `agents.agent_0.contracts.resolve_futures(ib, instrument)` | `reqContractDetails()`, `qualifyContracts()` | Selects eligible expiries and returns qualified contracts with IBKR contract IDs. |
-| Inspect working orders | `ib.reqAllOpenOrders()` | `reqAllOpenOrders()` | Used for reconciliation before submission. |
-| Preview margin | `fit_order_to_margin(...)` | `whatIfOrder(contract, order)` | Reduces quantity until the configured paper margin reserve is met. |
-| Submit an order | `agents.agent_0.broker.submit_order(...)` | `placeOrder(contract, order)` | Use the guarded helper; it checks paper settings and waits for a broker status. |
-| Cancel all visible orders | `agents.agent_0.broker.cancel_all_orders(ib)` | `reqGlobalCancel()`, `reqAllOpenOrders()` | Broad operation: can cancel manual and other API-client orders visible to the session. |
-| Request quotes | `IbkrPaperRecorder.request_quotes(contracts)` | `reqMktData()` | Validates the paper session before requesting market data. |
-| Check and record positions | `IbkrPaperRecorder.record_positions(ib.positions(), observed_at_utc)` | `positions()` | The caller retrieves the IBKR position snapshot; the recorder validates it and writes the canonical paper-position records. |
-| Record orders and fills | `record_order(...)`, `record_fill(...)` | Broker order/execution callback data | Normalizes broker objects into canonical paper CSV records. |
-
-`IbkrPaperRecorder` does not connect, submit, cancel, or directly request
-positions. It is the validation and recording boundary for IBKR paper data.
-
-### Data APIs
-
-| Provider / API | Endpoint pattern | Data retrieved | Project function |
-| --- | --- | --- | --- |
-| U.S. Treasury | `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=YYYY` | Daily Treasury constant-maturity yield curve | `get_treasury_data()` |
-| New York Fed SOFR API | `https://markets.newyorkfed.org/api/rates/secured/sofr/search.json?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` | SOFR history | `get_nyfed_rate("SOFR", ...)` |
-| New York Fed EFFR API | `https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` | EFFR history | `get_nyfed_rate("EFFR", ...)` |
-| Eris Markets public archive | `https://files.erisfutures.com/ftp/.../Eris_Instruments_YYYYMMDD_Settles*.csv` | Eris SOFR swap-futures settlements, ticker symbols, and published DV01 | `get_eris_public_swap_data()` |
-| Yahoo Finance chart API | `https://query1.finance.yahoo.com/v8/finance/chart/{ticker}` | Continuous research prices for `ZT=F` and `ZF=F` | `get_public_treasury_futures_prices()` |
-| IBKR TWS / IB Gateway socket API | Local `127.0.0.1:7497`, via `ib_insync` | Paper quotes, contracts, positions, open orders, margin previews, and paper orders | IBKR infrastructure only; not a historical-data source |
-
-Refresh all public historical inputs for a date range: 
-
-
-```powershell
-.\.venv\Scripts\python.exe risk_pipeline.py --refresh-raw --treasury --eris
-```
-
-### Canonical historical data formatting and layout
-
-Historical data is organized into the following folders:
-
-* `data/rates/rates_YYYY.csv`: interest-rate data in basis points
-* `data/futures/futures_settlements_YYYY.csv`: futures settlement prices
-* `data/contract_risk/contracts.csv`: contract information and effective dates
-* `data/contract_risk/contract_risk_YYYY.csv`: contract DV01 and interest-rate sensitivity
-* `data/market/daily_market_YYYY.csv`: daily market data
-
-`historical_data_builder.py` downloads historical data from sources such as the US Treasury, New York Fed, Eris, and Treasury-futures data providers.
-
-`canonicalize.py` cleans and converts this data into the standard format used throughout the project.
-
-Downloading the data and formatting it are kept separate. This allows tests to use saved sample data without having to download new data.
-
-### Strategy Files
-
-1. `MarketSnapshot` collects the market, contract, position, and order information available when a trading decision is made.
-2. `strategy.spread` calculates the swap/Treasury spread and estimated trading costs.
-3. `strategy.signal_generation` decides whether to enter, exit, reverse, or hold a position based on available market data.
-4. `strategy.position_sizing` determines how many swap and Treasury contracts should be traded while staying within position and risk limits.
-5. `strategy.portfolio` selects which trades can be included in the portfolio without exceeding overall DV01 limits.
-6. `strategy.risk_signals` checks risk conditions and decides whether trading should be allowed, reduced, blocked, or positions flattened.
-7. The backtest or paper-trading system converts approved `OrderIntent` records into simulated trades or IBKR paper orders.
-
-If required data is invalid, missing, or stale, the strategy will not create a new trade. Risk limits such as DV01, available capacity, losses, drawdowns, margin, broker connection, reconciliation, and contract-roll restrictions can also block trading. This applies primarily for back-testing but will still occur for live.
-
-### Historical backtest flow and outputs
-
-The one maintained historical backtest command is:
-
-```powershell
-python -m backtesting --start auto --end auto
-```
-
-`backtesting.historical.run_historical_backtest` loads existing historical
-signal/risk output, adapts it into typed `ReplayEvent` values, runs the sole
-simulation/accounting engine, and writes canonical results. `--refresh-signals`
-is the only flag that rebuilds upstream signal/risk data. `--run-id`,
-`--output-root`, `--initial-equity`, and the cost flags make a run explicit;
-`--self-check` is offline.
-
-| CLI option | Default |
-| --- | --- |
-| `--run-id` | `historical-backtest` |
-| `--output-root` | `data/results/backtests` |
-| `--initial-equity` | `1000000` |
-| `--start`; `--end` | `auto`; `auto` |
-| `--bid-ask-half-spread-points` | `0.01` |
-| `--commission-usd-per-contract` | `1` |
-| `--slippage-points` | `0.005` |
-| `--financing-usd-per-contract-day` | `0.10` |
-| `--roll-usd-per-contract` | `1` |
-
-For each event, `backtesting.engine.run_backtest`:
-
-1. updates the value of existing positions;
-2. applies financing costs;
-3. processes orders that were created earlier;
-4. handles fills, partial fills, rejected orders, and expired orders;
-5. runs the strategy using the current positions and active orders;
-6. saves any new orders to be processed later; and
-7. records P&L, positions, and other accounting information.
-
-A decision at event `t` cannot fill until a later event. P&L at each event uses
-only the position already held while the mark changed, before newly eligible
-orders are processed. A requested `start`/`end` window is always `start_flat`:
-it begins with the selected initial equity and no inherited position or P&L.
-
-When the strategy reverses direction, the existing position is closed first and the new position is opened based on the amount that was actually filled. This keeps P&L from the old and new positions separate.
-
-`write_results(result, output_root)` saves each backtest run in its own folder containing:
-
-* `manifest.csv`
-* `daily.csv`
-* `decisions.csv`
-* `orders.csv`
-* `fills.csv`
-* `trades.csv`
-* `positions.csv`
-* `summary.csv`
-
-The output files are checked against the required backtest data formats before being saved.
-
-`manifest.csv` stores information about the backtest itself, including:
-
-* configuration and schema versions
-* backtest date range
-* number of rows produced
-* input and output hashes
-* assumptions used
-* any missing data
-
-For historical runs, `input_sha256` deterministically combines the replayed
-market events with the selected target quantities and upstream risk state/reason
-codes. Their manifest labels are `historical_signal_risk_proxy` and
-`historical_research_proxy_only`: they identify a legacy signal/risk research
-adapter, not complete canonical coverage, profitability evidence, or production
-readiness. The standalone engine keeps its synthetic-fixture labels for its
-synthetic replay contract.
-
-If market data is missing while a position is open, the backtest uses the data
-that is still available and records exactly what was missing. Contract rolls
-retain the previous mark with the explicit
-`last_pre_roll_mark_zero_return` research proxy so a causal retirement order
-can fill without fabricating a cross-contract return. Runs with missing required
-data or this research proxy should be treated as diagnostic results rather than
-complete executable-performance evidence.
-
-The main backtest assumptions and example tests are stored in `docs/tests/test_naive_backtest.py`.
-
-
-### Paper-data lifecycle
-
-`IbkrPaperRecorder` receives an already connected, injected broker object. It
-validates exact local paper settings, connection state, and managed account
-before requesting quotes or recording events. Its public responsibilities are
-session validation, quote requests, and quote/order/fill/position recording.
-It has no connect, place, or cancel method.
-
-`PaperEventStore` writes only approved paper schemas beneath
-`data/paper/agent_N/run_id/`. It rejects unsafe path identifiers, account-like
-values, credentials/endpoints, duplicate conflicts, invalid order evolution,
-bad types, and noncanonical ordering. It validates a temporary sibling and
-atomically replaces the destination.
-
-Broker-derived objects are untrusted. Normalization errors cross the boundary
-as generic `PaperSafetyError` messages so credentials, endpoints, client IDs,
-and account data are not retained in exception chains.
-
-### Agent 0 paper execution lifecycle
-
-Agent 0 is a deliberately separate random paper experiment:
-
-Agent 0 does not use any signals, it trades completely randomly.
-
-The operator-only entry points are documented in
-[`agents/agent_0/SETTINGS.md`](../agents/agent_0/SETTINGS.md). They can submit or
-globally cancel paper orders and are not part of setup or test verification.
-
-## Testing and failure handling
-
-The main offline tests are in `docs/tests` and `agents/agent_0/tests`.
-
-Important test modules include:
-
-- `test_strategy_equation_examples` — checks approved strategy calculations and sign conventions.
-- `test_schema_contracts` — checks CSV headers, types, keys, ordering, and validation rules.
-- `test_ibkr_paper_recorder` — checks paper-session safety, privacy, broker-data handling, and storage.
-- `test_naive_backtest` — checks replay timing, accounting, reversals, reports, and manifests.
-- `test_characterization` — checks Agent 0 planning, reconciliation, margin checks, routing, and local ledgers.
-
-
-## Technical reference
-
-### Equations, units, signs, and timing
-
-The full strategy equations and assumptions live in the project contracts and strategy documentation. The `strategy/` package contains the typed calculation logic used by the newer strategy implementation.
-
-The main conventions are:
-
-- **Rates and spreads:** basis points (`_bps`)
-- **Raw rates:** decimals (`_decimal`), converted to basis points at the input boundary
-- **Prices:** exchange price points (`_price`)
-- **DV01:** USD gained or lost for a 1 bp rate increase (`_dv01_usd_per_bp`)
-- **P&L and costs:** USD (`_usd`)
-- **Event timestamps:** timezone-aware UTC (`_utc`)
-- **Daily historical data:** ISO dates
-- **Contract quantity:** positive = long contract, negative = short contract
-
-For a position held in the same contract:
-
-`P&L = quantity × price multiplier × price change`
-
-Basket P&L adds the P&L from each leg and subtracts transaction, financing, and roll costs. Price changes between two different contracts are **not** treated as normal same-contract P&L.
-
-DV01 measures interest-rate exposure:
-
-- **Net DV01** is the directional rate exposure after combining positions.
-- **Gross DV01** is the total absolute rate exposure.
-
-Hedge quantities are chosen to keep residual DV01 as small as possible while remaining within approved contract, liquidity, and portfolio limits.
-
-Economic direction and exchange order side are separate concepts. A strategy direction may require a combination of long and short futures positions, so sign behavior should remain covered by the strategy equation tests.
-
-Timing is also important:
-
-- a decision at time `t` can only use information available by `t`;
-- positions already held earn the price movement into the next event;
-- an order cannot fill before it becomes eligible;
-- reversing a position means closing the old direction and opening the new one;
-- both sides of a reversal create turnover and costs;
-- contract rolls include both the closing and opening cost.
-
-### Configuration and dependencies
-
-| Item | Current setting |
-| --- | --- |
-| Python | 3.12 |
-| NumPy | 2.3.5 |
-| pandas | 3.0.1 |
-| `ib_insync` | 0.9.86 |
-| Canonical schema version | 1.0.0 |
-| Strategy equation version | `p10.strategy-equations.v1` |
-| Position-sizing/risk version | `p33.position-sizing-risk.v1` |
-| Agent 0 | Local IBKR paper session, port 7497, client ID 30 |
-
-The strategy version is defined in `strategy/spread.py`, while the sizing version is defined in `strategy/position_sizing.py`.
-
-The root `config.py` belongs to the legacy DataFrame research pipeline. It contains research paths, source settings, maturity mappings, historical-data parameters, sizing constants, and risk limits.
-
-Agent 0 has its own configuration and additional paper-only safeguards. Do not copy account IDs, passwords, credentials, or other secrets into general configuration files or documentation.
-
-### IBKR and `ib_insync`
-
-Agent 0 expects TWS or IB Gateway to already be open and authenticated before it connects.
-
-The project requires a paper connection and validates the configured session before broker activity.
-
-The paper recorder is separate from order execution. `IbkrPaperRecorder` receives an already connected broker object and is responsible for validating the session, requesting quotes, and recording paper events. It does **not** establish the IBKR connection or submit/cancel orders.
-
-Agent 0 uses broker functionality for tasks such as:
-
-- qualifying futures contracts;
-- checking existing open orders;
-- previewing margin requirements;
-- submitting approved paper orders; and
-- cancelling orders when explicitly requested.
-
-`ib_insync` is the pinned Python adapter used to interact with the IBKR API. Changes to this dependency should be treated as compatibility changes rather than routine upgrades.
-
-The project's own tests and paper-trading guards are the immediate runtime safety layer. IBKR documentation remains authoritative for TWS and socket-API behavior.
-
-
-### Glossary
-
-| Term | Meaning |
-| --- | --- |
-| **Basis point (bp)** | 0.01 percentage points |
-| **DV01** | Dollar change in value from a 1 bp change in rates |
-| **Fixed swap spread** | Swap rate minus the matching Treasury rate |
-| **Funding spread** | Floating funding rate minus repo/funding cost |
-| **Gross excess spread** | Swap spread minus expected funding burden |
-| **Net opportunity** | Expected opportunity after estimated costs |
-| **Traditional direction** | Receive-fixed / short-Treasury economic direction (`+1`) |
-| **Reverse direction** | Opposite economic direction (`-1`) |
-| **Decision timestamp** | Earliest time when all inputs used by a decision were available |
-| **`MarketSnapshot`** | Typed collection of market information available at a decision time |
-| **`OrderIntent`** | Broker-independent description of a paper order the strategy wants submitted |
-| **Canonical data** | Data converted into the project's approved, validated schemas |
-| **Synthetic mechanics** | Artificial test data used to prove that the engine behaves correctly |
-| **Agent 0** | Random IBKR paper-order experiment; not the swap-arbitrage strategy |
-| **Paper recorder** | IBKR adapter that validates and records paper events but does not manage the connection or submit orders |
-| **Lifecycle trade** | A trade tracked from opening exposure through final closure |
-| **Fail closed** | Refuse new risk or refuse to overwrite output when required validation fails |
-
-## Project capabilities and operating steps
-
-### 1. Prepare and verify the Python environment
-
-From the repository root, create a Python 3.12 environment (or recreate it if
-its base interpreter has been removed), install the pinned dependencies, and
-run the offline checks:
+Python 3.12 is the supported interpreter. From PowerShell in the repository
+root, create an environment, install the pinned dependencies, and run the
+offline checks:
 
 ```powershell
 & "C:\Path\To\Python312\python.exe" -m venv .venv
@@ -355,65 +16,307 @@ python risk_pipeline.py --self-check
 python -m backtesting --self-check
 ```
 
-The self-checks validate deterministic examples only; they do not download data,
-connect to IBKR, or establish strategy profitability.
+These checks use fixed examples. They do not download data, connect to IBKR, or
+show that the strategy is profitable.
 
-### 2. Re-collect and prepare historical research data
+## Operating steps
 
-Use the legacy research pipeline to refresh the public rate and Eris sources,
-rebuild the derived raw-data files, and calculate risk-sized signals:
+### Prepare historical data
+
+Refresh the public rate and Eris data, rebuild the raw files, and calculate
+risk-sized signals:
 
 ```powershell
 python risk_pipeline.py --refresh-raw --treasury --eris
 ```
 
-This produces the derived files consumed by the canonical historical adapter,
-including
-`data/raw_data/risk_data.csv`, swap settlement/DV01 data, and Treasury-futures
-data. It requires network access and its results depend on public-source
-availability, coverage, and revisions. To refresh only the signal/risk layer
-from existing raw data, run:
+This command needs network access. Its results depend on the coverage and
+availability of the public sources. To rebuild only the signal and risk data
+from existing raw files, run:
 
 ```powershell
 python risk_pipeline.py --refresh-signals
 ```
 
-### 3. Run the historical backtest
+### Run the historical backtest
 
-After the derived historical input exists, run the canonical causal replay:
+After the historical input exists, run:
 
 ```powershell
 python -m backtesting --start auto --end auto
 ```
 
-Each run writes `manifest.csv`, `daily.csv`, `decisions.csv`, `orders.csv`,
-`fills.csv`, `trades.csv`, `positions.csv`, and `summary.csv` under
-`data/results/backtests/<run-id>/`. Use `--refresh-signals` only when the
-upstream signal/risk data needs rebuilding. The replay models delayed fills,
-costs, financing, and roll handling, but its current data adapter and roll/
-liquidity calibration remain research limitations.
+Results are written to `data/results/backtests/<run-id>/`. The current
+historical adapter and roll and liquidity settings are research tools, so treat
+the results as diagnostic rather than proof of executable performance.
 
-### 4. Run Agent 0's paper-only weekly order experiment
+### Run the Agent 0 paper experiment
 
-Agent 0 is separate from the swap-arbitrage strategy: it creates a constrained,
-random weekly paper-order plan. Before running it, a human must complete the
-paper-session checklist in `agents/agent_0/SETTINGS.md`, start TWS or IB Gateway
-in paper mode, and set the approved paper account only in the local environment:
+Agent 0 is separate from the swap-arbitrage strategy. It creates a constrained,
+random weekly paper-order plan and does not use strategy signals.
+
+Before running it, complete the checklist in
+[`agents/agent_0/SETTINGS.md`](../agents/agent_0/SETTINGS.md), start TWS or IB
+Gateway in paper mode, and set the approved paper account in the local
+environment:
 
 ```powershell
 $env:AGENT0_IBKR_ACCOUNT = "<your-approved-paper-account>"
 .venv\Scripts\python.exe agents\agent_0\run.py
 ```
 
-The runner validates paper-only connectivity, account visibility, contract
-qualification, working-order limits, and a margin reserve before submitting any
-paper orders. To cancel all working orders visible in that paper session,
-including manual and other API-client orders, use:
+The runner checks the paper connection, visible account, contracts, working
+orders, and margin reserve before it submits an order.
+
+To cancel every working order visible to the paper session, including manual
+orders and orders from other API clients, run:
 
 ```powershell
 .venv\Scripts\python.exe agents\agent_0\run.py --cancel-all
 ```
 
-Cancellation is intentionally broad and resets local upcoming orders to planned;
-it does not create a replacement weekly plan. Never use a live account, live
-port, or account value stored in source control.
+Cancellation resets local upcoming orders to `planned`; it does not create a
+replacement plan. Never use a live account or live port, and never store an
+account value in source control.
+
+## System reference
+
+### Components
+
+| Path | Responsibility |
+| --- | --- |
+| `strategy/models.py` | Defines shared strategy data structures, including `MarketSnapshot` and `OrderIntent` |
+| `strategy/spread.py` | Calculates swap/Treasury spreads and trading costs |
+| `strategy/signal_generation.py` | Decides whether to enter, exit, reverse, or hold |
+| `strategy/position_sizing.py` | Calculates hedge amounts and contract quantities within risk limits |
+| `strategy/risk_signals.py` | Allows, reduces, blocks, or flattens trading based on risk conditions |
+| `strategy/costs.py` | Estimates trading costs |
+| `strategy/portfolio.py` | Selects trades without exceeding portfolio DV01 limits |
+| `data_pipeline/contracts.py` | Defines and validates required data formats |
+| `data_pipeline/historical_data/` | Downloads, cleans, and organizes historical data |
+| `data_pipeline/live_data_pipeline/` | Records IBKR paper quotes, orders, fills, and positions |
+| `backtesting/engine.py` | Runs the simulation and accounting engine |
+| `backtesting/historical.py` | Converts historical signal and risk data into replay events |
+| `backtesting/main.py` | Provides `python -m backtesting` and the offline self-check |
+| `agents/agent_0/` | Runs the random weekly paper-trading experiment |
+| `docs/tests/` | Tests strategy and data behavior |
+| `docs/verification/` | Stores evidence from earlier verification runs |
+
+The strategy refuses new trades when required data is missing, invalid, or
+stale. Risk limits can also block trading because of DV01, capacity, losses,
+drawdown, margin, broker state, reconciliation, or contract rolls. These
+controls apply in both backtests and paper trading.
+
+### Data sources
+
+| Provider | Data | Project function |
+| --- | --- | --- |
+| U.S. Treasury | Daily constant-maturity yield curves | `get_treasury_data()` |
+| New York Fed SOFR API | SOFR history | `get_nyfed_rate("SOFR", ...)` |
+| New York Fed EFFR API | EFFR history | `get_nyfed_rate("EFFR", ...)` |
+| Eris Markets public archive | Swap-futures settlements, tickers, and published DV01 | `get_eris_public_swap_data()` |
+| Yahoo Finance chart API | Research prices for `ZT=F` and `ZF=F` | `get_public_treasury_futures_prices()` |
+| IBKR socket API | Paper quotes, contracts, positions, orders, fills, and margin previews | Paper-trading infrastructure only |
+
+IBKR uses the local paper endpoint `127.0.0.1:7497`. It is not a historical
+data source.
+
+### Historical data layout
+
+- `data/rates/rates_YYYY.csv`: interest rates in basis points
+- `data/futures/futures_settlements_YYYY.csv`: futures settlement prices
+- `data/contract_risk/contracts.csv`: contract details and effective dates
+- `data/contract_risk/contract_risk_YYYY.csv`: contract DV01 and rate sensitivity
+- `data/market/daily_market_YYYY.csv`: daily market data
+
+`historical_data_builder.py` downloads the source data. `canonicalize.py`
+converts it to the standard project format. Keeping these steps separate lets
+tests use saved samples without making network requests.
+
+### IBKR operational API
+
+All broker activity is paper-only. Connection, order submission, and
+cancellation use guarded helpers. `IbkrPaperRecorder` validates and records
+broker data but does not connect, submit, cancel, or request positions itself.
+
+| Need | Project function | IBKR or `ib_insync` call | Notes |
+| --- | --- | --- | --- |
+| Connect to paper session | `agents.agent_0.broker.connect(account_id)` | `IB.connect()`, `isConnected()`, `managedAccounts()` | Requires localhost, port `7497`, client ID `30`, and a `DU...` account |
+| Find futures contracts | `agents.agent_0.contracts.resolve_futures(ib, instrument)` | `reqContractDetails()`, `qualifyContracts()` | Returns eligible qualified contracts and their IBKR IDs |
+| Inspect working orders | `ib.reqAllOpenOrders()` | `reqAllOpenOrders()` | Used before order submission |
+| Preview margin | `fit_order_to_margin(...)` | `whatIfOrder(contract, order)` | Reduces quantity until the margin reserve is met |
+| Submit an order | `agents.agent_0.broker.submit_order(...)` | `placeOrder(contract, order)` | Checks paper settings and waits for broker status |
+| Cancel visible orders | `agents.agent_0.broker.cancel_all_orders(ib)` | `reqGlobalCancel()`, `reqAllOpenOrders()` | Can also cancel manual orders and orders from other clients |
+| Request quotes | `IbkrPaperRecorder.request_quotes(contracts)` | `reqMktData()` | Checks the paper session first |
+| Record positions | `IbkrPaperRecorder.record_positions(...)` | `positions()` | Caller gets the snapshot; recorder validates and stores it |
+| Record orders and fills | `record_order(...)`, `record_fill(...)` | Broker callbacks | Converts broker objects to canonical paper records |
+
+TWS or IB Gateway must already be open and authenticated. `ib_insync` is the
+pinned IBKR adapter; treat dependency changes as compatibility changes. IBKR's
+documentation remains authoritative for TWS and socket API behavior.
+
+## Historical backtest reference
+
+`backtesting.historical.run_historical_backtest` converts stored signal and
+risk data into typed `ReplayEvent` records, runs the accounting engine, and
+writes the results. Use `--refresh-signals` to rebuild upstream inputs. The
+`--self-check` option runs offline.
+
+| Option | Default |
+| --- | --- |
+| `--run-id` | `historical-backtest` |
+| `--output-root` | `data/results/backtests` |
+| `--initial-equity` | `1000000` |
+| `--start`; `--end` | `auto`; `auto` |
+| `--bid-ask-half-spread-points` | `0.01` |
+| `--commission-usd-per-contract` | `1` |
+| `--slippage-points` | `0.005` |
+| `--financing-usd-per-contract-day` | `0.10` |
+| `--roll-usd-per-contract` | `1` |
+
+For each event, the engine:
+
+1. marks existing positions and applies financing costs;
+2. processes eligible orders and their fills, rejections, or expiry;
+3. runs the strategy using current positions and active orders;
+4. saves new orders for a later event; and
+5. records P&L, positions, and accounting data.
+
+A decision at event `t` cannot fill until a later event. A selected date window
+always starts with the chosen initial equity and no inherited position or P&L.
+When direction reverses, the engine closes the old position before opening the
+new one based on the filled quantity.
+
+Each run contains:
+
+- `manifest.csv`
+- `daily.csv`
+- `decisions.csv`
+- `orders.csv`
+- `fills.csv`
+- `trades.csv`
+- `positions.csv`
+- `summary.csv`
+
+The files are validated before they are saved. The manifest records versions,
+date range, row counts, hashes, assumptions, and missing data.
+
+For historical runs, `input_sha256` hashes the replay events, target quantities,
+and upstream risk state. The `historical_*_proxy` labels identify research
+inputs; they do not show complete coverage, profitability, or production
+readiness.
+
+If data is missing while a position is open, the run records the gap and uses
+the available data. During a contract roll, it carries forward the previous
+mark with `last_pre_roll_mark_zero_return` instead of inventing a cross-contract
+return. Treat runs with missing required data or this proxy as diagnostic.
+
+Backtest assumptions and examples are tested in
+`docs/tests/test_naive_backtest.py`.
+
+## Paper-data lifecycle
+
+`IbkrPaperRecorder` receives an already connected broker object. It checks the
+local paper settings, connection, and managed account before it requests quotes
+or records events.
+
+`PaperEventStore` accepts only approved paper schemas under
+`data/paper/agent_N/run_id/`. It rejects unsafe paths, account-like values,
+secrets, conflicting duplicates, invalid order changes, bad types, and invalid
+ordering. It validates a temporary sibling before replacing the destination.
+
+Broker objects are untrusted. Normalization failures become generic
+`PaperSafetyError` messages so exception chains do not retain accounts,
+credentials, endpoints, or client IDs.
+
+## Technical conventions
+
+### Units and signs
+
+- Rates and spreads: basis points (`_bps`)
+- Raw rates: decimals (`_decimal`), converted at the input boundary
+- Prices: exchange price points (`_price`)
+- DV01: USD gained or lost for a 1 bp rate increase (`_dv01_usd_per_bp`)
+- P&L and costs: USD (`_usd`)
+- Event timestamps: timezone-aware UTC (`_utc`)
+- Daily historical data: ISO dates
+- Contract quantity: positive is long; negative is short
+
+For a position held in the same contract:
+
+`P&L = quantity × price multiplier × price change`
+
+Basket P&L adds the P&L from each leg and subtracts transaction, financing, and
+roll costs. A price change between different contracts is not normal
+same-contract P&L.
+
+Net DV01 is the combined directional rate exposure. Gross DV01 is the sum of
+absolute rate exposure. Hedge quantities aim to minimize residual DV01 while
+respecting contract, liquidity, and portfolio limits.
+
+Economic direction is not the same as exchange order side. One strategy
+direction may need both long and short futures positions. The strategy equation
+tests cover these sign rules.
+
+### Timing
+
+- A decision at time `t` uses only information available by `t`.
+- Existing positions earn the price move into the next event.
+- An order cannot fill before it becomes eligible.
+- A reversal closes the old direction before opening the new one.
+- Both sides of a reversal create turnover and costs.
+- A contract roll includes closing and opening costs.
+
+### Configuration and dependencies
+
+| Item | Setting |
+| --- | --- |
+| Python | 3.12 |
+| NumPy | 2.3.5 |
+| pandas | 3.0.1 |
+| `ib_insync` | 0.9.86 |
+| Canonical schema version | 1.0.0 |
+| Strategy equation version | `p10.strategy-equations.v1` |
+| Position-sizing/risk version | `p33.position-sizing-risk.v1` |
+| Agent 0 | Local IBKR paper session, port `7497`, client ID `30` |
+
+Dependency versions are pinned in [`requirements.txt`](../requirements.txt).
+The strategy version is defined in `strategy/spread.py`; the sizing version is
+defined in `strategy/position_sizing.py`.
+
+The root `config.py` belongs to the legacy DataFrame research pipeline. Agent 0
+has separate settings and paper-only safeguards. Do not put account IDs,
+passwords, credentials, or other secrets in configuration files or
+documentation.
+
+## Testing and failure handling
+
+The main offline tests are in `docs/tests` and `agents/agent_0/tests`:
+
+- `test_strategy_equation_examples`: calculation and sign conventions
+- `test_schema_contracts`: CSV headers, types, keys, ordering, and validation
+- `test_ibkr_paper_recorder`: paper safety, privacy, broker data, and storage
+- `test_naive_backtest`: replay timing, accounting, reversals, and reports
+- `test_characterization`: Agent 0 planning, reconciliation, margin, and routing
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Basis point (bp)** | 0.01 percentage points |
+| **DV01** | Dollar change in value from a 1 bp rate change |
+| **Fixed swap spread** | Swap rate minus the matching Treasury rate |
+| **Funding spread** | Floating funding rate minus repo or funding cost |
+| **Gross excess spread** | Swap spread minus expected funding cost |
+| **Net opportunity** | Expected opportunity after estimated costs |
+| **Traditional direction** | Receive-fixed, short-Treasury direction (`+1`) |
+| **Reverse direction** | Opposite direction (`-1`) |
+| **Decision timestamp** | Earliest time when all decision inputs were available |
+| **`MarketSnapshot`** | Typed market information available at decision time |
+| **`OrderIntent`** | Broker-independent description of a requested paper order |
+| **Canonical data** | Data converted to approved, validated schemas |
+| **Synthetic mechanics** | Test data used to check engine behavior |
+| **Agent 0** | Random IBKR paper-order experiment, not the strategy |
+| **Paper recorder** | Adapter that validates and records paper events |
+| **Lifecycle trade** | Trade tracked from opening exposure through final closure |
+| **Fail closed** | Refuse new risk or output when required validation fails |
