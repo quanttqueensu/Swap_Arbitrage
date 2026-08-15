@@ -17,44 +17,6 @@ python -m pip install -r requirements.txt
 python -m pip check
 ```
 
-### Offline verification commands
-
-After activating a valid environment, these commands are supported and make no
-external or broker connection:
-
-```powershell
-python -m unittest docs.tests.test_naive_backtest -v
-python -m unittest docs.tests.test_schema_contracts -v
-python -m unittest discover -s docs/tests -v
-python -m unittest discover -s agents/agent_0/tests -v
-python -m compileall -q backtesting strategy data_pipeline agents/agent_0 docs/tests
-python signal_pipeline.py --self-check
-python risk_pipeline.py --self-check
-python -m backtesting --self-check
-```
-
-The full suite imports `ib_insync` to prove the pinned class is available, but
-tests replace broker behavior with fakes and socket guards. Importing the class
-does not connect to IBKR.
-
-### Architecture at a glance
-
-```text
-historical_data_builder -> signal_pipeline -> risk_pipeline
-    -> backtesting.historical.run_historical_backtest
-    -> backtesting.engine.run_backtest -> backtesting.reports.write_results
-    -> data/results/backtests/<run-id>/{manifest,daily,decisions,orders,fills,trades,positions,summary}.csv
-
-synthetic ReplayEvent fixtures -> backtesting.engine.run_backtest
-    -> test mechanics only
-
-IBKR paper session -> IbkrPaperRecorder -> validated paper CSVs
-IBKR paper session <- Agent 0 random policy/manual operator
-```
-
-Synthetic ReplayEvent fixtures are test mechanics, not a separate historical
-backtest workflow.
-
 ## System reference
 
 ### Directory and component ownership
@@ -71,13 +33,52 @@ backtest workflow.
 | `data_pipeline/contracts.py`               | Defines and validates required data formats                              |
 | `data_pipeline/historical_data/`           | Downloads, cleans, and organizes historical market data                  |
 | `data_pipeline/live_data_pipeline/`        | Records IBKR paper quotes, orders, fills, and positions                  |
-| `backtesting/engine.py`                    | Sole simulation and accounting engine                                    |
+| `backtesting/engine.py`                    | Simulation engine                                                        |
 | backtesting/historical.py                  | Converts historical signals and risk data into replay events             |
 | backtesting/main.py                        | Adds the python -m backtesting command and offline self-check.           |
 | `agents/agent_0/`                          | Runs the random weekly paper-trading experiment                          |
 | `docs/tests/`                              | Tests that the strategy and data behave as expected                      |
 | `docs/verification/`                       | Stores results and evidence from previous verification tests             |
 
+
+### IBKR operational API reference
+
+All broker activity is paper-only. The reusable recorder validates and stores
+broker data, while connection, order submission, and cancellation remain
+separate guarded operations.
+
+| Need | Project function | IBKR / `ib_insync` call | Notes |
+| --- | --- | --- | --- |
+| Connect and validate the paper session | `agents.agent_0.broker.connect(account_id)` | `IB.connect()`, `isConnected()`, `managedAccounts()` | Requires localhost, port `7497`, client ID `30`, and a `DU...` paper account. |
+| Find tradable futures contracts | `agents.agent_0.contracts.resolve_futures(ib, instrument)` | `reqContractDetails()`, `qualifyContracts()` | Selects eligible expiries and returns qualified contracts with IBKR contract IDs. |
+| Inspect working orders | `ib.reqAllOpenOrders()` | `reqAllOpenOrders()` | Used for reconciliation before submission. |
+| Preview margin | `fit_order_to_margin(...)` | `whatIfOrder(contract, order)` | Reduces quantity until the configured paper margin reserve is met. |
+| Submit an order | `agents.agent_0.broker.submit_order(...)` | `placeOrder(contract, order)` | Use the guarded helper; it checks paper settings and waits for a broker status. |
+| Cancel all visible orders | `agents.agent_0.broker.cancel_all_orders(ib)` | `reqGlobalCancel()`, `reqAllOpenOrders()` | Broad operation: can cancel manual and other API-client orders visible to the session. |
+| Request quotes | `IbkrPaperRecorder.request_quotes(contracts)` | `reqMktData()` | Validates the paper session before requesting market data. |
+| Check and record positions | `IbkrPaperRecorder.record_positions(ib.positions(), observed_at_utc)` | `positions()` | The caller retrieves the IBKR position snapshot; the recorder validates it and writes the canonical paper-position records. |
+| Record orders and fills | `record_order(...)`, `record_fill(...)` | Broker order/execution callback data | Normalizes broker objects into canonical paper CSV records. |
+
+`IbkrPaperRecorder` does not connect, submit, cancel, or directly request
+positions. It is the validation and recording boundary for IBKR paper data.
+
+### Data APIs
+
+| Provider / API | Endpoint pattern | Data retrieved | Project function |
+| --- | --- | --- | --- |
+| U.S. Treasury | `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=YYYY` | Daily Treasury constant-maturity yield curve | `get_treasury_data()` |
+| New York Fed SOFR API | `https://markets.newyorkfed.org/api/rates/secured/sofr/search.json?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` | SOFR history | `get_nyfed_rate("SOFR", ...)` |
+| New York Fed EFFR API | `https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` | EFFR history | `get_nyfed_rate("EFFR", ...)` |
+| Eris Markets public archive | `https://files.erisfutures.com/ftp/.../Eris_Instruments_YYYYMMDD_Settles*.csv` | Eris SOFR swap-futures settlements, ticker symbols, and published DV01 | `get_eris_public_swap_data()` |
+| Yahoo Finance chart API | `https://query1.finance.yahoo.com/v8/finance/chart/{ticker}` | Continuous research prices for `ZT=F` and `ZF=F` | `get_public_treasury_futures_prices()` |
+| IBKR TWS / IB Gateway socket API | Local `127.0.0.1:7497`, via `ib_insync` | Paper quotes, contracts, positions, open orders, margin previews, and paper orders | IBKR infrastructure only; not a historical-data source |
+
+Refresh all public historical inputs for a date range: 
+
+
+```powershell
+.\.venv\Scripts\python.exe risk_pipeline.py --refresh-raw --treasury --eris
+```
 
 ### Canonical historical data formatting and layout
 
@@ -312,14 +313,6 @@ Agent 0 uses broker functionality for tasks such as:
 `ib_insync` is the pinned Python adapter used to interact with the IBKR API. Changes to this dependency should be treated as compatibility changes rather than routine upgrades.
 
 The project's own tests and paper-trading guards are the immediate runtime safety layer. IBKR documentation remains authoritative for TWS and socket-API behavior.
-
-### Known limitations
-
-The current project still has several important limitations:
-
-- The historical adapter currently consumes the existing CSV signal/risk output;
-  canonical CSV-to-shared-strategy adaptation remains incomplete.
-- Realistic executable contract-roll and liquidity calibration remain incomplete.
 
 
 ### Glossary

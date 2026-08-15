@@ -37,11 +37,6 @@ Repository organization:
   folders; `data/results/backtests/` contains canonical historical-backtest
   report sets.
 
-The test suite and import smoke check are offline: they do not contact IBKR,
-Cloudflare/R2, or public market-data endpoints. Agent 0's lazy IBKR client is
-loaded only to confirm that its installed class is available; no broker
-connection is made.
-
 ## Historical backtesting
 
 The supported historical backtest command is:
