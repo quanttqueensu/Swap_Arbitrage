@@ -12,6 +12,7 @@ from data_pipeline.historical_data.historical_data_builder import (
     build_cme_swap_data,
     build_ctd_treasury_futures_data,
     build_treasury_futures_data,
+    equivalent_par_sofr_swap_rate_bps,
     extract_eris_swap_row,
     parse_yahoo_chart,
     strategy_swap_prices,
@@ -142,8 +143,41 @@ class SignalCalendarTests(unittest.TestCase):
         )
 
 
+class ErisEquivalentParRateTests(unittest.TestCase):
+    def test_equivalent_par_rate_uses_documented_units_and_sign(self) -> None:
+        """Catches a reversed price sign or an incorrect percent/basis-point conversion."""
+        self.assertEqual(
+            equivalent_par_sofr_swap_rate_bps(100.0, 4.50, 0.0, 0.0, 19.0),
+            450.0,
+        )
+        self.assertEqual(
+            equivalent_par_sofr_swap_rate_bps(100.019, 4.50, 0.0, 0.0, 19.0),
+            449.0,
+        )
+        self.assertEqual(
+            equivalent_par_sofr_swap_rate_bps(99.981, 4.50, 0.0, 0.0, 19.0),
+            451.0,
+        )
+
+    def test_equivalent_par_rate_rejects_invalid_inputs(self) -> None:
+        """Catches invalid market values reaching the conversion as a numeric rate."""
+        for values in (
+            (None, 4.5, 0.0, 0.0, 19.0),
+            (100.0, None, 0.0, 0.0, 19.0),
+            (100.0, 4.5, None, 0.0, 19.0),
+            (100.0, 4.5, 0.0, None, 19.0),
+            (100.0, 4.5, 0.0, 0.0, None),
+            (0.0, 4.5, 0.0, 0.0, 19.0),
+            (100.0, 4.5, 0.0, 0.0, 0.0),
+            (float("nan"), 4.5, 0.0, 0.0, 19.0),
+            (100.0, 4.5, float("inf"), 0.0, 19.0),
+        ):
+            self.assertIsNone(equivalent_par_sofr_swap_rate_bps(*values))
+
+
 class CmeMasterTests(unittest.TestCase):
     def test_active_contract_extraction_preserves_full_ticker(self) -> None:
+        """Catches dropping or reading the conversion inputs from a non-selected contract."""
         settlements = pd.DataFrame(
             {
                 "Symbol": ["YITH24", "YITM24"],
@@ -153,6 +187,12 @@ class CmeMasterTests(unittest.TestCase):
                 "LastTradeDate": ["03/18/2024", "06/17/2024"],
                 "FloatingIndex": ["SOFR", "SOFR"],
                 "DV01": [19.0, 20.0],
+                "Coupon (%)": [4.50, 4.60],
+                "PastFxdFltPmts (B)": [0.0, 0.0],
+                "ErisPAI (C)": [0.0, 0.0],
+                "PV01": [19.0, 20.0],
+                "EffectiveDate": ["12/20/2023", "03/20/2024"],
+                "MaturityDate": ["12/20/2025", "03/20/2026"],
             }
         )
 
@@ -165,6 +205,41 @@ class CmeMasterTests(unittest.TestCase):
         self.assertEqual(output["eris_swap_2y_ticker"], "YITH24")
         self.assertEqual(output["eris_swap_2y_price"], 99.1)
         self.assertEqual(output["eris_swap_2y_dv01"], 19.0)
+        self.assertEqual(output["eris_swap_2y_fixed_coupon_pct"], 4.50)
+        self.assertEqual(output["eris_swap_2y_b_usd"], 0.0)
+        self.assertEqual(output["eris_swap_2y_c_usd"], 0.0)
+        self.assertEqual(output["eris_swap_2y_pv01_usd_per_bp"], 19.0)
+        self.assertEqual(output["eris_swap_2y_effective_date"], "12/20/2023")
+        self.assertEqual(output["eris_swap_2y_maturity_date"], "12/20/2025")
+        self.assertEqual(output["eris_swap_2y_last_trade_date"], "03/18/2024")
+        self.assertEqual(
+            output["eris_swap_2y_equivalent_par_rate_bps"],
+            equivalent_par_sofr_swap_rate_bps(99.1, 4.50, 0.0, 0.0, 19.0),
+        )
+
+    def test_active_contract_extraction_omits_rate_when_pv01_is_zero(self) -> None:
+        """Catches an invalid PV01 producing a rate while hiding the usable selected quote."""
+        settlements = pd.DataFrame(
+            {
+                "Symbol": ["YITH24"],
+                "ExchangeSymbol (EX005)": ["YIT"],
+                "FinalSettlementPrice": [99.1],
+                "EvaluationDate": ["01/02/2024"],
+                "LastTradeDate": ["03/18/2024"],
+                "FloatingIndex": ["SOFR"],
+                "DV01": [19.0],
+                "Coupon (%)": [4.50],
+                "PastFxdFltPmts (B)": [0.0],
+                "ErisPAI (C)": [0.0],
+                "PV01": [0.0],
+            }
+        )
+
+        output = extract_eris_swap_row(settlements, pd.Timestamp("2024-01-02"), active_contracts={})
+
+        self.assertEqual(output["eris_swap_2y_ticker"], "YITH24")
+        self.assertEqual(output["eris_swap_2y_price"], 99.1)
+        self.assertNotIn("eris_swap_2y_equivalent_par_rate_bps", output)
 
     def test_active_contract_extraction_rolls_shared_state(self) -> None:
         active_contracts: dict[str, str] = {}

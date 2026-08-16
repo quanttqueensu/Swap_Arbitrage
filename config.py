@@ -133,6 +133,46 @@ SWAP_COLUMNS = {
     "5Y": "eris_swap_5y_price",
 }
 
+SWAP_EQUIVALENT_PAR_RATE_COLUMNS = {
+    "2Y": "eris_swap_2y_equivalent_par_rate_bps",
+    "5Y": "eris_swap_5y_equivalent_par_rate_bps",
+}
+
+SWAP_FIXED_COUPON_COLUMNS = {
+    "2Y": "eris_swap_2y_fixed_coupon_pct",
+    "5Y": "eris_swap_5y_fixed_coupon_pct",
+}
+
+SWAP_B_USD_COLUMNS = {
+    "2Y": "eris_swap_2y_b_usd",
+    "5Y": "eris_swap_5y_b_usd",
+}
+
+SWAP_C_USD_COLUMNS = {
+    "2Y": "eris_swap_2y_c_usd",
+    "5Y": "eris_swap_5y_c_usd",
+}
+
+SWAP_PV01_COLUMNS = {
+    "2Y": "eris_swap_2y_pv01_usd_per_bp",
+    "5Y": "eris_swap_5y_pv01_usd_per_bp",
+}
+
+SWAP_EFFECTIVE_DATE_COLUMNS = {
+    "2Y": "eris_swap_2y_effective_date",
+    "5Y": "eris_swap_5y_effective_date",
+}
+
+SWAP_MATURITY_DATE_COLUMNS = {
+    "2Y": "eris_swap_2y_maturity_date",
+    "5Y": "eris_swap_5y_maturity_date",
+}
+
+SWAP_LAST_TRADE_DATE_COLUMNS = {
+    "2Y": "eris_swap_2y_last_trade_date",
+    "5Y": "eris_swap_5y_last_trade_date",
+}
+
 SWAP_TICKER_COLUMNS = {
     "2Y": "eris_swap_2y_ticker",
     "5Y": "eris_swap_5y_ticker",

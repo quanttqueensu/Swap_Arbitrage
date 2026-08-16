@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import calendar
 import json
+import math
 import random
 import time
 import xml.etree.ElementTree as ET
 from io import StringIO
+from numbers import Real
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -33,8 +35,16 @@ from config import (
     RETRIES,
     START_DATE,
     SWAP_COLUMNS,
+    SWAP_B_USD_COLUMNS,
+    SWAP_C_USD_COLUMNS,
     SWAP_DV01_COLUMNS,
     SWAP_DV01_YEARS,
+    SWAP_EFFECTIVE_DATE_COLUMNS,
+    SWAP_EQUIVALENT_PAR_RATE_COLUMNS,
+    SWAP_FIXED_COUPON_COLUMNS,
+    SWAP_LAST_TRADE_DATE_COLUMNS,
+    SWAP_MATURITY_DATE_COLUMNS,
+    SWAP_PV01_COLUMNS,
     SWAP_RATES_FILE,
     SWAP_RETURN_COLUMNS,
     SWAP_TICKER_COLUMNS,
@@ -74,7 +84,20 @@ def clean_price_frame(df: pd.DataFrame) -> pd.DataFrame:
     output = output.drop_duplicates(subset=["date"])
     output = output.sort_values("date").reset_index(drop=True)
 
-    text_cols = ["date", *[column for column in output if column.endswith("_ticker")]]
+    eris_date_cols = [
+        column
+        for columns in (
+            SWAP_EFFECTIVE_DATE_COLUMNS,
+            SWAP_MATURITY_DATE_COLUMNS,
+            SWAP_LAST_TRADE_DATE_COLUMNS,
+        )
+        for column in columns.values()
+        if column in output
+    ]
+    for column in eris_date_cols:
+        output[column] = pd.to_datetime(output[column], errors="coerce").dt.normalize()
+
+    text_cols = ["date", *eris_date_cols, *[column for column in output if column.endswith("_ticker")]]
     numeric_cols = output.columns.difference(text_cols)
     output[numeric_cols] = output[numeric_cols].apply(pd.to_numeric, errors="coerce")
 
@@ -366,6 +389,30 @@ def read_eris_settlement_file(date: pd.Timestamp) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _is_finite_real(value: object) -> bool:
+    return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def equivalent_par_sofr_swap_rate_bps(
+    settlement_price: object,
+    fixed_coupon_pct: object,
+    b_usd: object,
+    c_usd: object,
+    pv01_usd_per_bp: object,
+) -> float | None:
+    values = (settlement_price, fixed_coupon_pct, b_usd, c_usd, pv01_usd_per_bp)
+
+    if not all(_is_finite_real(value) for value in values):
+        return None
+    if settlement_price <= 0 or pv01_usd_per_bp <= 0:
+        return None
+
+    a_usd = (settlement_price - 100.0 - b_usd + c_usd) * 1000.0
+    equivalent_par_rate_pct = fixed_coupon_pct - (a_usd / pv01_usd_per_bp) / 100.0
+    equivalent_par_rate_bps = equivalent_par_rate_pct * 100.0
+    return round(equivalent_par_rate_bps, 10) if math.isfinite(equivalent_par_rate_bps) else None
+
+
 def extract_eris_swap_row(
     settlements: pd.DataFrame,
     fallback_date: pd.Timestamp,
@@ -387,7 +434,7 @@ def extract_eris_swap_row(
     else:
         row_date = fallback_date
 
-    frame["LastTradeDate"] = pd.to_datetime(frame["LastTradeDate"], errors="coerce").dt.normalize()
+    frame["_last_trade_date"] = pd.to_datetime(frame["LastTradeDate"], errors="coerce").dt.normalize()
     row = {"date": row_date}
 
     for maturity, symbol in ERIS_SOFR_SWAP_FUTURES.items():
@@ -395,12 +442,12 @@ def extract_eris_swap_row(
         dv01_col = SWAP_DV01_COLUMNS.get(maturity)
         ticker_col = SWAP_TICKER_COLUMNS.get(maturity)
         candidates = frame[frame["ExchangeSymbol (EX005)"].eq(symbol)].copy()
-        candidates = candidates[candidates["LastTradeDate"] >= row_date]
+        candidates = candidates[candidates["_last_trade_date"] >= row_date]
 
         if candidates.empty:
             continue
 
-        sort_cols = ["LastTradeDate"]
+        sort_cols = ["_last_trade_date"]
         target_dv01 = None
 
         if "DV01" in candidates.columns and maturity in SWAP_DV01_YEARS:
@@ -415,7 +462,7 @@ def extract_eris_swap_row(
             if not near_tenor.empty:
                 candidates = near_tenor
 
-            sort_cols = ["_dv01_gap", "LastTradeDate"]
+            sort_cols = ["_dv01_gap", "_last_trade_date"]
 
         selected = None
 
@@ -426,7 +473,7 @@ def extract_eris_swap_row(
                 active = candidates[candidates["Symbol"].eq(active_symbol)]
 
                 if not active.empty:
-                    active_row = active.sort_values("LastTradeDate").iloc[0]
+                    active_row = active.sort_values("_last_trade_date").iloc[0]
                     active_dv01 = active_row.get("DV01")
                     in_band = (
                         target_dv01 is None
@@ -440,7 +487,7 @@ def extract_eris_swap_row(
         if selected is None:
             selected = candidates.sort_values(sort_cols).iloc[0]
 
-        price = pd.to_numeric(selected["FinalSettlementPrice"], errors="coerce")
+        price = pd.to_numeric(selected.get("FinalSettlementPrice"), errors="coerce")
 
         if pd.isna(price):
             continue
@@ -454,10 +501,38 @@ def extract_eris_swap_row(
             row[ticker_col] = str(selected["Symbol"]).strip()
 
         if dv01_col and "DV01" in selected.index:
-            dv01 = pd.to_numeric(selected["DV01"], errors="coerce")
+            dv01 = pd.to_numeric(selected.get("DV01"), errors="coerce")
 
             if not pd.isna(dv01):
                 row[dv01_col] = dv01
+
+        fixed_coupon_pct = selected.get("Coupon (%)")
+        b_usd = selected.get("PastFxdFltPmts (B)")
+        c_usd = selected.get("ErisPAI (C)")
+        pv01_usd_per_bp = selected.get("PV01")
+        retained_values = {
+            SWAP_FIXED_COUPON_COLUMNS[maturity]: fixed_coupon_pct,
+            SWAP_B_USD_COLUMNS[maturity]: b_usd,
+            SWAP_C_USD_COLUMNS[maturity]: c_usd,
+            SWAP_PV01_COLUMNS[maturity]: pv01_usd_per_bp,
+            SWAP_EFFECTIVE_DATE_COLUMNS[maturity]: selected.get("EffectiveDate"),
+            SWAP_MATURITY_DATE_COLUMNS[maturity]: selected.get("MaturityDate"),
+            SWAP_LAST_TRADE_DATE_COLUMNS[maturity]: selected.get("LastTradeDate"),
+        }
+
+        for column, value in retained_values.items():
+            if pd.notna(value):
+                row[column] = value
+
+        equivalent_par_rate_bps = equivalent_par_sofr_swap_rate_bps(
+            price,
+            fixed_coupon_pct,
+            b_usd,
+            c_usd,
+            pv01_usd_per_bp,
+        )
+        if equivalent_par_rate_bps is not None:
+            row[SWAP_EQUIVALENT_PAR_RATE_COLUMNS[maturity]] = equivalent_par_rate_bps
 
     return row if len(row) > 1 else {}
 
@@ -511,6 +586,14 @@ def get_eris_public_swap_data(start_date: str, end_date: str | None = None) -> p
                 SWAP_COLUMNS.get(maturity),
                 SWAP_RETURN_COLUMNS.get(maturity),
                 SWAP_DV01_COLUMNS.get(maturity),
+                SWAP_EQUIVALENT_PAR_RATE_COLUMNS.get(maturity),
+                SWAP_FIXED_COUPON_COLUMNS.get(maturity),
+                SWAP_B_USD_COLUMNS.get(maturity),
+                SWAP_C_USD_COLUMNS.get(maturity),
+                SWAP_PV01_COLUMNS.get(maturity),
+                SWAP_EFFECTIVE_DATE_COLUMNS.get(maturity),
+                SWAP_MATURITY_DATE_COLUMNS.get(maturity),
+                SWAP_LAST_TRADE_DATE_COLUMNS.get(maturity),
             ]
             if col in output.columns
         )
@@ -591,8 +674,17 @@ def strategy_swap_prices(eris: pd.DataFrame) -> pd.DataFrame:
         if return_col and return_col in output:
             output.loc[roll, return_col] = 0.0
 
-    ticker_columns = [column for column in output if column.endswith("_ticker")]
-    return output.drop(columns=ticker_columns)
+    omitted_columns = [
+        *[column for column in output if column.endswith("_ticker")],
+        *[column for column in SWAP_FIXED_COUPON_COLUMNS.values() if column in output],
+        *[column for column in SWAP_B_USD_COLUMNS.values() if column in output],
+        *[column for column in SWAP_C_USD_COLUMNS.values() if column in output],
+        *[column for column in SWAP_PV01_COLUMNS.values() if column in output],
+        *[column for column in SWAP_EFFECTIVE_DATE_COLUMNS.values() if column in output],
+        *[column for column in SWAP_MATURITY_DATE_COLUMNS.values() if column in output],
+        *[column for column in SWAP_LAST_TRADE_DATE_COLUMNS.values() if column in output],
+    ]
+    return output.drop(columns=omitted_columns)
 
 
 def parse_yahoo_chart(text: str, ticker: str) -> pd.DataFrame:
