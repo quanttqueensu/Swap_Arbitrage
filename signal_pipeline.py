@@ -126,19 +126,36 @@ def add_proxy_signal(df: pd.DataFrame, maturity: str) -> tuple[pd.DataFrame, boo
     price_z_col = f"{proxy_col}_price_z"
     residual_col = f"{proxy_col}_residual_vs_treasury"
     residual_z_col = f"{proxy_col}_residual_z"
+    rate_proxy_col = f"treasury_rate_proxy_bps_{maturity_key}"
+    rate_spread_col = f"swap_spread_bps_{maturity_key}"
+    rate_spread_z_col = f"{rate_spread_col}_z"
     signal_col = f"proxy_signal_{maturity_key}"
     position_col = f"proxy_position_{maturity_key}"
+    dgs_col = {"2Y": "dgs2", "5Y": "dgs5"}.get(maturity)
+    equivalent_rate_col = f"eris_swap_{maturity_key}_equivalent_par_rate_bps"
+
+    if dgs_col in output.columns and equivalent_rate_col in output.columns:
+        treasury_rate = pd.to_numeric(output[dgs_col], errors="coerce") * 100.0
+        equivalent_rate = pd.to_numeric(output[equivalent_rate_col], errors="coerce")
+        valid_rate_spread = np.isfinite(treasury_rate) & np.isfinite(equivalent_rate)
+        output[rate_proxy_col] = treasury_rate.where(valid_rate_spread)
+        output[rate_spread_col] = (equivalent_rate - treasury_rate).where(valid_rate_spread)
+    else:
+        output[rate_proxy_col] = np.nan
+        output[rate_spread_col] = np.nan
+
+    output[rate_spread_z_col] = rolling_zscore(output[rate_spread_col])
 
     output[price_z_col] = rolling_zscore(output[proxy_col])
 
     if treasury_col in output.columns:
         output[residual_col] = rolling_residual(y=output[proxy_col], x=output[treasury_col])
         output[residual_z_col] = rolling_zscore(output[residual_col])
-        source = output[residual_z_col]
     else:
         output[residual_col] = np.nan
         output[residual_z_col] = np.nan
-        source = output[price_z_col]
+
+    source = output[rate_spread_z_col]
 
     output[signal_col] = 0
     output.loc[source <= -Z_ENTRY, signal_col] = 1
@@ -151,9 +168,9 @@ def add_proxy_signal(df: pd.DataFrame, maturity: str) -> tuple[pd.DataFrame, boo
 def add_best_maturity_columns(df: pd.DataFrame) -> pd.DataFrame:
     output = df.copy()
     proxy_z_cols = {
-        maturity: f"{SWAP_COLUMNS[maturity]}_residual_z"
+        maturity: f"swap_spread_bps_{clean_maturity(maturity)}_z"
         for maturity in MATURITIES
-        if maturity in SWAP_COLUMNS and f"{SWAP_COLUMNS[maturity]}_residual_z" in output.columns
+        if f"swap_spread_bps_{clean_maturity(maturity)}_z" in output.columns
     }
 
     if not proxy_z_cols:

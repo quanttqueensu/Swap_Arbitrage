@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
+import signal_pipeline
 
 from clean_data import clean_existing_derived_csvs, without_dv01_columns
 from data_pipeline.historical_data.historical_data_builder import (
@@ -25,7 +26,7 @@ from risk_pipeline import (
     merge_cme_dv01,
     merge_treasury_futures_data,
 )
-from signal_pipeline import build_signal_columns
+from signal_pipeline import build_proxy_position, build_signal_columns
 
 
 def sample_selected_swaps() -> pd.DataFrame:
@@ -141,6 +142,70 @@ class SignalCalendarTests(unittest.TestCase):
             output["date"].tolist(),
             [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-04")],
         )
+
+    # Mutation caught: routing active positions through Treasury-futures price
+    # residuals rather than the equivalent-par-rate Treasury spread.
+    def test_rate_spreads_are_the_active_proxy_signal_source(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-02", periods=4, freq="B"),
+                "eris_swap_2y_price": [100.0, 101.0, 102.0, 90.0],
+                "eris_swap_5y_price": [105.0, 106.0, 107.0, 108.0],
+                "treasury_futures_2y_price": [100.0, 101.0, 102.0, 103.0],
+                "treasury_futures_5y_price": [110.0, 111.0, 112.0, 113.0],
+                "eris_swap_2y_equivalent_par_rate_bps": [410.0, 430.0, 450.0, 470.0],
+                "eris_swap_5y_equivalent_par_rate_bps": [320.0, 340.0, 360.0, 380.0],
+                "dgs2": [4.0, 4.0, 4.0, 4.0],
+                "dgs5": [3.0, 3.0, 3.0, 3.0],
+            }
+        )
+
+        with (
+            patch.object(signal_pipeline, "ROLLING_WINDOW", 3),
+            patch.object(signal_pipeline, "MIN_PERIODS", 2),
+            patch.object(signal_pipeline, "Z_ENTRY", 0.5),
+        ):
+            output = build_signal_columns(source)
+            self.assertEqual(output["treasury_rate_proxy_bps_2y"].tolist(), [400.0, 400.0, 400.0, 400.0])
+            self.assertEqual(output["swap_spread_bps_2y"].tolist(), [10.0, 30.0, 50.0, 70.0])
+            self.assertEqual(
+                output["proxy_position_2y"].tolist(),
+                build_proxy_position(output["swap_spread_bps_2y_z"]).tolist(),
+            )
+            self.assertNotEqual(
+                output["proxy_position_2y"].tolist(),
+                build_proxy_position(output["eris_swap_2y_price_residual_z"]).tolist(),
+            )
+            self.assertIn("eris_swap_2y_price_residual_vs_treasury", output.columns)
+            self.assertIn("eris_swap_2y_price_residual_z", output.columns)
+
+    # Mutation caught: substituting the former price residual when a rate input
+    # is unavailable instead of resetting the rate-spread position flat.
+    def test_missing_equivalent_par_rate_fails_closed_per_maturity(self) -> None:
+        source = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-02", periods=4, freq="B"),
+                "eris_swap_2y_price": [100.0, 101.0, 102.0, 103.0],
+                "eris_swap_5y_price": [105.0, 106.0, 107.0, 108.0],
+                "treasury_futures_2y_price": [100.0, 101.0, 102.0, 103.0],
+                "treasury_futures_5y_price": [110.0, 111.0, 112.0, 113.0],
+                "eris_swap_2y_equivalent_par_rate_bps": [410.0, float("nan"), 450.0, 470.0],
+                "eris_swap_5y_equivalent_par_rate_bps": [320.0, 340.0, 360.0, 380.0],
+                "dgs2": [4.0, 4.0, 4.0, 4.0],
+                "dgs5": [3.0, 3.0, 3.0, 3.0],
+            }
+        )
+
+        with (
+            patch.object(signal_pipeline, "ROLLING_WINDOW", 3),
+            patch.object(signal_pipeline, "MIN_PERIODS", 2),
+        ):
+            output = build_signal_columns(source)
+
+        self.assertTrue(pd.isna(output.loc[1, "swap_spread_bps_2y"]))
+        self.assertTrue(pd.isna(output.loc[1, "swap_spread_bps_2y_z"]))
+        self.assertEqual(output.loc[1, "proxy_position_2y"], 0)
+        self.assertFalse(pd.isna(output.loc[1, "swap_spread_bps_5y"]))
 
 
 class ErisEquivalentParRateTests(unittest.TestCase):
@@ -545,6 +610,46 @@ class RiskMasterTests(unittest.TestCase):
         self.assertEqual(output.loc[0, "treasury_futures_contracts_rounded_2y"], -75)
         self.assertFalse(any("dv01" in column.lower() for column in output))
         self.assertEqual(output.loc[0, "risk_allowed"], 1)
+
+    # Mutation caught: sizing position strength or volatility from the legacy
+    # residual columns instead of the active rate-spread inputs.
+    def test_build_risk_uses_rate_spread_strength_and_volatility(self) -> None:
+        signals = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "proxy_position_2y": [1],
+                "swap_spread_bps_2y": [25.0],
+                "swap_spread_bps_2y_z": [2.0],
+                "eris_swap_2y_price_residual_vs_treasury": [999.0],
+                "eris_swap_2y_price_residual_z": [0.0],
+            }
+        )
+        master = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "ticker": ["YITH24"],
+                "price": [99.0],
+                "dv01": [20.0],
+            }
+        )
+        treasury_master = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"]),
+                "ticker": ["ZT=F"],
+                "price": [102.0],
+                "dv01": [40.0],
+            }
+        )
+
+        with (
+            patch("risk_pipeline.load_signal_or_build", return_value=signals),
+            patch("risk_pipeline.load_cme_swap_data", return_value=master),
+            patch("risk_pipeline.load_treasury_futures_data", return_value=treasury_master),
+        ):
+            output = build_risk_data(save=False)
+
+        self.assertEqual(output.loc[0, "swap_futures_contracts_rounded_2y"], 150)
+        self.assertEqual(output.loc[0, "treasury_futures_contracts_rounded_2y"], -75)
 
     def test_active_risk_is_blocked_for_missing_or_nonpositive_dv01(self) -> None:
         signals = pd.DataFrame(

@@ -299,6 +299,33 @@ class HistoricalRunTests(unittest.TestCase):
         )
         self.assertFalse(any(item.timestamp_utc.date().isoformat() == "2024-01-08" for item in result.positions))
 
+    # Mutation caught: incorporating rate-spread diagnostics into historical
+    # futures price P&L accounting.
+    def test_rate_spread_diagnostics_do_not_change_price_pnl(self):
+        zero_costs = NaiveAssumptions(D("0"), D("0"), D("0"), D("0"), D("0"))
+        baseline_frame = holding_frame()
+        rate_spread_frame = baseline_frame.assign(
+            swap_spread_bps_2y=[10.0, 20.0, 30.0, 40.0, 50.0],
+            swap_spread_bps_2y_z=[float("nan"), 0.7, 1.0, 1.0, 1.0],
+            treasury_rate_proxy_bps_2y=[400.0] * 5,
+        )
+        with TemporaryDirectory() as directory:
+            with patch("backtesting.historical._load_historical_frame", return_value=baseline_frame):
+                baseline, _ = run_historical_backtest("historical-pnl-base", Path(directory), assumptions=zero_costs)
+            with patch("backtesting.historical._load_historical_frame", return_value=rate_spread_frame):
+                with_diagnostics, _ = run_historical_backtest(
+                    "historical-pnl-rate-diagnostics", Path(directory), assumptions=zero_costs
+                )
+
+        self.assertEqual(baseline.daily[3].gross_pnl_usd, D("220.0"))
+        self.assertEqual(baseline.daily[3].net_pnl_usd, D("220.0"))
+        self.assertEqual(baseline.daily[3].equity_usd, D("1000220.0"))
+        self.assertEqual(
+            [(item.gross_pnl_usd, item.net_pnl_usd, item.equity_usd) for item in baseline.daily],
+            [(item.gross_pnl_usd, item.net_pnl_usd, item.equity_usd) for item in with_diagnostics.daily],
+        )
+        self.assertEqual(baseline.summary, with_diagnostics.summary)
+
     # Mutation caught: silently treating a missing current mark for a held
     # contract as a valid zero-return observation.
     def test_held_position_missing_current_mark_is_recorded_in_manifest(self):

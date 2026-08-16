@@ -43,13 +43,11 @@ def get_position_col(maturity: str) -> str:
 
 
 def get_z_col(maturity: str) -> str | None:
-    proxy_col = SWAP_COLUMNS.get(maturity)
-    return f"{proxy_col}_residual_z" if proxy_col else None
+    return f"swap_spread_bps_{clean_maturity(maturity)}_z" if maturity in SWAP_COLUMNS else None
 
 
 def get_vol_source_col(maturity: str) -> str | None:
-    proxy_col = SWAP_COLUMNS.get(maturity)
-    return f"{proxy_col}_residual_vs_treasury" if proxy_col else None
+    return f"swap_spread_bps_{clean_maturity(maturity)}" if maturity in SWAP_COLUMNS else None
 
 
 def rolling_realized_vol(series: pd.Series) -> pd.Series:
