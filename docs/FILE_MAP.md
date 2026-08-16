@@ -27,7 +27,7 @@ Results are written to `data/results/backtests/<run-id>/` as `manifest.csv`,
 
 | File | Key functions / classes | Responsibility |
 | --- | --- | --- |
-| `data_pipeline/historical_data/historical_data_builder.py` | `build_rates_dataset()`, `get_eris_public_swap_data()`, `get_public_treasury_futures_prices()`, `build_raw_price_data()`, `main()` | Fetches and assembles historical rates, swap-futures, and Treasury-futures data; has a command-line entry point and offline self-check. |
+| `data_pipeline/historical_data/historical_data_builder.py` | `equivalent_par_sofr_swap_rate_bps()`, `build_rates_dataset()`, `get_eris_public_swap_data()`, `get_public_treasury_futures_prices()`, `build_raw_price_data()`, `main()` | Fetches and assembles historical rates, swap-futures, and Treasury-futures data; selects daily Eris rows and converts settlement inputs into equivalent par rates. |
 | `data_pipeline/historical_data/canonicalize.py` | `canonicalize_rates()`, `canonicalize_futures()`, `canonicalize_daily_market()` | Converts source datasets into canonical rate, contract, and daily-market records while retaining source timing. |
 | `data_pipeline/historical_data/__init__.py` | Package marker | Identifies the historical-data package. |
 | `clean_data.py` | Data-cleaning helpers | Legacy DataFrame cleaning utilities used by the research pipeline. |
@@ -36,8 +36,8 @@ Results are written to `data/results/backtests/<run-id>/` as `manifest.csv`,
 
 | File | Key functions / classes | Responsibility |
 | --- | --- | --- |
-| `signal_pipeline.py` | `rolling_zscore()`, `add_funding_spread_proxy()`, `add_proxy_signal()`, `build_signal_columns()`, `build_signal_data()`, `main()` | Builds causal proxy signals and maturity ranking from historical inputs. |
-| `risk_pipeline.py` | `add_risk_budget_for_maturity()`, `add_contract_sizing_for_maturity()`, `enforce_gross_dv01_cap()`, `build_risk_columns()`, `build_risk_data()`, `main()` | Adds volatility scaling, DV01-aware contract sizing, portfolio caps, and risk-allowance state. |
+| `signal_pipeline.py` | `rolling_zscore()`, `add_funding_spread_proxy()`, `add_proxy_signal()`, `build_signal_columns()`, `build_signal_data()`, `main()` | Builds causal rate-based swap-spread signals and maturity ranking from equivalent Eris par rates and DGS2/DGS5 Treasury-rate proxies; price residuals are diagnostics. |
+| `risk_pipeline.py` | `add_risk_budget_for_maturity()`, `add_contract_sizing_for_maturity()`, `enforce_gross_dv01_cap()`, `build_risk_columns()`, `build_risk_data()`, `main()` | Adds rate-spread volatility scaling, DV01-aware contract sizing, portfolio caps, and risk-allowance state. |
 
 ## Shared strategy calculations
 
@@ -88,11 +88,12 @@ Results are written to `data/results/backtests/<run-id>/` as `manifest.csv`,
 | File / directory | Key coverage | Responsibility |
 | --- | --- | --- |
 | `README.md` | Setup and supported commands | Short project entry point and operator orientation. |
-| `docs/TECHNICAL_DOCUMENTATION.md` | Architecture, backtest flow, paper boundary, runbook | Main technical reference. |
+| `docs/TECHNICAL_DOCUMENTATION.md` | Architecture, rate-based signal, backtest flow, paper boundary, runbook | Main technical reference, including proxy limitations and futures-price P&L. |
 | `docs/data/canonical-schemas.md` | Canonical CSV definitions | Describes the datasets governed by `data_pipeline/contracts.py`. |
 | `docs/tests/test_canonicalize.py` | Historical canonicalization | Verifies rate, futures, market, and timing conversion. |
 | `docs/tests/test_signal_generation.py`, `test_spread.py`, `test_position_sizing_and_risk.py`, `test_portfolio.py` | Strategy logic | Verifies calculations, signals, sizing, risk, and portfolio limits. |
-| `docs/tests/test_historical_backtest.py`, `test_naive_backtest.py` | Replay and reports | Verifies historical adaptation, causal timing, fills, costs, roll handling, and report outputs. |
+| `docs/tests/test_dv01_pipeline.py` | Historical conversion and rate-spread signals | Verifies Eris equivalent-par-rate conversion, DGS2/DGS5 proxy spreads, signal routing, sizing inputs, and technical-documentation acceptance. |
+| `docs/tests/test_historical_backtest.py`, `test_naive_backtest.py` | Replay and reports | Verifies historical adaptation, causal timing, fills, costs, roll handling, rate-spread diagnostic P&L isolation, and report outputs. |
 | `docs/tests/test_ibkr_paper_recorder.py` | Paper-data safety | Verifies IBKR paper-session checks, data normalization, privacy, and stored records. |
 | `docs/tests/test_schema_contracts.py` | CSV contracts | Verifies schemas, validators, and paper/backtest distinctions. |
 | `docs/tests/test_backtesting_documentation.py` | User-facing backtest documentation | Guards the canonical `python -m backtesting` workflow in maintained documentation. |

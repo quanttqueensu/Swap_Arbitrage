@@ -209,6 +209,17 @@ class SignalCalendarTests(unittest.TestCase):
 
 
 class ErisEquivalentParRateTests(unittest.TestCase):
+    def test_technical_documentation_describes_rate_based_signal(self) -> None:
+        text = (
+            Path(__file__).resolve().parents[2] / "docs" / "TECHNICAL_DOCUMENTATION.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("equivalent_par_rate_bps", text)
+        self.assertIn("swap_spread_bps", text)
+        self.assertIn("DGS2/DGS5", text)
+        self.assertIn("not CTD", text)
+        self.assertIn("coupon P&L is not added separately", text)
+
     def test_equivalent_par_rate_uses_documented_units_and_sign(self) -> None:
         """Catches a reversed price sign or an incorrect percent/basis-point conversion."""
         self.assertEqual(

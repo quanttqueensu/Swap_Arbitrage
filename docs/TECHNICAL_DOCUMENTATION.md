@@ -133,6 +133,44 @@ data source.
 converts it to the standard project format. Keeping these steps separate lets
 tests use saved samples without making network requests.
 
+### Rate-based swap-spread signal
+
+For each maturity, the historical builder selects one daily Eris settlement
+row. It retains `FinalSettlementPrice`, `Coupon (%)`, `PastFxdFltPmts (B)`,
+`ErisPAI (C)`, `PV01`, `EffectiveDate`, `MaturityDate`, and `LastTradeDate`.
+These feed `eris_swap_2y_fixed_coupon_pct` and
+`eris_swap_5y_fixed_coupon_pct`; the corresponding `_b_usd`, `_c_usd`,
+`_pv01_usd_per_bp`, `_effective_date`, `_maturity_date`, and `_last_trade_date`
+fields; and `eris_swap_2y_equivalent_par_rate_bps` and
+`eris_swap_5y_equivalent_par_rate_bps`. On the same date, DGS2/DGS5 provide
+the Treasury-rate inputs.
+
+With price in exchange points, B and C in USD, PV01 in USD per bp, and coupon
+in percent, the conversion is:
+
+```text
+A_usd = (FinalSettlementPrice - 100 - B + C) * 1000
+equivalent_par_rate_pct = Coupon (%) - (A_usd / PV01) / 100
+eris_swap_2y_equivalent_par_rate_bps = equivalent_par_rate_pct * 100
+eris_swap_5y_equivalent_par_rate_bps = equivalent_par_rate_pct * 100
+treasury_rate_proxy_bps_2y = DGS2 * 100
+treasury_rate_proxy_bps_5y = DGS5 * 100
+swap_spread_bps_2y = eris_swap_2y_equivalent_par_rate_bps - treasury_rate_proxy_bps_2y
+swap_spread_bps_5y = eris_swap_5y_equivalent_par_rate_bps - treasury_rate_proxy_bps_5y
+```
+
+The rolling z-score of each `swap_spread_bps_*` drives entry and exit; price
+residuals remain diagnostics. DGS2/DGS5 are Treasury constant-maturity rate
+proxies, not CTD-implied yields and not forward-start/IMM-aligned Treasury
+rates.
+
+Intentionally deferred:
+
+- CTD-implied Treasury yields and delivery-basket/conversion-factor modeling.
+- IMM-forward-start curve matching between each Eris swap and Treasury comparator.
+- New market-data vendors or a separate Eris curve download.
+- Database, pipeline, framework, or infrastructure redesign.
+
 ### IBKR operational API
 
 All broker activity is paper-only. Connection, order submission, and
@@ -235,7 +273,9 @@ For a position held in the same contract:
 
 Basket P&L adds the P&L from each leg and subtracts transaction, financing, and
 roll costs. A price change between different contracts is not normal
-same-contract P&L.
+same-contract P&L. Historical P&L remains quantity × price multiplier × futures
+price change. The Eris futures settlement price already reflects swap NPV,
+coupon accrual/payment effects, and PAI, so coupon P&L is not added separately.
 
 Net DV01 is the combined directional rate exposure. Gross DV01 is the sum of
 absolute rate exposure. Hedge quantities aim to minimize residual DV01 while
