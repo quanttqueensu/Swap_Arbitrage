@@ -196,6 +196,7 @@ broker data but does not connect, submit, cancel, or request positions itself.
 risk data into typed `ReplayEvent` records, runs the accounting engine, and
 writes the results. Use `--refresh-signals` to rebuild upstream inputs. The
 `--self-check` option runs offline.
+Synthetic ReplayEvent fixtures are test mechanics, not production data.
 
 | Option | Default |
 | --- | --- |
