@@ -627,12 +627,52 @@ class RiskMasterTests(unittest.TestCase):
     def test_build_risk_uses_rate_spread_strength_and_volatility(self) -> None:
         signals = pd.DataFrame(
             {
-                "date": pd.to_datetime(["2024-01-02"]),
+                "date": pd.date_range("2024-01-02", periods=9),
+                "proxy_position_2y": [1] * 9,
+                "swap_spread_bps_2y": [0.0] * 8 + [10.0],
+                "swap_spread_bps_2y_z": [2.0] * 9,
+                "eris_swap_2y_price_residual_vs_treasury": [999.0] * 9,
+                "eris_swap_2y_price_residual_z": [0.0] * 9,
+            }
+        )
+        master = pd.DataFrame(
+            {
+                "date": signals["date"],
+                "ticker": ["YITH24"] * 9,
+                "price": [99.0] * 9,
+                "dv01": [20.0] * 9,
+            }
+        )
+        treasury_master = pd.DataFrame(
+            {
+                "date": signals["date"],
+                "ticker": ["ZT=F"] * 9,
+                "price": [102.0] * 9,
+                "dv01": [40.0] * 9,
+            }
+        )
+
+        with (
+            patch("risk_pipeline.load_signal_or_build", return_value=signals),
+            patch("risk_pipeline.load_cme_swap_data", return_value=master),
+            patch("risk_pipeline.load_treasury_futures_data", return_value=treasury_master),
+            patch("risk_pipeline.DV01_VOL_LOOKBACK", 4),
+            patch("risk_pipeline.DV01_VOL_MIN_PERIODS", 2),
+        ):
+            output = build_risk_data(save=False)
+
+        self.assertEqual(output.loc[8, "swap_futures_contracts_rounded_2y"], 38)
+        self.assertEqual(output.loc[8, "treasury_futures_contracts_rounded_2y"], -19)
+
+    # Mutation caught: allowing a legacy residual-based signal cache to reach
+    # risk sizing when rate-spread columns prove it was not rebuilt.
+    def test_legacy_cached_positions_are_rejected_before_risk_sizing(self) -> None:
+        legacy_signals = pd.DataFrame(
+            {
+                "date": ["2024-01-02"],
                 "proxy_position_2y": [1],
-                "swap_spread_bps_2y": [25.0],
-                "swap_spread_bps_2y_z": [2.0],
                 "eris_swap_2y_price_residual_vs_treasury": [999.0],
-                "eris_swap_2y_price_residual_z": [0.0],
+                "eris_swap_2y_price_residual_z": [2.0],
             }
         )
         master = pd.DataFrame(
@@ -652,15 +692,16 @@ class RiskMasterTests(unittest.TestCase):
             }
         )
 
-        with (
-            patch("risk_pipeline.load_signal_or_build", return_value=signals),
-            patch("risk_pipeline.load_cme_swap_data", return_value=master),
-            patch("risk_pipeline.load_treasury_futures_data", return_value=treasury_master),
-        ):
-            output = build_risk_data(save=False)
-
-        self.assertEqual(output.loc[0, "swap_futures_contracts_rounded_2y"], 150)
-        self.assertEqual(output.loc[0, "treasury_futures_contracts_rounded_2y"], -75)
+        with tempfile.TemporaryDirectory() as directory:
+            signal_path = Path(directory) / "signal_data.csv"
+            legacy_signals.to_csv(signal_path, index=False)
+            with (
+                patch("risk_pipeline.SIGNAL_DATA_FILE", signal_path),
+                patch("risk_pipeline.load_cme_swap_data", return_value=master),
+                patch("risk_pipeline.load_treasury_futures_data", return_value=treasury_master),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "refresh-signals"):
+                    build_risk_data(save=False)
 
     def test_active_risk_is_blocked_for_missing_or_nonpositive_dv01(self) -> None:
         signals = pd.DataFrame(

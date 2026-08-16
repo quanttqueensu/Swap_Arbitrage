@@ -446,7 +446,22 @@ def load_signal_or_build(
             save=True,
         )
 
-    return clean_signal_frame(pd.read_csv(SIGNAL_DATA_FILE))
+    signals = clean_signal_frame(pd.read_csv(SIGNAL_DATA_FILE))
+    required = [
+        column
+        for maturity in MATURITIES
+        for column in (
+            f"swap_spread_bps_{clean_maturity(maturity)}",
+            f"swap_spread_bps_{clean_maturity(maturity)}_z",
+        )
+    ]
+    missing = [column for column in required if column not in signals.columns]
+    if missing:
+        raise RuntimeError(
+            f"Cached signal data is missing rate-spread columns: {missing}. "
+            "Run `python risk_pipeline.py --refresh-signals` to rebuild it."
+        )
+    return signals
 
 
 def build_risk_data(
