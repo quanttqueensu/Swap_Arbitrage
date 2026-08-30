@@ -5,13 +5,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
-from agents.agent_1.contract_risk import ContractRisk
-from agents.agent_1.group_lifecycle import evaluate_active_group
+from agents.agent_1.risk import ContractRisk
+from agents.agent_1.lifecycle import evaluate_active_group
 from agents.agent_1.models import (
     BoundContract, BrokerSnapshot, MaturityReconciliation, PositionState,
     QuoteSnapshot, WorkingOrderSnapshot,
 )
-from agents.agent_1.order_groups import build_order_group
+from agents.agent_1.orders import build_order_group
 
 
 class GroupLifecycleTests(unittest.TestCase):

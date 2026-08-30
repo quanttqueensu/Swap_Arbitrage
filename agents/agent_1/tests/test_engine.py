@@ -7,17 +7,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from decimal import Decimal
 
-from agents.agent_1.service import once_cycle, polling_loop
-from agents.agent_1.active_groups import ActiveGroupResolution
-from agents.agent_1.group_lifecycle import ActiveGroupDecision
-from agents.agent_1.contract_risk import ContractRisk, PortfolioDV01
+from agents.agent_1.engine import once_cycle, polling_loop
+from agents.agent_1.lifecycle import ActiveGroupResolution
+from agents.agent_1.lifecycle import ActiveGroupDecision
+from agents.agent_1.risk import ContractRisk, PortfolioDV01
 from agents.agent_1.models import BoundContract, BrokerSnapshot, MaturityReconciliation, PositionState, QuoteSnapshot
-from agents.agent_1.order_groups import build_order_group, group_to_state
-from agents.agent_1.supervisor import CyclePlan
+from agents.agent_1.orders import build_order_group, group_to_state
+from agents.agent_1.planner import CyclePlan
 from agents.agent_1.state import AgentState
 
 
-class ServiceTests(unittest.TestCase):
+class EngineTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.state_path = Path(self.tempdir.name) / "state.json"

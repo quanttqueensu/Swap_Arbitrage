@@ -10,11 +10,11 @@ from types import SimpleNamespace
 
 from agents.agent_1.execution import ExecutionError, execute_cycle_plan
 from agents.agent_1.models import BoundContract, BrokerSnapshot, DailyTarget, MaturityTarget, QuoteSnapshot
-from agents.agent_1.order_groups import build_order_group
+from agents.agent_1.orders import build_order_group
 from agents.agent_1.models import MaturityReconciliation, PositionState
 from agents.agent_1.state import AgentState, load_state
-from agents.agent_1.supervisor import CyclePlan
-from agents.agent_1.contract_risk import PortfolioDV01
+from agents.agent_1.planner import CyclePlan
+from agents.agent_1.risk import PortfolioDV01
 
 
 class FakeIB:

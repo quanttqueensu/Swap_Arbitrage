@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
-from typing import Literal
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, Literal
 
 
 Maturity = Literal["2Y", "5Y"]
@@ -50,11 +51,6 @@ class MaturityReconciliation:
     @property
     def is_noop(self) -> bool:
         return self.swap_delta == 0 and self.treasury_delta == 0
-
-from datetime import datetime
-from decimal import Decimal
-from dataclasses import field
-from typing import Any
 
 LegKind = Literal["swap", "treasury"]
 

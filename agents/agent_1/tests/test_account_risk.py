@@ -4,7 +4,7 @@ import unittest
 from decimal import Decimal
 from types import SimpleNamespace
 
-from agents.agent_1.account_risk import AccountRiskError, collect_session_pnl, update_drawdown
+from agents.agent_1.risk import AccountRiskError, collect_session_pnl, update_drawdown
 
 
 class FakeIB:

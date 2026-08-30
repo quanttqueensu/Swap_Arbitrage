@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, time, timezone
 from types import SimpleNamespace
 
-from agents.agent_1.market_hours import market_is_open
+from agents.agent_1.cycle import market_is_open
 
 
 class MarketHoursTests(unittest.TestCase):

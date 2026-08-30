@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from agents.agent_1.broker_scope import cancel_group_orders
+from agents.agent_1.broker import cancel_group_orders
 
 
 class FakeIB:

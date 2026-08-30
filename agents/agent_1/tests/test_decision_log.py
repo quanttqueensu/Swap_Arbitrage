@@ -8,10 +8,10 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
-from agents.agent_1.contract_risk import PortfolioDV01
-from agents.agent_1.decision_log import build_decision_rows, write_decisions
+from agents.agent_1.risk import PortfolioDV01
+from agents.agent_1.audit import build_decision_rows, write_decisions
 from agents.agent_1.models import BoundContract, BrokerSnapshot, DailyTarget, MaturityReconciliation, MaturityTarget
-from agents.agent_1.supervisor import CyclePlan
+from agents.agent_1.planner import CyclePlan
 
 
 class DecisionLogTests(unittest.TestCase):

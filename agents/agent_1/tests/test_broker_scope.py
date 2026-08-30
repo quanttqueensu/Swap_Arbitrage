@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from agents.agent_1.broker_scope import cancel_agent1_orders, is_agent1_trade
+from agents.agent_1.broker import cancel_agent1_orders, is_agent1_trade
 
 
 def trade(ref: str, account: str, client_id: int, order_id: int):

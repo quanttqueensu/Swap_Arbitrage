@@ -4,7 +4,7 @@ import unittest
 from decimal import Decimal
 from types import SimpleNamespace
 
-from agents.agent_1.risk_adapter import RuntimeRiskState, evaluate_runtime_risk
+from agents.agent_1.risk import RuntimeRiskState, evaluate_runtime_risk
 
 
 class RiskAdapterTests(unittest.TestCase):

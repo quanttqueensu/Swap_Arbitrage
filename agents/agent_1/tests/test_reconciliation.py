@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from agents.agent_1.models import MaturityTarget, PositionState
-from agents.agent_1.reconciliation import reconcile_maturity
+from agents.agent_1.planner import reconcile_maturity
 
 
 class ReconciliationTests(unittest.TestCase):

@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agents.agent_1.models import BoundContract, BrokerSnapshot, QuoteSnapshot
-from agents.agent_1.runtime import RuntimeCache, status_cycle
+from agents.agent_1.cycle import RuntimeCache, status_cycle
 from agents.agent_1.state import AgentState
 
 
@@ -37,7 +37,7 @@ class FakeIB:
         raise AssertionError("status must never transmit")
 
 
-class RuntimeStatusTests(unittest.TestCase):
+class CycleTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         root = Path(self.tempdir.name)

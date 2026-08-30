@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import calendar
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
+from .models import BoundContract
 
 InstrumentKind = Literal["swap_future", "treasury_future"]
 
@@ -106,11 +108,6 @@ def select_contract(
 
     candidates.sort(key=lambda item: item[0])
     return candidates[0][1]
-
-from decimal import Decimal, InvalidOperation
-
-from .models import BoundContract
-
 
 def _positive_tick(value: object) -> Decimal:
     try:

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from agents.agent_1.models import BoundContract, MaturityReconciliation, PositionState, QuoteSnapshot
-from agents.agent_1.order_groups import build_order_group, group_from_state, group_to_state
+from agents.agent_1.orders import build_order_group, group_from_state, group_to_state
 
 
 class GroupStateTests(unittest.TestCase):

@@ -4,7 +4,7 @@ import unittest
 from decimal import Decimal
 from types import SimpleNamespace
 
-from agents.agent_1.margin import margin_reserve_ok, preview_margin
+from agents.agent_1.broker import margin_reserve_ok, preview_margin
 
 
 class FakeIB:

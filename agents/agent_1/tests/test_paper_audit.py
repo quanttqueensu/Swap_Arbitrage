@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from agents.agent_1.models import (
     BoundContract, BrokerSnapshot, PositionAuditSnapshot, QuoteSnapshot,
 )
-from agents.agent_1.paper_audit import PaperAuditError, record_paper_audit
+from agents.agent_1.audit import PaperAuditError, record_paper_audit
 
 
 class FakeStore:

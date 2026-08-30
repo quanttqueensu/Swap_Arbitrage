@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
-from agents.agent_1.contract_risk import ContractRisk
+from agents.agent_1.risk import ContractRisk
 from agents.agent_1.models import (
     BoundContract,
     BrokerSnapshot,
@@ -14,7 +14,7 @@ from agents.agent_1.models import (
     QuoteSnapshot,
     WorkingOrderSnapshot,
 )
-from agents.agent_1.supervisor import plan_cycle
+from agents.agent_1.planner import plan_cycle
 
 
 def binding(maturity, leg, con_id, symbol, risk_id):
@@ -40,7 +40,7 @@ def risk(con_id, risk_id, dv01):
     )
 
 
-class CyclePlannerTests(unittest.TestCase):
+class PlannerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.now = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
         self.bindings = {

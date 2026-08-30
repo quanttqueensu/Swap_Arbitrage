@@ -4,12 +4,12 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from agents.agent_1.active_groups import resolve_active_groups
-from agents.agent_1.contract_risk import ContractRisk
+from agents.agent_1.lifecycle import resolve_active_groups
+from agents.agent_1.risk import ContractRisk
 from agents.agent_1.models import (
     BoundContract, BrokerSnapshot, MaturityReconciliation, PositionState, QuoteSnapshot,
 )
-from agents.agent_1.order_groups import build_order_group, group_to_state
+from agents.agent_1.orders import build_order_group, group_to_state
 from agents.agent_1.state import AgentState
 
 

@@ -10,7 +10,7 @@ from agents.agent_1.models import (
     PositionState,
     QuoteSnapshot,
 )
-from agents.agent_1.order_groups import (
+from agents.agent_1.orders import (
     build_order_group,
     group_is_timed_out,
     plan_partial_fill_recovery,

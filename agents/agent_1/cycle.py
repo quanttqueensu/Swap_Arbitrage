@@ -7,18 +7,60 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from .account_risk import collect_session_pnl, update_drawdown
-from .broker import collect_broker_snapshot
-from .contract_risk import ContractRisk, calculate_portfolio_dv01, load_contract_risks
+from .broker import collect_broker_snapshot, preview_margin
 from .contracts import resolve_strategy_bindings
-from .ib_orders import build_ib_limit_order
-from .margin import preview_margin
 from .models import BoundContract, BrokerSnapshot, DailyTarget
-from .recovery import RecoveryCheck, reconcile_recovery_state
+from .orders import build_ib_limit_order
+from .planner import CyclePlan, plan_cycle
+from .risk import (
+    ContractRisk,
+    calculate_portfolio_dv01,
+    collect_session_pnl,
+    load_contract_risks,
+    update_drawdown,
+)
 from .state import AgentState, roll_session
-from .supervisor import CyclePlan, plan_cycle
-from .target_loader import TargetValidationError
-from .target_provider import DailyCsvTargetProvider, TargetProvider
+from .targets import DailyCsvTargetProvider, TargetProvider, TargetValidationError
+
+
+@dataclass(frozen=True)
+class RecoveryCheck:
+    reconciled: bool
+    reasons: tuple[str, ...]
+
+
+def reconcile_recovery_state(
+    state: AgentState,
+    snapshot: BrokerSnapshot,
+    bindings: dict[str, BoundContract],
+) -> RecoveryCheck:
+    reasons: list[str] = []
+
+    for key, previous_con_id in state.bound_contracts.items():
+        current = bindings.get(key)
+        if current is not None and current.con_id != previous_con_id:
+            if "binding_mismatch" not in reasons:
+                reasons.append("binding_mismatch")
+
+    known_refs = set(state.submitted_order_refs)
+    for order in snapshot.working_orders:
+        if order.order_ref not in known_refs:
+            if "unknown_working_order" not in reasons:
+                reasons.append("unknown_working_order")
+
+    return RecoveryCheck(reconciled=not reasons, reasons=tuple(reasons))
+
+
+def market_is_open(config: object, now: datetime) -> bool:
+    if now.utcoffset() is None:
+        raise ValueError("Market-hours checks require a timezone-aware time.")
+    zone = ZoneInfo(str(getattr(config, "timezone")))
+    local = now.astimezone(zone)
+    if local.weekday() >= 5:
+        return False
+    open_time = getattr(config, "market_open_time")
+    close_time = getattr(config, "market_close_time")
+    return open_time <= local.time().replace(tzinfo=None) < close_time
 
 
 @dataclass

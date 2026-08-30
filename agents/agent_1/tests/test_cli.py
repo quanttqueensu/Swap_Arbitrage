@@ -161,7 +161,7 @@ class AuditBoundaryTests(unittest.TestCase):
     def test_audit_failure_cancels_only_agent1_orders_and_raises(self):
         from datetime import datetime, timezone
         from types import SimpleNamespace
-        from agents.agent_1.paper_audit import PaperAuditError
+        from agents.agent_1.audit import PaperAuditError
         from agents.agent_1.run import _record_audit_or_cancel
 
         calls = []

@@ -16,7 +16,7 @@ from data_pipeline.live_data_pipeline.shadow_runner import ShadowLiveSignalRunne
 from strategy.live_target import MaturityRiskInputs
 
 from .contracts import resolve_strategy_bindings
-from .target_provider import LiveSignalTargetProvider, ShadowLiveTargetProvider
+from .targets import LiveSignalTargetProvider, ShadowLiveTargetProvider
 
 
 class ShadowConfigError(RuntimeError):

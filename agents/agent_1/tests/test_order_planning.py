@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from decimal import Decimal
 
-from agents.agent_1.order_planning import OrderPlanningError, build_leg_order
+from agents.agent_1.orders import OrderPlanningError, build_leg_order
 
 
 class OrderPlanningTests(unittest.TestCase):

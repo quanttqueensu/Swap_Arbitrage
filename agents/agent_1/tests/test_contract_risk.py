@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal, localcontext
 from pathlib import Path
 
-from agents.agent_1.contract_risk import (
+from agents.agent_1.risk import (
     ContractRiskError,
     calculate_portfolio_dv01,
     load_contract_risks,

@@ -4,8 +4,8 @@ import unittest
 from decimal import Decimal
 from types import SimpleNamespace
 
-from agents.agent_1.ib_orders import build_ib_limit_order
-from agents.agent_1.order_planning import LimitOrderPlan
+from agents.agent_1.orders import build_ib_limit_order
+from agents.agent_1.orders import LimitOrderPlan
 
 
 class IbOrderTests(unittest.TestCase):

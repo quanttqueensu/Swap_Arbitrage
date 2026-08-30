@@ -5,13 +5,13 @@ from tempfile import TemporaryDirectory
 import csv
 import unittest
 
-from agents.agent_1.target_loader import load_daily_target
-from agents.agent_1.target_provider import (
+from agents.agent_1.targets import load_daily_target
+from agents.agent_1.targets import (
     DailyCsvTargetProvider,
     LiveSignalTargetProvider,
     ShadowLiveTargetProvider,
 )
-from agents.agent_1.target_loader import TargetValidationError
+from agents.agent_1.targets import TargetValidationError
 
 
 NOW = datetime(2026, 8, 30, 14, 0, tzinfo=timezone.utc)
