@@ -71,12 +71,13 @@ python -m agents.agent_1.run shadow-once
 python -m agents.agent_1.run stop-and-flatten
 ```
 
-By default, `status`, `once`, and `run` use the validated pre-generated
-`--target` CSV. The auto-refreshed live signal remains gated: executable live
-targets require both `live_target_enabled: true` in the private Agent 1 paper
-configuration and the explicit `--live-target` CLI flag. The older
-`--legacy-target` flag remains accepted only for compatibility and selects the
-same default CSV path.
+By default, `status`, `once`, and `run` refresh the exact ERIS contract
+reference/risk data from the public Eris daily files, refresh the 2YY/5YY
+historical baseline from IBKR continuous futures, and generate the live target
+before Agent 1 evaluates any order. Generated files are cached under
+`data/raw_data/cache/` and `data/live_signal/`; no market-data CSV requires
+manual maintenance. Use `--legacy-target` only to deliberately run the
+pre-generated `--target` CSV path.
 
 Agent 1 fails closed when its target, contract risk, quotes, account state, or
 paper configuration is invalid or stale. A persistent operator stop state lives

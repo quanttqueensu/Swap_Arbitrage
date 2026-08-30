@@ -397,7 +397,7 @@ def scan_source_evidence(
     found: dict[str, set[SourceEvidence]] = {
         token: set() for token in tokens | {"__csv_read__", "__csv_write__"}
     }
-    excluded = {".venv", "__pycache__", ".superpowers", ".worktrees"}
+    excluded = {".venv", "__pycache__", ".worktrees"}
     tracked_result = subprocess.run(
         ["git", "ls-files", "-z", "--", "*.py"],
         cwd=repo_root,

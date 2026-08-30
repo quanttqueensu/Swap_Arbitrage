@@ -2,9 +2,8 @@
 
 Agent 1 observes YIT, YIW, 2YY, and 5YY through the configured IBKR paper
 session. `shadow-once` cannot publish an executable target or call order
-execution. The validated daily CSV remains the default executable target source.
-Live-signal execution is a separately gated paper mode and must not be enabled
-until its promotion criteria have been completed.
+execution. `status`, `once`, and `run` use the same automatically refreshed
+inputs for the executable paper target.
 
 ## Prerequisites
 
@@ -37,17 +36,12 @@ rate/spread units, model values, reason codes, and hypothetical quantities.
 Any stale, crossed, missing, mismatched, or invalid input must produce a
 specific blocked reason and zero affected exposure.
 
-## Executable live-target paper mode
-
-The committed example configuration keeps `live_target_enabled` set to `false`.
-Do not change it merely to run shadow validation. After the live strategy has
-passed its documented promotion gates, an operator may explicitly enable the
-private paper configuration and still must pass `--live-target` on each command:
+## Paper execution
 
 ```powershell
-python -m agents.agent_1.run status --live-target
-python -m agents.agent_1.run once --live-target
-python -m agents.agent_1.run run --live-target
+python -m agents.agent_1.run status
+python -m agents.agent_1.run once
+python -m agents.agent_1.run run
 ```
 
 The live market adapter caches qualified YIT/YIW/2YY/5YY contracts for the

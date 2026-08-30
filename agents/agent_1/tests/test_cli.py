@@ -15,16 +15,11 @@ class CliTests(unittest.TestCase):
             args = parser.parse_args(arguments)
             self.assertEqual(args.command, command)
 
-    def test_daily_csv_is_default_and_live_target_is_explicit(self):
+    def test_auto_live_target_is_default_and_legacy_csv_is_explicit(self):
         parser = build_parser()
         default = parser.parse_args(["run"])
-        self.assertFalse(default.live_target)
         self.assertFalse(default.legacy_target)
-        self.assertTrue(parser.parse_args(["run", "--live-target"]).live_target)
         self.assertTrue(parser.parse_args(["run", "--legacy-target"]).legacy_target)
-
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["run", "--live-target", "--legacy-target"])
 
     def test_requires_operator_command(self):
         parser = build_parser()
@@ -37,35 +32,10 @@ if __name__ == "__main__":
 
 
 class LiveRunSelectionTests(unittest.TestCase):
-    def test_run_uses_daily_csv_target_by_default(self):
+    def test_run_uses_auto_live_target_by_default(self):
         broker = SimpleNamespace(sleep=lambda seconds: None)
-        config = SimpleNamespace(live_target_enabled=False)
-        with (
-            patch("agents.agent_1.run.load_config", return_value=config),
-            patch("agents.agent_1.run._load_evaluator", return_value=object()),
-            patch("agents.agent_1.run.connect_paper", return_value=broker),
-            patch("agents.agent_1.run.disconnect"),
-            patch("agents.agent_1.run.build_auto_live_provider") as build,
-            patch("agents.agent_1.run._create_store", return_value=object()),
-            patch("agents.agent_1.run.polling_loop") as loop,
-        ):
-            result = main(["run", "--run-id", "daily-default-test"])
-
-        self.assertEqual(result, 0)
-        build.assert_not_called()
-        loop.assert_called_once()
-
-    def test_live_target_requires_config_and_cli_opt_in(self):
-        broker = SimpleNamespace(sleep=lambda seconds: None)
-        with patch(
-            "agents.agent_1.run.load_config",
-            return_value=SimpleNamespace(live_target_enabled=False),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "live_target_enabled"):
-                main(["run", "--live-target"])
-
+        config = SimpleNamespace()
         provider = object()
-        config = SimpleNamespace(live_target_enabled=True)
         with (
             patch("agents.agent_1.run.load_config", return_value=config),
             patch("agents.agent_1.run._load_evaluator", return_value=object()),
@@ -82,10 +52,28 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run._create_store", return_value=object()),
             patch("agents.agent_1.run.polling_loop") as loop,
         ):
-            result = main(["run", "--live-target", "--run-id", "auto-live-test"])
+            result = main(["run", "--run-id", "auto-live-test"])
 
         self.assertEqual(result, 0)
         self.assertTrue(build.call_args.kwargs["executable"])
+        loop.assert_called_once()
+
+    def test_legacy_target_skips_auto_live_provider(self):
+        broker = SimpleNamespace(sleep=lambda seconds: None)
+        config = SimpleNamespace()
+        with (
+            patch("agents.agent_1.run.load_config", return_value=config),
+            patch("agents.agent_1.run._load_evaluator", return_value=object()),
+            patch("agents.agent_1.run.connect_paper", return_value=broker),
+            patch("agents.agent_1.run.disconnect"),
+            patch("agents.agent_1.run.build_auto_live_provider") as build,
+            patch("agents.agent_1.run._create_store", return_value=object()),
+            patch("agents.agent_1.run.polling_loop") as loop,
+        ):
+            result = main(["run", "--legacy-target", "--run-id", "legacy-test"])
+
+        self.assertEqual(result, 0)
+        build.assert_not_called()
         loop.assert_called_once()
 
 
@@ -112,7 +100,7 @@ class StopStateTests(unittest.TestCase):
             stop_path = Path(tmp) / "STOP"
             stop_path.touch()
             broker = SimpleNamespace(sleep=lambda seconds: None)
-            config = SimpleNamespace(live_target_enabled=False)
+            config = SimpleNamespace()
             engine = SimpleNamespace(cycle=Mock(return_value=SimpleNamespace(status=object())))
             cycle_now = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
 
@@ -124,6 +112,11 @@ class StopStateTests(unittest.TestCase):
                 patch("agents.agent_1.run._load_evaluator", return_value=object()),
                 patch("agents.agent_1.run.connect_paper", return_value=broker),
                 patch("agents.agent_1.run.disconnect"),
+                patch(
+                    "agents.agent_1.run.load_state",
+                    return_value=SimpleNamespace(bound_contracts={}),
+                ),
+                patch("agents.agent_1.run.build_auto_live_provider", return_value=object()),
                 patch("agents.agent_1.run._create_store", return_value=object()),
                 patch("agents.agent_1.run.Agent1Engine", return_value=engine),
                 patch("agents.agent_1.run._record_audit_or_cancel"),
@@ -150,7 +143,7 @@ class StopStateTests(unittest.TestCase):
             with (
                 patch(
                     "agents.agent_1.run.load_config",
-                    return_value=SimpleNamespace(live_target_enabled=False),
+                    return_value=SimpleNamespace(),
                 ),
                 patch("agents.agent_1.run._load_evaluator", return_value=object()),
                 patch(

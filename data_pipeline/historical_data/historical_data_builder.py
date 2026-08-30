@@ -458,7 +458,6 @@ def extract_eris_swap_row(
             candidates["_dv01_gap"] = (candidates["DV01"] - target_dv01).abs()
             near_tenor = candidates[(candidates["DV01"] >= lower_dv01) & (candidates["DV01"] <= upper_dv01)]
 
-            # ponytail: use DV01 to avoid owning a full Eris roll calendar.
             if not near_tenor.empty:
                 candidates = near_tenor
 

@@ -7,7 +7,7 @@ from typing import Any, Sequence
 
 from .broker import connect_paper, disconnect
 from .broker_scope import cancel_agent1_orders
-from .config import ConfigError, load_config
+from .config import load_config
 from .market_hours import market_is_open
 from .paper_audit import PaperAuditError, record_paper_audit
 from .runtime import RuntimeCache, status_cycle
@@ -58,8 +58,6 @@ def _create_store(run_id: str) -> Any:
     return PaperEventStore(PROJECT_ROOT, "agent_1", run_id)
 
 
-
-
 def _record_audit_or_cancel(
     *,
     ib: Any,
@@ -89,6 +87,7 @@ def _record_audit_or_cancel(
         )
         raise
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Strategy-driven IBKR paper supervisor.")
     parser.add_argument(
@@ -101,21 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--shadow-config", type=Path, default=None)
-    target_group = parser.add_mutually_exclusive_group()
-    target_group.add_argument(
-        "--live-target",
-        action="store_true",
-        help=(
-            "Use auto-refreshed live signals as the executable paper target. "
-            "Requires live_target_enabled=true in the private Agent 1 config."
-        ),
-    )
-    target_group.add_argument(
+    parser.add_argument(
         "--legacy-target",
         action="store_true",
         help=(
-            "Deprecated compatibility flag. The validated pre-generated --target "
-            "CSV is already the default executable target source."
+            "Use the validated pre-generated --target CSV instead of "
+            "auto-refreshed live signals."
         ),
     )
     parser.add_argument(
@@ -137,14 +127,6 @@ def _request_stop(path: Path) -> None:
 
 def _stop_requested(path: Path) -> bool:
     return path.exists()
-
-
-def _assert_live_target_authorized(config: object, requested: bool) -> None:
-    if requested and getattr(config, "live_target_enabled", False) is not True:
-        raise ConfigError(
-            "Executable live targets are disabled. Set live_target_enabled=true "
-            "in the private Agent 1 paper config and pass --live-target."
-        )
 
 
 def _render_status(result: Any) -> str:
@@ -185,10 +167,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = load_config()
-    _assert_live_target_authorized(config, args.live_target)
     evaluator = None if args.command == "shadow-once" else _load_evaluator()
     now = datetime.now(timezone.utc)
-    use_live_target = bool(args.live_target)
+    use_live_target = not args.legacy_target
     contract_risk_path = args.contract_risk or (
         DEFAULT_CONTRACT_RISK_PATH
         if use_live_target or args.command == "shadow-once"

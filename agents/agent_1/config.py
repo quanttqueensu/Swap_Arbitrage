@@ -51,7 +51,6 @@ class Agent1Config:
     timezone: str = TIMEZONE
     host: str = IBKR_HOST
     port: int = IBKR_PORT
-    live_target_enabled: bool = False
 
 
 REQUIRED_KEYS = {
@@ -125,15 +124,6 @@ def _decimal(values: dict[str, object], key: str, *, fraction: bool = False) -> 
     if fraction and parsed > 1:
         raise ConfigError(f"{key} must be in the interval (0, 1].")
     return parsed
-
-
-
-def _optional_bool(values: dict[str, object], key: str, default: bool = False) -> bool:
-    value = values.get(key, default)
-    if type(value) is not bool:
-        raise ConfigError(f"{key} must be true or false.")
-    return value
-
 
 def _clock_time(values: dict[str, object], key: str) -> time:
     raw = values[key]
@@ -217,5 +207,4 @@ def load_config(path: Path | None = None) -> Agent1Config:
         max_2y_treasury_contracts=parsed_ints["max_2y_treasury_contracts"],
         max_5y_swap_contracts=parsed_ints["max_5y_swap_contracts"],
         max_5y_treasury_contracts=parsed_ints["max_5y_treasury_contracts"],
-        live_target_enabled=_optional_bool(values, "live_target_enabled", False),
     )

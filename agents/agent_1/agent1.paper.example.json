@@ -18,6 +18,5 @@
   "max_2y_swap_contracts": 100,
   "max_2y_treasury_contracts": 100,
   "max_5y_swap_contracts": 100,
-  "max_5y_treasury_contracts": 100,
-  "live_target_enabled": false
+  "max_5y_treasury_contracts": 100
 }

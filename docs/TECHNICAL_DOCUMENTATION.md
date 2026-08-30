@@ -102,10 +102,10 @@ python -m agents.agent_1.run run
 python -m agents.agent_1.run stop-and-flatten
 ```
 
-The validated daily target CSV is the executable default. Auto-refreshed live
-signals remain promotion-gated and require both `live_target_enabled: true` in
-the private Agent 1 configuration and the `--live-target` CLI flag. Shadow mode
-does not require either executable-live switch.
+The executable default automatically refreshes ERIS reference/risk data and
+IBKR continuous-futures history before generating each live target. Use
+`--legacy-target` only to select the validated pre-generated daily target CSV.
+Shadow mode performs the same refresh without exposing an executable target.
 
 The default persistent operator stop file is `data/paper/agent_1/STOP`.
 `stop-and-flatten` creates it before attempting an IBKR connection, and normal
