@@ -1,0 +1,20 @@
+{
+  "baseline_path": "../../data/live_signal/baseline.csv",
+  "eris_reference_path": "../../data/live_signal/eris_reference.csv",
+  "quote_max_age_seconds": 30,
+  "reference_max_age_seconds": 86400,
+  "risk_inputs": {
+    "2Y": {
+      "base_target_dv01": 3000,
+      "vol_scale": 1,
+      "swap_dv01_per_contract": 20,
+      "treasury_dv01_per_contract": 40
+    },
+    "5Y": {
+      "base_target_dv01": 3000,
+      "vol_scale": 1,
+      "swap_dv01_per_contract": 50,
+      "treasury_dv01_per_contract": 50
+    }
+  }
+}

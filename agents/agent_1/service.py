@@ -97,6 +97,7 @@ def once_cycle(
     margin_previewer: Callable[..., bool] = preview_groups,
     active_resolver: Callable[..., ActiveGroupResolution] = resolve_active_groups,
     group_canceller: Callable[..., tuple[int, ...]] = cancel_group_orders,
+    target_provider: object | None = None,
 ) -> OnceCycleResult:
     state = load_state(state_path)
     status = status_runner(
@@ -110,6 +111,7 @@ def once_cycle(
         order_factory=order_factory,
         min_days_to_expiry=getattr(config, "min_days_to_expiry"),
         stop_requested=stop_requested,
+        target_provider=target_provider,
     )
     refreshed_state = _state_after_status(state, status)
     if refreshed_state != state:

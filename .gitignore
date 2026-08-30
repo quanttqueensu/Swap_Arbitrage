@@ -12,5 +12,6 @@ data/raw_data/*
 !data/raw_data/.gitkeep
 data/results/
 data/paper/
+data/live_signal/
 agents/agent_0/orders/*.csv
 Swap_Arbitrage-share.zip

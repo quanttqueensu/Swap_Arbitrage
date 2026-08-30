@@ -17,7 +17,8 @@ from .models import BoundContract, BrokerSnapshot, DailyTarget
 from .recovery import RecoveryCheck, reconcile_recovery_state
 from .state import AgentState
 from .supervisor import CyclePlan, plan_cycle
-from .target_loader import TargetValidationError, load_daily_target
+from .target_loader import TargetValidationError
+from .target_provider import DailyCsvTargetProvider, TargetProvider
 
 
 @dataclass(frozen=True)
@@ -81,15 +82,16 @@ def status_cycle(
     min_days_to_expiry: int = 14,
     stop_requested: bool = False,
     pnl_collector: Callable[[Any, str], Decimal] = collect_session_pnl,
+    target_provider: TargetProvider | None = None,
 ) -> StatusCycleResult:
     target: DailyTarget | None
     target_error: str | None
     try:
-        target = load_daily_target(
+        provider = target_provider or DailyCsvTargetProvider(
             target_path,
-            now=now,
-            max_age_business_days=getattr(config, "max_target_age_business_days"),
+            getattr(config, "max_target_age_business_days"),
         )
+        target = provider.load_target(now)
         target_error = None
     except TargetValidationError as exc:
         target = None

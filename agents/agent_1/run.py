@@ -12,12 +12,21 @@ from .market_hours import market_is_open
 from .paper_audit import PaperAuditError, record_paper_audit
 from .runtime import status_cycle
 from .service import once_cycle, polling_loop
+from .shadow import (
+    DEFAULT_CONTRACT_RISK_PATH,
+    build_auto_live_provider,
+    build_shadow_provider,
+    render_shadow_result,
+)
 from .state import load_state
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TARGET_PATH = PROJECT_ROOT / "data" / "raw_data" / "risk_data.csv"
 DEFAULT_STATE_PATH = PROJECT_ROOT / "data" / "paper" / "agent_1" / "state.json"
+DEFAULT_SHADOW_STATE_PATH = (
+    PROJECT_ROOT / "data" / "paper" / "agent_1" / "live_signal_state.json"
+)
 
 
 def _default_run_id(now: datetime) -> str:
@@ -82,13 +91,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Strategy-driven IBKR paper supervisor.")
     parser.add_argument(
         "command",
-        choices=("run", "once", "status", "stop-and-flatten"),
+        choices=("run", "once", "status", "shadow-once", "stop-and-flatten"),
         help="Operator command.",
     )
     parser.add_argument("--target", type=Path, default=DEFAULT_TARGET_PATH)
     parser.add_argument("--contract-risk", type=Path, default=None)
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     parser.add_argument("--run-id", default=None)
+    parser.add_argument("--shadow-config", type=Path, default=None)
+    parser.add_argument(
+        "--legacy-target",
+        action="store_true",
+        help="Use the legacy pre-generated --target CSV instead of auto-refreshed live signals.",
+    )
     return parser
 
 
@@ -127,11 +142,16 @@ def _is_flat(result: Any) -> bool:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     config = load_config()
-    evaluator = _load_evaluator()
+    evaluator = None if args.command == "shadow-once" else _load_evaluator()
     now = datetime.now(timezone.utc)
-    contract_risk_path = args.contract_risk or _default_contract_risk_path(now)
+    contract_risk_path = args.contract_risk or (
+        _default_contract_risk_path(now)
+        if args.legacy_target
+        else DEFAULT_CONTRACT_RISK_PATH
+    )
     run_id = args.run_id or _default_run_id(now)
     decision_log_path = (
         PROJECT_ROOT / "data" / "paper" / "agent_1" / run_id / "agent1_decisions.csv"
@@ -139,6 +159,43 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ib = connect_paper(config)
     try:
+        if args.command == "shadow-once":
+            shadow_dir = PROJECT_ROOT / "data" / "paper" / "agent_1" / run_id
+            if args.shadow_config is None:
+                provider = build_auto_live_provider(
+                    ib=ib,
+                    agent_config=config,
+                    audit_path=shadow_dir / "live_signals.csv",
+                    state_path=DEFAULT_SHADOW_STATE_PATH,
+                    contract_risk_path=contract_risk_path,
+                    executable=False,
+                    held_contracts=load_state(args.state).bound_contracts,
+                )
+            else:
+                provider = build_shadow_provider(
+                    ib=ib,
+                    config_path=args.shadow_config,
+                    agent_config=config,
+                    audit_path=shadow_dir / "live_signals.csv",
+                    state_path=DEFAULT_SHADOW_STATE_PATH,
+                )
+            result = provider.observe(now)
+            print(render_shadow_result(result))
+            return 0
+
+        target_provider = None
+        if not args.legacy_target:
+            live_dir = PROJECT_ROOT / "data" / "paper" / "agent_1" / run_id
+            target_provider = build_auto_live_provider(
+                ib=ib,
+                agent_config=config,
+                audit_path=live_dir / "live_signals.csv",
+                state_path=DEFAULT_SHADOW_STATE_PATH,
+                contract_risk_path=contract_risk_path,
+                executable=True,
+                held_contracts=load_state(args.state).bound_contracts,
+            )
+
         if args.command == "status":
             state = load_state(args.state)
             result = status_cycle(
@@ -150,6 +207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 now=now,
                 evaluator=evaluator,
                 min_days_to_expiry=config.min_days_to_expiry,
+                target_provider=target_provider,
             )
             print(_render_status(result))
             return 0
@@ -161,6 +219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 contract_risk_path=contract_risk_path, state_path=args.state,
                 now=now, evaluator=evaluator, decision_log_path=decision_log_path,
                 store=store,
+                target_provider=target_provider,
             )
             _record_audit_or_cancel(
                 ib=ib, store=store, config=config, result=result,
@@ -176,6 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     contract_risk_path=contract_risk_path, state_path=args.state,
                     now=cycle_now, evaluator=evaluator,
                     decision_log_path=decision_log_path, store=store,
+                    target_provider=target_provider,
                 )
                 _record_audit_or_cancel(
                     ib=ib, store=store, config=config, result=result,
@@ -195,6 +255,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 contract_risk_path=contract_risk_path, state_path=args.state,
                 now=cycle_now, evaluator=evaluator, stop_requested=True,
                 decision_log_path=decision_log_path, store=store,
+                target_provider=target_provider,
             )
             _record_audit_or_cancel(
                 ib=ib, store=store, config=config, result=result,

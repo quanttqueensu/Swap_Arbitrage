@@ -46,16 +46,19 @@ class ServiceTests(unittest.TestCase):
             calls.append(("execute", kwargs))
             return execution_result
 
+        provider = object()
         result = once_cycle(
             ib=object(), config=self.config,
             target_path=Path("target.csv"), contract_risk_path=Path("risk.csv"),
             state_path=self.state_path, now=self.now, evaluator=lambda **_: None,
             stop_requested=True, status_runner=status_runner, executor=executor,
+            target_provider=provider,
         )
         self.assertIs(result.status, status_result)
         self.assertIs(result.execution, execution_result)
         self.assertTrue(calls[0][1]["stop_requested"])
         self.assertEqual(calls[0][1]["min_days_to_expiry"], 14)
+        self.assertIs(calls[0][1]["target_provider"], provider)
         self.assertEqual(calls[1][1]["plan"], "plan")
 
     def test_polling_loop_runs_cycles_only_inside_configured_market_window(self):

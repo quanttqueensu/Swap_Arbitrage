@@ -67,10 +67,24 @@ The complete operator command set is:
 python -m agents.agent_1.run status
 python -m agents.agent_1.run once
 python -m agents.agent_1.run run
+python -m agents.agent_1.run shadow-once
 python -m agents.agent_1.run stop-and-flatten
 ```
 
-Agent 1 fails closed when its target, contract risk, quotes, account state, or
-paper configuration is invalid or stale. Offline tests do not establish TWS or
-IB Gateway connectivity and do not replace the controlled paper-account
-acceptance exercises in the Agent 1 design.
+By default, `status`, `once`, and `run` refresh the exact ERIS contract
+reference/risk data from the public Eris daily files, refresh the 2YY/5YY
+historical baseline from IBKR continuous futures, and generate the live target
+before Agent 1 evaluates any order. Generated files are cached under
+`data/raw_data/cache/` and `data/live_signal/`; no market-data CSV requires
+manual maintenance. Use `--legacy-target` only to deliberately run the old
+pre-generated `--target` CSV path.
+
+Agent 1 fails closed when its automatic refresh, target, contract risk, quotes,
+account state, or paper configuration is invalid or stale. Offline tests do not
+establish TWS or IB Gateway connectivity and do not replace the controlled
+paper-account acceptance exercises in the Agent 1 design.
+
+`shadow-once` runs the same automatic refresh and live-signal calculation but
+stops before the execution path. The optional `--shadow-config` argument keeps
+the original file-backed acceptance fixture available for controlled tests.
+Follow [the live-signal runbook](docs/LIVE_SIGNAL_SHADOW_RUNBOOK.md).

@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from agents.agent_1.run import build_parser
+from agents.agent_1.run import build_parser, main
 
 
 class CliTests(unittest.TestCase):
     def test_exposes_exact_operator_commands(self):
         parser = build_parser()
-        for command in ("run", "once", "status", "stop-and-flatten"):
-            args = parser.parse_args([command])
+        for command in ("run", "once", "status", "shadow-once", "stop-and-flatten"):
+            arguments = [command]
+            args = parser.parse_args(arguments)
             self.assertEqual(args.command, command)
+
+    def test_live_refresh_is_default_and_legacy_csv_is_explicit(self):
+        parser = build_parser()
+        self.assertFalse(parser.parse_args(["run"]).legacy_target)
+        self.assertTrue(parser.parse_args(["run", "--legacy-target"]).legacy_target)
 
     def test_requires_operator_command(self):
         parser = build_parser()
@@ -20,6 +28,33 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveRunSelectionTests(unittest.TestCase):
+    def test_run_builds_auto_refreshed_live_provider_by_default(self):
+        provider = object()
+        broker = SimpleNamespace(sleep=lambda seconds: None)
+        with (
+            patch("agents.agent_1.run.load_config", return_value=SimpleNamespace()),
+            patch("agents.agent_1.run._load_evaluator", return_value=object()),
+            patch("agents.agent_1.run.connect_paper", return_value=broker),
+            patch("agents.agent_1.run.disconnect"),
+            patch(
+                "agents.agent_1.run.load_state",
+                return_value=SimpleNamespace(bound_contracts={}),
+            ),
+            patch(
+                "agents.agent_1.run.build_auto_live_provider",
+                return_value=provider,
+            ) as build,
+            patch("agents.agent_1.run._create_store", return_value=object()),
+            patch("agents.agent_1.run.polling_loop") as loop,
+        ):
+            result = main(["run", "--run-id", "auto-live-test"])
+
+        self.assertEqual(result, 0)
+        self.assertTrue(build.call_args.kwargs["executable"])
+        loop.assert_called_once()
 
 
 class AuditBoundaryTests(unittest.TestCase):
