@@ -15,6 +15,7 @@ from data_pipeline.live_data_pipeline.live_market_source import IbkrLiveMarketSo
 from data_pipeline.live_data_pipeline.shadow_runner import ShadowLiveSignalRunner
 from strategy.live_target import MaturityRiskInputs
 
+from .contracts import resolve_strategy_bindings
 from .target_provider import LiveSignalTargetProvider, ShadowLiveTargetProvider
 
 
@@ -225,6 +226,7 @@ def build_auto_live_provider(
         baseline_path=DEFAULT_BASELINE_PATH,
         reference_path=DEFAULT_REFERENCE_PATH,
         contract_risk_path=contract_risk_path,
+        binding_resolver=resolve_strategy_bindings,
         held_contracts=held_contracts,
     )
     if executable:

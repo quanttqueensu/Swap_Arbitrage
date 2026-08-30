@@ -77,6 +77,17 @@ class QuoteSnapshot:
     bid: Decimal
     ask: Decimal
     timestamp: datetime
+    bid_size: Decimal | None = None
+    ask_size: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class PositionAuditSnapshot:
+    quantity: int
+    average_cost: Decimal
+    market_price: Decimal
+    unrealized_pnl_usd: Decimal
+    realized_pnl_usd: Decimal
 
 
 @dataclass(frozen=True)
@@ -94,6 +105,7 @@ class BrokerSnapshot:
     positions: dict[int, int]
     working_orders: tuple[WorkingOrderSnapshot, ...]
     quotes: dict[int, QuoteSnapshot]
+    position_details: dict[int, PositionAuditSnapshot] = field(default_factory=dict)
 
     def working_qty(self, con_id: int) -> int:
         return sum(
@@ -114,4 +126,5 @@ class BrokerSnapshot:
             positions=dict(self.positions),
             working_orders=self.working_orders,
             quotes=dict(quotes),
+            position_details=dict(self.position_details),
         )

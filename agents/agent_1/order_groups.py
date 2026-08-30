@@ -173,7 +173,7 @@ def plan_partial_fill_recovery(
 
 
 def group_to_state(group: OrderGroupPlan) -> dict[str, object]:
-    """Serialize one active group into JSON-safe recovery state."""
+    """Serialize only the fields required for restart lifecycle recovery."""
     if type(group) is not OrderGroupPlan:
         raise ValueError("Expected an OrderGroupPlan.")
     return {
@@ -187,19 +187,6 @@ def group_to_state(group: OrderGroupPlan) -> dict[str, object]:
         "start_treasury_qty": group.start_treasury_qty,
         "requested_swap_delta": group.requested_swap_delta,
         "requested_treasury_delta": group.requested_treasury_delta,
-        "orders": [
-            {
-                "order_ref": order.order_ref,
-                "maturity": order.maturity,
-                "leg": order.leg,
-                "side": order.side,
-                "quantity": order.quantity,
-                "limit_price": str(order.limit_price),
-                "order_type": order.order_type,
-                "time_in_force": order.time_in_force,
-            }
-            for order in group.orders
-        ],
     }
 
 
@@ -219,38 +206,15 @@ def _state_int(value: object, field_name: str) -> int:
 
 
 def group_from_state(raw: dict[str, object]) -> OrderGroupPlan:
-    """Restore an active order group from private recovery state."""
+    """Restore the compact lifecycle view of an active group.
+
+    Older state files may still contain an ``orders`` array. It is intentionally
+    ignored: broker working orders are authoritative after restart, and active
+    group lifecycle only needs the group-level quantities and deadline.
+    """
     if type(raw) is not dict:
         raise ValueError("Order-group state must be an object.")
     try:
-        orders_raw = raw["orders"]
-        if type(orders_raw) is not list:
-            raise ValueError("orders must be a list")
-        orders = []
-        for item in orders_raw:
-            if type(item) is not dict:
-                raise ValueError("order state must be an object")
-            quantity = _state_int(item["quantity"], "quantity")
-            if quantity <= 0:
-                raise ValueError("quantity must be positive")
-            price = Decimal(str(item["limit_price"]))
-            if not price.is_finite() or price <= 0:
-                raise ValueError("limit_price must be positive and finite")
-            order = LimitOrderPlan(
-                order_ref=str(item["order_ref"]),
-                maturity=str(item["maturity"]),
-                leg=str(item["leg"]),
-                side=str(item["side"]),
-                quantity=quantity,
-                limit_price=price,
-                order_type=str(item["order_type"]),
-                time_in_force=str(item["time_in_force"]),
-            )
-            if not order.order_ref.startswith("A1:") or order.side not in {"BUY", "SELL"}:
-                raise ValueError("invalid order identity")
-            if order.order_type != "LMT" or order.time_in_force != "DAY":
-                raise ValueError("recovered orders must remain DAY limit orders")
-            orders.append(order)
         group = OrderGroupPlan(
             group_id=str(raw["group_id"]),
             maturity=str(raw["maturity"]),
@@ -262,12 +226,14 @@ def group_from_state(raw: dict[str, object]) -> OrderGroupPlan:
             start_treasury_qty=_state_int(raw["start_treasury_qty"], "start_treasury_qty"),
             requested_swap_delta=_state_int(raw["requested_swap_delta"], "requested_swap_delta"),
             requested_treasury_delta=_state_int(raw["requested_treasury_delta"], "requested_treasury_delta"),
-            orders=tuple(orders),
+            orders=(),
         )
     except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
         raise ValueError("Invalid Agent 1 order-group recovery state.") from exc
     if not group.group_id.startswith("A1:") or group.maturity not in {"2Y", "5Y"}:
         raise ValueError("Invalid Agent 1 order-group identity.")
+    if group.phase not in {"hold", "reduce", "expand"}:
+        raise ValueError("Invalid Agent 1 order-group phase.")
     if group.expires_at < group.created_at:
         raise ValueError("Order-group expiry cannot precede creation.")
     return group

@@ -7,11 +7,11 @@ from typing import Any, Sequence
 
 from .broker import connect_paper, disconnect
 from .broker_scope import cancel_agent1_orders
-from .config import load_config
+from .config import ConfigError, load_config
 from .market_hours import market_is_open
 from .paper_audit import PaperAuditError, record_paper_audit
-from .runtime import status_cycle
-from .service import once_cycle, polling_loop
+from .runtime import RuntimeCache, status_cycle
+from .service import Agent1Engine, polling_loop
 from .shadow import (
     DEFAULT_CONTRACT_RISK_PATH,
     build_auto_live_provider,
@@ -27,6 +27,7 @@ DEFAULT_STATE_PATH = PROJECT_ROOT / "data" / "paper" / "agent_1" / "state.json"
 DEFAULT_SHADOW_STATE_PATH = (
     PROJECT_ROOT / "data" / "paper" / "agent_1" / "live_signal_state.json"
 )
+DEFAULT_STOP_PATH = PROJECT_ROOT / "data" / "paper" / "agent_1" / "STOP"
 
 
 def _default_run_id(now: datetime) -> str:
@@ -78,6 +79,7 @@ def _record_audit_or_cancel(
             bindings=result.status.bindings,
             submitted_order_ids=result.execution.state.submitted_order_ids,
             observed_at=observed_at,
+            snapshot=getattr(result.status, "snapshot", None),
         )
     except PaperAuditError:
         canceller(
@@ -99,12 +101,50 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--shadow-config", type=Path, default=None)
-    parser.add_argument(
+    target_group = parser.add_mutually_exclusive_group()
+    target_group.add_argument(
+        "--live-target",
+        action="store_true",
+        help=(
+            "Use auto-refreshed live signals as the executable paper target. "
+            "Requires live_target_enabled=true in the private Agent 1 config."
+        ),
+    )
+    target_group.add_argument(
         "--legacy-target",
         action="store_true",
-        help="Use the legacy pre-generated --target CSV instead of auto-refreshed live signals.",
+        help=(
+            "Deprecated compatibility flag. The validated pre-generated --target "
+            "CSV is already the default executable target source."
+        ),
+    )
+    parser.add_argument(
+        "--stop-file",
+        type=Path,
+        default=DEFAULT_STOP_PATH,
+        help=(
+            "Persistent operator stop-state file. When present, Agent 1 cancels "
+            "its working orders and targets zero exposure."
+        ),
     )
     return parser
+
+
+def _request_stop(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=True)
+
+
+def _stop_requested(path: Path) -> bool:
+    return path.exists()
+
+
+def _assert_live_target_authorized(config: object, requested: bool) -> None:
+    if requested and getattr(config, "live_target_enabled", False) is not True:
+        raise ConfigError(
+            "Executable live targets are disabled. Set live_target_enabled=true "
+            "in the private Agent 1 paper config and pass --live-target."
+        )
 
 
 def _render_status(result: Any) -> str:
@@ -145,17 +185,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = load_config()
+    _assert_live_target_authorized(config, args.live_target)
     evaluator = None if args.command == "shadow-once" else _load_evaluator()
     now = datetime.now(timezone.utc)
+    use_live_target = bool(args.live_target)
     contract_risk_path = args.contract_risk or (
-        _default_contract_risk_path(now)
-        if args.legacy_target
-        else DEFAULT_CONTRACT_RISK_PATH
+        DEFAULT_CONTRACT_RISK_PATH
+        if use_live_target or args.command == "shadow-once"
+        else _default_contract_risk_path(now)
     )
     run_id = args.run_id or _default_run_id(now)
     decision_log_path = (
         PROJECT_ROOT / "data" / "paper" / "agent_1" / run_id / "agent1_decisions.csv"
     )
+
+    if args.command == "stop-and-flatten":
+        _request_stop(args.stop_file)
 
     ib = connect_paper(config)
     try:
@@ -184,7 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         target_provider = None
-        if not args.legacy_target:
+        if use_live_target:
             live_dir = PROJECT_ROOT / "data" / "paper" / "agent_1" / run_id
             target_provider = build_auto_live_provider(
                 ib=ib,
@@ -195,6 +240,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 executable=True,
                 held_contracts=load_state(args.state).bound_contracts,
             )
+
+        runtime_cache = RuntimeCache()
 
         if args.command == "status":
             state = load_state(args.state)
@@ -207,20 +254,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 now=now,
                 evaluator=evaluator,
                 min_days_to_expiry=config.min_days_to_expiry,
+                stop_requested=_stop_requested(args.stop_file),
                 target_provider=target_provider,
+                runtime_cache=runtime_cache,
             )
             print(_render_status(result))
             return 0
 
         store = _create_store(run_id)
+        engine = Agent1Engine(
+            ib=ib,
+            config=config,
+            target_path=args.target,
+            contract_risk_path=contract_risk_path,
+            state_path=args.state,
+            evaluator=evaluator,
+            decision_log_path=decision_log_path,
+            store=store,
+            target_provider=target_provider,
+            runtime_cache=runtime_cache,
+        )
         if args.command == "once":
-            result = once_cycle(
-                ib=ib, config=config, target_path=args.target,
-                contract_risk_path=contract_risk_path, state_path=args.state,
-                now=now, evaluator=evaluator, decision_log_path=decision_log_path,
-                store=store,
-                target_provider=target_provider,
-            )
+            result = engine.cycle(now, stop_requested=_stop_requested(args.stop_file))
             _record_audit_or_cancel(
                 ib=ib, store=store, config=config, result=result,
                 observed_at=datetime.now(timezone.utc),
@@ -230,12 +285,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "run":
             def cycle(cycle_now: datetime) -> None:
-                result = once_cycle(
-                    ib=ib, config=config, target_path=args.target,
-                    contract_risk_path=contract_risk_path, state_path=args.state,
-                    now=cycle_now, evaluator=evaluator,
-                    decision_log_path=decision_log_path, store=store,
-                    target_provider=target_provider,
+                result = engine.cycle(
+                    cycle_now,
+                    stop_requested=_stop_requested(args.stop_file),
                 )
                 _record_audit_or_cancel(
                     ib=ib, store=store, config=config, result=result,
@@ -250,13 +302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # groups are allowed to remain until their lifecycle timeout.
         while True:
             cycle_now = datetime.now(timezone.utc)
-            result = once_cycle(
-                ib=ib, config=config, target_path=args.target,
-                contract_risk_path=contract_risk_path, state_path=args.state,
-                now=cycle_now, evaluator=evaluator, stop_requested=True,
-                decision_log_path=decision_log_path, store=store,
-                target_provider=target_provider,
-            )
+            result = engine.cycle(cycle_now, stop_requested=True)
             _record_audit_or_cancel(
                 ib=ib, store=store, config=config, result=result,
                 observed_at=datetime.now(timezone.utc),

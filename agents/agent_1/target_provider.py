@@ -62,6 +62,11 @@ class LiveSignalTargetProvider:
     runner: Any
     refresher: Any
 
+    def current_bindings(self) -> dict[str, Any]:
+        refreshed = getattr(self.refresher, "_last_result", None)
+        bindings = getattr(refreshed, "bindings", {})
+        return dict(bindings) if isinstance(bindings, dict) else {}
+
     def load_target(self, now: datetime) -> DailyTarget:
         try:
             refreshed = self.refresher.refresh(now)

@@ -102,6 +102,16 @@ python -m agents.agent_1.run run
 python -m agents.agent_1.run stop-and-flatten
 ```
 
+The validated daily target CSV is the executable default. Auto-refreshed live
+signals remain promotion-gated and require both `live_target_enabled: true` in
+the private Agent 1 configuration and the `--live-target` CLI flag. Shadow mode
+does not require either executable-live switch.
+
+The default persistent operator stop file is `data/paper/agent_1/STOP`.
+`stop-and-flatten` creates it before attempting an IBKR connection, and normal
+status/once/run cycles honor it as a zero-target stop state. Delete the stop
+file only when intentionally resuming paper operation.
+
 The supervisor refuses live routing and fails closed for stale or malformed
 targets, missing bound-contract risk, broker/account mismatches, unsafe quotes,
 reconciliation failures, and breached limits. Offline tests do not prove TWS

@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agents.agent_1.models import BoundContract, BrokerSnapshot, QuoteSnapshot
-from agents.agent_1.runtime import status_cycle
+from agents.agent_1.runtime import RuntimeCache, status_cycle
 from agents.agent_1.state import AgentState
 
 
@@ -109,6 +109,14 @@ class RuntimeStatusTests(unittest.TestCase):
 
     def test_status_cycle_previews_margin_but_never_places_orders(self) -> None:
         ib = FakeIB()
+        risk_calls = []
+
+        def evaluator(**kwargs):
+            risk_calls.append(kwargs)
+            return SimpleNamespace(
+                allowed=True, flatten_requested=False, reason_codes=("within_limits",),
+            )
+
         result = status_cycle(
             ib=ib,
             config=self.config,
@@ -118,9 +126,7 @@ class RuntimeStatusTests(unittest.TestCase):
             now=self.now,
             binding_resolver=lambda *args, **kwargs: self.bindings,
             snapshot_collector=lambda *args, **kwargs: self.snapshot,
-            evaluator=lambda **kwargs: SimpleNamespace(
-                allowed=True, flatten_requested=False, reason_codes=("within_limits",),
-            ),
+            evaluator=evaluator,
             order_factory=lambda action, qty, price: SimpleNamespace(
                 action=action, totalQuantity=qty, lmtPrice=price, orderType="LMT"
             ),
@@ -131,6 +137,60 @@ class RuntimeStatusTests(unittest.TestCase):
         self.assertEqual(len(ib.what_if_calls), 2)
         self.assertEqual(ib.place_calls, [])
         self.assertEqual(result.target.target_2y.swap_qty, 2)
+        self.assertEqual(len(risk_calls), 1)
+
+    def test_runtime_cache_reuses_same_day_contract_bindings(self) -> None:
+        ib = FakeIB()
+        cache = RuntimeCache()
+        calls = []
+
+        def resolver(*args, **kwargs):
+            calls.append(kwargs["as_of"])
+            return self.bindings
+
+        kwargs = dict(
+            ib=ib, config=self.config, target_path=self.target_path,
+            contract_risk_path=self.contract_risk_path,
+            state=AgentState(session_pnl_date="2026-08-31"), now=self.now,
+            binding_resolver=resolver,
+            snapshot_collector=lambda *args, **kwargs: self.snapshot,
+            evaluator=lambda **kwargs: SimpleNamespace(
+                allowed=True, flatten_requested=False, reason_codes=("within_limits",),
+            ),
+            order_factory=lambda action, qty, price: SimpleNamespace(
+                action=action, totalQuantity=qty, lmtPrice=price, orderType="LMT"
+            ),
+            runtime_cache=cache,
+        )
+        status_cycle(**kwargs)
+        status_cycle(**kwargs)
+
+        self.assertEqual(calls, [date(2026, 8, 31)])
+
+    def test_active_group_cycle_skips_normal_planning_and_margin_preview(self) -> None:
+        ib = FakeIB()
+        state = AgentState(
+            active_groups={"A1:2Y:target:0001": {"maturity": "2Y"}},
+            session_pnl_date="2026-08-31",
+        )
+
+        def evaluator(**kwargs):
+            raise AssertionError("active-group lifecycle must own this cycle")
+
+        result = status_cycle(
+            ib=ib, config=self.config, target_path=self.target_path,
+            contract_risk_path=self.contract_risk_path, state=state, now=self.now,
+            binding_resolver=lambda *args, **kwargs: self.bindings,
+            snapshot_collector=lambda *args, **kwargs: self.snapshot,
+            evaluator=evaluator,
+            order_factory=lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("active-group cycle must not build normal orders")
+            ),
+        )
+
+        self.assertEqual(result.plan.action, "hold")
+        self.assertEqual(result.plan.reason_codes, ("active_group_pending",))
+        self.assertEqual(ib.what_if_calls, [])
 
     def test_status_cycle_marks_reconciliation_mismatch_and_blocks_when_flat(self) -> None:
         ib = FakeIB()

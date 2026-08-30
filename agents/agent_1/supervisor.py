@@ -134,9 +134,10 @@ def _build_groups(
     now: datetime,
     session_order_groups: int,
     skip_active_maturities: bool,
+    group_sequence: int | None = None,
 ) -> tuple[OrderGroupPlan, ...]:
     groups = []
-    sequence = session_order_groups
+    sequence = session_order_groups if group_sequence is None else group_sequence
     active = _active_maturities(snapshot) if skip_active_maturities else set()
 
     for maturity in ("2Y", "5Y"):
@@ -180,6 +181,7 @@ def _flatten_plan(
     session_order_groups: int,
     reasons: tuple[str, ...],
     risk_decision: Any | None,
+    group_sequence: int | None = None,
 ) -> CyclePlan:
     flat_reconciliations = _reconciliations(None, snapshot, bindings)
     effective = _projected_positions(snapshot, bindings, flat_reconciliations)
@@ -220,6 +222,7 @@ def _flatten_plan(
         now=now,
         session_order_groups=session_order_groups,
         skip_active_maturities=False,
+        group_sequence=group_sequence,
     )
     return CyclePlan(
         action="flatten" if groups else "hold",
@@ -242,6 +245,7 @@ def plan_cycle(
     now: datetime,
     session_order_groups: int,
     evaluator: Callable[..., Any],
+    group_sequence: int | None = None,
     stop_requested: bool = False,
     margin_reserve_ok: bool = True,
     reconciled: bool = True,
@@ -266,6 +270,7 @@ def plan_cycle(
                 session_order_groups=session_order_groups,
                 reasons=reasons,
                 risk_decision=None,
+                group_sequence=group_sequence,
             )
         zero_reconciliations = _reconciliations(None, snapshot, bindings)
         return CyclePlan(
@@ -289,6 +294,7 @@ def plan_cycle(
                 session_order_groups=session_order_groups,
                 reasons=reasons,
                 risk_decision=None,
+                group_sequence=group_sequence,
             )
         reconciliations = _reconciliations(None, snapshot, bindings)
         return CyclePlan(
@@ -309,6 +315,7 @@ def plan_cycle(
             session_order_groups=session_order_groups,
             reasons=("operator_stop",),
             risk_decision=None,
+            group_sequence=group_sequence,
         ) if has_open else CyclePlan(
             action="hold",
             reason_codes=("operator_stop",),
@@ -326,7 +333,7 @@ def plan_cycle(
             return _flatten_plan(
                 snapshot=snapshot, bindings=bindings, risks=risks, config=config,
                 now=now, session_order_groups=session_order_groups,
-                reasons=reasons, risk_decision=None,
+                reasons=reasons, risk_decision=None, group_sequence=group_sequence,
             )
         return CyclePlan("blocked", reasons, (), exposure, reconciliations)
 
@@ -368,7 +375,7 @@ def plan_cycle(
             return _flatten_plan(
                 snapshot=snapshot, bindings=bindings, risks=risks, config=config,
                 now=now, session_order_groups=session_order_groups,
-                reasons=reasons, risk_decision=None,
+                reasons=reasons, risk_decision=None, group_sequence=group_sequence,
             )
         return CyclePlan("blocked", reasons, (), exposure, reconciliations)
 
@@ -379,7 +386,7 @@ def plan_cycle(
             return _flatten_plan(
                 snapshot=snapshot, bindings=bindings, risks=risks, config=config,
                 now=now, session_order_groups=session_order_groups,
-                reasons=reasons, risk_decision=risk_decision,
+                reasons=reasons, risk_decision=risk_decision, group_sequence=group_sequence,
             )
         return CyclePlan("blocked", reasons, (), exposure, reconciliations, risk_decision)
 
@@ -393,6 +400,7 @@ def plan_cycle(
         now=now,
         session_order_groups=session_order_groups,
         skip_active_maturities=True,
+        group_sequence=group_sequence,
     )
     return CyclePlan(
         action="trade" if groups else "hold",

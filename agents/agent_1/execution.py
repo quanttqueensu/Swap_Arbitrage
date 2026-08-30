@@ -65,6 +65,7 @@ def _planned_state(
         active_groups=active_groups,
         last_successful_broker_snapshot=_snapshot_state(snapshot),
         session_order_groups=state.session_order_groups + len(groups),
+        next_group_sequence=state.next_group_sequence + len(groups),
         session_pnl_date=state.session_pnl_date,
         session_peak_pnl_usd=state.session_peak_pnl_usd,
     )

@@ -136,6 +136,7 @@ class ServiceTests(unittest.TestCase):
             margin_previewer=lambda **_: True,
         )
         recovery_target = captured["execute_target"]
+        self.assertEqual(len(captured["targets"]), 1)
         self.assertEqual(recovery_target.target_2y.swap_qty, 6)
         self.assertEqual(recovery_target.target_2y.treasury_qty, -3)
         self.assertEqual(captured["supersede"], (group.group_id,))

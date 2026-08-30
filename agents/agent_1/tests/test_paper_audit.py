@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
-from agents.agent_1.models import BoundContract
+from agents.agent_1.models import (
+    BoundContract, BrokerSnapshot, PositionAuditSnapshot, QuoteSnapshot,
+)
 from agents.agent_1.paper_audit import PaperAuditError, record_paper_audit
 
 
@@ -136,6 +138,35 @@ class PaperAuditTests(unittest.TestCase):
         self.assertEqual(by_schema["paper_fills"][0]["order_ref"], "A1:2Y:abc:0001:SWAP")
         self.assertEqual(by_schema["paper_fills"][0]["quantity"], 2)
         self.assertNotIn("DU123", repr(store.calls))
+
+    def test_reuses_cycle_snapshot_for_quotes_and_positions(self) -> None:
+        ib = FakeIB(self.now)
+        ib.reqTickers = lambda *contracts: (_ for _ in ()).throw(AssertionError("duplicate quote request"))
+        ib.portfolio = lambda account: (_ for _ in ()).throw(AssertionError("duplicate portfolio request"))
+        snapshot = BrokerSnapshot(
+            observed_at=self.now,
+            positions={1: 2, 2: 0},
+            working_orders=(),
+            quotes={
+                1: QuoteSnapshot(1, Decimal("100"), Decimal("100.01"), self.now, Decimal("10"), Decimal("12")),
+                2: QuoteSnapshot(2, Decimal("101"), Decimal("101.01"), self.now, Decimal("11"), Decimal("13")),
+            },
+            position_details={
+                1: PositionAuditSnapshot(
+                    quantity=2, average_cost=Decimal("98.5"), market_price=Decimal("99.5"),
+                    unrealized_pnl_usd=Decimal("20"), realized_pnl_usd=Decimal("5"),
+                )
+            },
+        )
+        store = FakeStore()
+
+        summary = record_paper_audit(
+            ib, store, account_id="DU123", bindings=self.bindings,
+            submitted_order_ids={"A1:2Y:abc:0001:SWAP": 101},
+            observed_at=self.now, snapshot=snapshot,
+        )
+
+        self.assertEqual(summary, {"quotes": 2, "positions": 1, "fills": 1})
 
     def test_sell_fill_is_stored_with_negative_quantity(self) -> None:
         ib = FakeIB(self.now)

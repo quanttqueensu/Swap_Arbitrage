@@ -129,6 +129,7 @@ class ExecutionTests(unittest.TestCase):
         })
         saved = load_state(self.state_path)
         self.assertEqual(saved.session_order_groups, 1)
+        self.assertEqual(saved.next_group_sequence, 1)
         self.assertEqual(saved.submitted_order_ids, result.submitted_order_ids)
         self.assertIn("A1:2Y:abcdef:0001", saved.active_groups)
         self.assertEqual(len(ib.place_calls), 2)

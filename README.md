@@ -71,20 +71,26 @@ python -m agents.agent_1.run shadow-once
 python -m agents.agent_1.run stop-and-flatten
 ```
 
-By default, `status`, `once`, and `run` refresh the exact ERIS contract
-reference/risk data from the public Eris daily files, refresh the 2YY/5YY
-historical baseline from IBKR continuous futures, and generate the live target
-before Agent 1 evaluates any order. Generated files are cached under
-`data/raw_data/cache/` and `data/live_signal/`; no market-data CSV requires
-manual maintenance. Use `--legacy-target` only to deliberately run the old
-pre-generated `--target` CSV path.
+By default, `status`, `once`, and `run` use the validated pre-generated
+`--target` CSV. The auto-refreshed live signal remains gated: executable live
+targets require both `live_target_enabled: true` in the private Agent 1 paper
+configuration and the explicit `--live-target` CLI flag. The older
+`--legacy-target` flag remains accepted only for compatibility and selects the
+same default CSV path.
 
-Agent 1 fails closed when its automatic refresh, target, contract risk, quotes,
-account state, or paper configuration is invalid or stale. Offline tests do not
-establish TWS or IB Gateway connectivity and do not replace the controlled
-paper-account acceptance exercises in the Agent 1 design.
+Agent 1 fails closed when its target, contract risk, quotes, account state, or
+paper configuration is invalid or stale. A persistent operator stop state lives
+at `data/paper/agent_1/STOP` by default. `stop-and-flatten` creates that file
+before connecting to IBKR; `status`, `once`, and every `run` cycle honor it by
+blocking expansion and targeting zero exposure. Remove the stop file only after
+an operator has intentionally approved resuming normal paper operation. Use
+`--stop-file` to override the private stop-state location.
 
-`shadow-once` runs the same automatic refresh and live-signal calculation but
-stops before the execution path. The optional `--shadow-config` argument keeps
-the original file-backed acceptance fixture available for controlled tests.
-Follow [the live-signal runbook](docs/LIVE_SIGNAL_SHADOW_RUNBOOK.md).
+Offline tests do not establish TWS or IB Gateway connectivity and do not replace
+the controlled paper-account acceptance exercises in the Agent 1 design.
+
+`shadow-once` performs the automatic ERIS/IBKR refresh and live-signal
+calculation without exposing an executable target. The optional
+`--shadow-config` argument keeps the original file-backed acceptance fixture
+available for controlled tests. Follow
+[the live-signal runbook](docs/LIVE_SIGNAL_SHADOW_RUNBOOK.md).

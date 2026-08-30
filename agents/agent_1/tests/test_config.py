@@ -55,6 +55,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.market_open_time.isoformat(timespec="minutes"), "09:00")
         self.assertEqual(config.market_close_time.isoformat(timespec="minutes"), "15:00")
         self.assertEqual(config.min_days_to_expiry, 14)
+        self.assertFalse(config.live_target_enabled)
+
+
+    def test_live_target_enablement_is_explicit_and_boolean(self) -> None:
+        values = dict(self.valid, live_target_enabled=True)
+        self.write(values)
+        with patch.dict(os.environ, {"AGENT1_PAPER_CONFIG": str(self.path)}, clear=False):
+            config = load_config()
+        self.assertTrue(config.live_target_enabled)
+
+        values["live_target_enabled"] = "true"
+        self.write(values)
+        with patch.dict(os.environ, {"AGENT1_PAPER_CONFIG": str(self.path)}, clear=False):
+            with self.assertRaisesRegex(ConfigError, "live_target_enabled"):
+                load_config()
 
     def test_rejects_agent_zero_client_id(self) -> None:
         values = dict(self.valid, client_id=30)

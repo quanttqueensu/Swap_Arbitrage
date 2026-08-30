@@ -12,7 +12,6 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from agents.agent_1.contracts import resolve_strategy_bindings
 from config import (
     ERIS_PUBLIC_BASE_URL,
     POSITION_SIZE_BY_MATURITY,
@@ -257,7 +256,7 @@ class Agent1DataRefresher:
         baseline_path: Path,
         reference_path: Path,
         contract_risk_path: Path,
-        binding_resolver: Callable[..., dict[str, Any]] = resolve_strategy_bindings,
+        binding_resolver: Callable[..., dict[str, Any]],
         current_reference_loader: Callable[[datetime], tuple[pd.DataFrame, date]] = load_latest_eris_reference_frame,
         eris_history_loader: Callable[..., pd.DataFrame] = get_eris_public_swap_data,
         yield_history_loader: Callable[[str, datetime], pd.DataFrame] | None = None,

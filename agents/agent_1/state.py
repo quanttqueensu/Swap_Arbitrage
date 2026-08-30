@@ -4,7 +4,7 @@ import json
 import os
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 
@@ -21,6 +21,7 @@ class AgentState:
     active_groups: dict[str, dict[str, object]] = field(default_factory=dict)
     last_successful_broker_snapshot: dict[str, object] = field(default_factory=dict)
     session_order_groups: int = 0
+    next_group_sequence: int = 0
     session_pnl_date: str = ""
     session_peak_pnl_usd: Decimal = Decimal("0")
 
@@ -51,6 +52,8 @@ def _validate_state(state: AgentState) -> AgentState:
         raise StateError("state broker snapshot is invalid.")
     if type(state.session_order_groups) is not int or state.session_order_groups < 0:
         raise StateError("state session_order_groups is invalid.")
+    if type(state.next_group_sequence) is not int or state.next_group_sequence < 0:
+        raise StateError("state next_group_sequence is invalid.")
     if type(state.session_pnl_date) is not str:
         raise StateError("state session_pnl_date is invalid.")
     if state.session_pnl_date:
@@ -63,6 +66,75 @@ def _validate_state(state: AgentState) -> AgentState:
     return state
 
 
+def _sequence_from_ref(value: object) -> int:
+    if type(value) is not str:
+        return 0
+    parts = value.split(":")
+    if len(parts) < 4 or parts[0] != "A1":
+        return 0
+    try:
+        sequence = int(parts[3])
+    except (TypeError, ValueError):
+        return 0
+    return sequence if sequence > 0 else 0
+
+
+def _infer_next_group_sequence(raw: dict[str, object], session_order_groups: int) -> int:
+    if "next_group_sequence" in raw:
+        configured = raw.get("next_group_sequence")
+        if type(configured) is int and configured >= 0:
+            return configured
+    active_groups = raw.get("active_groups", {})
+    submitted_refs = raw.get("submitted_order_refs", [])
+    candidates = [session_order_groups]
+    if isinstance(active_groups, dict):
+        candidates.extend(_sequence_from_ref(key) for key in active_groups)
+    if isinstance(submitted_refs, list):
+        candidates.extend(_sequence_from_ref(value) for value in submitted_refs)
+    return max(candidates, default=0)
+
+
+def _active_order_refs(state: AgentState) -> tuple[str, ...]:
+    prefixes = tuple(f"{group_id}:" for group_id in state.active_groups)
+    if not prefixes:
+        return ()
+    return tuple(
+        ref for ref in state.submitted_order_refs
+        if ref.startswith(prefixes)
+    )
+
+
+def roll_session(state: AgentState, session_date: str) -> AgentState:
+    """Reset per-session counters while retaining monotonic group identity.
+
+    Completed order tracking is bounded to the current session. If an active
+    group crosses the session boundary, only its order identities are retained
+    so recovery can still reconcile broker truth safely.
+    """
+    try:
+        date.fromisoformat(session_date)
+    except (TypeError, ValueError) as exc:
+        raise StateError("session_date must be an ISO date.") from exc
+    if state.session_pnl_date == session_date:
+        return state
+
+    active_refs = _active_order_refs(state)
+    active_ref_set = set(active_refs)
+    active_ids = {
+        ref: order_id
+        for ref, order_id in state.submitted_order_ids.items()
+        if ref in active_ref_set
+    }
+    return replace(
+        state,
+        submitted_order_refs=active_refs,
+        submitted_order_ids=active_ids,
+        session_order_groups=0,
+        session_pnl_date=session_date,
+        session_peak_pnl_usd=Decimal("0"),
+    )
+
+
 def load_state(path: Path) -> AgentState:
     if not path.exists():
         return AgentState()
@@ -70,6 +142,7 @@ def load_state(path: Path) -> AgentState:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("not an object")
+        session_order_groups = raw.get("session_order_groups", 0)
         state = AgentState(
             target_version=raw.get("target_version", ""),
             bound_contracts=raw.get("bound_contracts", {}),
@@ -77,7 +150,8 @@ def load_state(path: Path) -> AgentState:
             submitted_order_ids=raw.get("submitted_order_ids", {}),
             active_groups=raw.get("active_groups", {}),
             last_successful_broker_snapshot=raw.get("last_successful_broker_snapshot", {}),
-            session_order_groups=raw.get("session_order_groups", 0),
+            session_order_groups=session_order_groups,
+            next_group_sequence=_infer_next_group_sequence(raw, session_order_groups),
             session_pnl_date=raw.get("session_pnl_date", ""),
             session_peak_pnl_usd=Decimal(str(raw.get("session_peak_pnl_usd", "0"))),
         )

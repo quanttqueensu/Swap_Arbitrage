@@ -101,13 +101,18 @@ class IbkrLiveMarketSource:
         self.quote_max_age_seconds = quote_max_age_seconds
         self.min_days_to_expiry = min_days_to_expiry
         self.preferred_con_ids = dict(preferred_con_ids or {})
+        self._contract_cache: dict[tuple[object, ...], tuple[Any, Any]] = {}
+        self._cache_date: date | None = None
 
     def set_preferred_contracts(self, con_ids: dict[str, int]) -> None:
-        self.preferred_con_ids = {
+        normalized = {
             str(symbol): con_id
             for symbol, con_id in con_ids.items()
             if type(con_id) is int and con_id > 0
         }
+        if normalized != self.preferred_con_ids:
+            self.preferred_con_ids = normalized
+            self._contract_cache.clear()
 
     def snapshot(
         self,
@@ -120,24 +125,23 @@ class IbkrLiveMarketSource:
         if len({request.symbol for request in requests}) != len(requests):
             raise ValueError("duplicate signal symbol request")
 
-        output: dict[str, PriceQuote | TreasuryYieldQuote] = {}
-        for request in requests:
-            detail, contract = self._resolve_contract(
-                request, now.astimezone(timezone.utc).date()
+        now_utc = now.astimezone(timezone.utc)
+        resolved = [
+            (request, *self._resolve_contract(request, now_utc.date()))
+            for request in requests
+        ]
+        contracts = [contract for _, _, contract in resolved]
+        tickers = list(self.ib.reqTickers(*contracts)) if contracts else []
+        if len(tickers) != len(resolved):
+            raise MarketDataError(
+                "missing_market_quote",
+                f"expected {len(resolved)} quote snapshots, got {len(tickers)}",
             )
-            tickers = list(self.ib.reqTickers(contract))
-            if len(tickers) != 1:
-                raise MarketDataError(
-                    "missing_market_quote",
-                    f"expected one quote snapshot for {request.symbol}",
-                )
-            ticker = tickers[0]
+
+        output: dict[str, PriceQuote | TreasuryYieldQuote] = {}
+        for (request, detail, contract), ticker in zip(resolved, tickers):
             output[request.symbol] = self._normalize_quote(
-                request,
-                detail,
-                contract,
-                ticker,
-                now.astimezone(timezone.utc),
+                request, detail, contract, ticker, now_utc
             )
         return output
 
@@ -146,6 +150,20 @@ class IbkrLiveMarketSource:
         request: ContractRequest,
         as_of: date,
     ) -> tuple[Any, Any]:
+        if self._cache_date != as_of:
+            self._contract_cache.clear()
+            self._cache_date = as_of
+        cache_key = (
+            request.symbol,
+            request.kind,
+            request.exchange,
+            request.currency,
+            self.preferred_con_ids.get(request.symbol),
+        )
+        cached = self._contract_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         seed = self.contract_factory(
             symbol=request.symbol,
             exchange=request.exchange,
@@ -213,7 +231,9 @@ class IbkrLiveMarketSource:
                 "contract_qualification_failure",
                 f"expected exactly one qualified contract for {request.symbol}",
             )
-        return detail, qualified[0]
+        resolved = (detail, qualified[0])
+        self._contract_cache[cache_key] = resolved
+        return resolved
 
     def _normalize_quote(
         self,

@@ -6,7 +6,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from .broker_scope import is_agent1_trade
-from .models import BoundContract, BrokerSnapshot, QuoteSnapshot, WorkingOrderSnapshot
+from .models import (
+    BoundContract, BrokerSnapshot, PositionAuditSnapshot, QuoteSnapshot, WorkingOrderSnapshot,
+)
 
 
 class BrokerError(RuntimeError):
@@ -61,8 +63,46 @@ def _collect_positions(
     *,
     account_id: str,
     tracked_con_ids: set[int],
-) -> dict[int, int]:
+) -> tuple[dict[int, int], dict[int, PositionAuditSnapshot]]:
     positions = {con_id: 0 for con_id in tracked_con_ids}
+    details: dict[int, PositionAuditSnapshot] = {}
+
+    portfolio = getattr(ib, "portfolio", None)
+    if callable(portfolio):
+        try:
+            rows = list(portfolio(account_id))
+        except Exception as exc:
+            raise BrokerError("Could not read IBKR portfolio.") from exc
+        for row in rows:
+            item_account = str(getattr(row, "account", "") or "")
+            if item_account and item_account != account_id:
+                continue
+            contract = getattr(row, "contract", None)
+            con_id = getattr(contract, "conId", None)
+            if type(con_id) is not int or con_id not in tracked_con_ids:
+                continue
+            quantity = _integer_quantity(getattr(row, "position", None), "position")
+            positions[con_id] = quantity
+            if quantity == 0:
+                continue
+            average_cost = _decimal(getattr(row, "averageCost", getattr(row, "avgCost", None)))
+            market_price = _decimal(getattr(row, "marketPrice", None))
+            unrealized = _decimal(getattr(row, "unrealizedPNL", None))
+            realized = _decimal(getattr(row, "realizedPNL", None))
+            if (
+                average_cost is not None and average_cost > 0
+                and market_price is not None and market_price > 0
+                and unrealized is not None and realized is not None
+            ):
+                details[con_id] = PositionAuditSnapshot(
+                    quantity=quantity,
+                    average_cost=average_cost,
+                    market_price=market_price,
+                    unrealized_pnl_usd=unrealized,
+                    realized_pnl_usd=realized,
+                )
+        return positions, details
+
     try:
         rows = list(ib.positions())
     except Exception as exc:
@@ -76,7 +116,7 @@ def _collect_positions(
         if type(con_id) is not int or con_id not in tracked_con_ids:
             continue
         positions[con_id] = _integer_quantity(getattr(row, "position", None), "position")
-    return positions
+    return positions, details
 
 
 def _collect_working_orders(
@@ -155,7 +195,13 @@ def _collect_quotes(
             continue
         if bid is None or ask is None:
             continue
-        quotes[con_id] = QuoteSnapshot(con_id=con_id, bid=bid, ask=ask, timestamp=timestamp)
+        bid_size = _decimal(getattr(ticker, "bidSize", None))
+        ask_size = _decimal(getattr(ticker, "askSize", None))
+        quotes[con_id] = QuoteSnapshot(
+            con_id=con_id, bid=bid, ask=ask, timestamp=timestamp,
+            bid_size=bid_size if bid_size is not None and bid_size > 0 else None,
+            ask_size=ask_size if ask_size is not None and ask_size > 0 else None,
+        )
     return quotes
 
 
@@ -174,13 +220,14 @@ def collect_broker_snapshot(
     if not tracked_con_ids:
         raise BrokerError("At least one bound contract is required for a broker snapshot.")
 
+    positions, position_details = _collect_positions(
+        ib,
+        account_id=account_id,
+        tracked_con_ids=tracked_con_ids,
+    )
     return BrokerSnapshot(
         observed_at=observed_at,
-        positions=_collect_positions(
-            ib,
-            account_id=account_id,
-            tracked_con_ids=tracked_con_ids,
-        ),
+        positions=positions,
         working_orders=_collect_working_orders(
             ib,
             account_id=account_id,
@@ -188,6 +235,7 @@ def collect_broker_snapshot(
             tracked_con_ids=tracked_con_ids,
         ),
         quotes=_collect_quotes(ib, bindings=bindings),
+        position_details=position_details,
     )
 
 

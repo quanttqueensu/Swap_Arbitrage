@@ -73,13 +73,18 @@ class FakeIB:
         self.calls.append(("qualifyContracts", tuple(c.symbol for c in contracts)))
         return list(contracts)
 
-    def reqTickers(self, contract):
-        self.calls.append(("reqTickers", contract.symbol))
+    def reqTickers(self, *contracts):
+        self.calls.append(("reqTickers", tuple(contract.symbol for contract in contracts)))
         observed = NOW - timedelta(seconds=31) if self.stale else NOW
-        bid, ask = (4.01, 4.00) if self.crossed else (3.99, 4.01)
-        if contract.symbol in {"YIT", "YIW"}:
-            bid, ask = ((100.01, 100.00) if self.crossed else (99.99, 100.01))
-        return [FakeTicker(bid=bid, ask=ask, last=(bid + ask) / 2, time=observed)]
+        tickers = []
+        for contract in contracts:
+            bid, ask = (4.01, 4.00) if self.crossed else (3.99, 4.01)
+            if contract.symbol in {"YIT", "YIW"}:
+                bid, ask = ((100.01, 100.00) if self.crossed else (99.99, 100.01))
+            tickers.append(
+                FakeTicker(bid=bid, ask=ask, last=(bid + ask) / 2, time=observed)
+            )
+        return tickers
 
     def sleep(self, seconds):
         self.calls.append(("sleep", seconds))
@@ -113,11 +118,52 @@ class LiveMarketSourceTests(unittest.TestCase):
         self.assertNotIn("reqGlobalCancel", called_names)
         self.assertNotIn("cancelOrder", called_names)
         self.assertNotIn("reqMktData", called_names)
-        self.assertEqual(called_names.count("reqTickers"), 4)
+        self.assertEqual(called_names.count("reqTickers"), 1)
 
         self.assertEqual(quotes["YIT"].contract_id, "102")
         self.assertEqual(quotes["2YY"].contract_id, "302")
         self.assertEqual(quotes["2YY"].mid_percent, Decimal("4.0"))
+
+
+    def test_contract_qualification_is_cached_within_trading_day(self) -> None:
+        ib = FakeIB()
+        source = IbkrLiveMarketSource(
+            ib,
+            contract_factory=contract_factory,
+            quote_max_age_seconds=30,
+        )
+        requests = [
+            ContractRequest("YIT", "eris"),
+            ContractRequest("YIW", "eris"),
+            ContractRequest("2YY", "treasury_yield"),
+            ContractRequest("5YY", "treasury_yield"),
+        ]
+
+        source.snapshot(requests, now=NOW)
+        source.snapshot(requests, now=NOW + timedelta(seconds=10))
+
+        called_names = [name for name, *_ in ib.calls]
+        self.assertEqual(called_names.count("reqContractDetails"), 4)
+        self.assertEqual(called_names.count("qualifyContracts"), 4)
+        self.assertEqual(called_names.count("reqTickers"), 2)
+
+    def test_preferred_contract_change_invalidates_contract_cache(self) -> None:
+        ib = FakeIB()
+        source = IbkrLiveMarketSource(
+            ib,
+            contract_factory=contract_factory,
+            quote_max_age_seconds=30,
+        )
+        request = [ContractRequest("YIT", "eris")]
+
+        first = source.snapshot(request, now=NOW)["YIT"]
+        source.set_preferred_contracts({"YIT": 101})
+        second = source.snapshot(request, now=NOW + timedelta(seconds=10))["YIT"]
+
+        self.assertEqual(first.contract_id, "102")
+        self.assertEqual(second.contract_id, "101")
+        requested = [value for name, value in ib.calls if name == "reqContractDetails"]
+        self.assertEqual(requested, ["YIT", "YIT"])
 
     def test_stale_quote_is_rejected(self) -> None:
         source = IbkrLiveMarketSource(

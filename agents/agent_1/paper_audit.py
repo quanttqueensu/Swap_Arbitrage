@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
-from .models import BoundContract
+from .models import BoundContract, BrokerSnapshot
 
 
 class PaperAuditError(RuntimeError):
@@ -118,6 +118,36 @@ def _quote_rows(ib: Any, contracts: dict[int, object], observed_at: datetime) ->
     return rows
 
 
+def _quote_rows_from_snapshot(
+    snapshot: BrokerSnapshot,
+    *,
+    tracked_con_ids: set[int],
+) -> list[dict[str, object]] | None:
+    if set(snapshot.quotes) != tracked_con_ids:
+        raise PaperAuditError("missing quote for bound contract")
+    rows: list[dict[str, object]] = []
+    observed_at = _utc_datetime(snapshot.observed_at, "snapshot observed_at")
+    for con_id in sorted(tracked_con_ids):
+        quote = snapshot.quotes[con_id]
+        bid = _decimal(quote.bid, "bid_price", positive=True)
+        ask = _decimal(quote.ask, "ask_price", positive=True)
+        if bid > ask:
+            raise PaperAuditError("crossed quote")
+        if quote.bid_size is None or quote.ask_size is None:
+            return None
+        bid_size = _decimal(quote.bid_size, "bid_size", positive=True)
+        ask_size = _decimal(quote.ask_size, "ask_size", positive=True)
+        rows.append({
+            "timestamp_utc": observed_at,
+            "instrument_id": _instrument_id(con_id),
+            "bid_price": bid,
+            "ask_price": ask,
+            "bid_size": bid_size,
+            "ask_size": ask_size,
+        })
+    return rows
+
+
 def _position_rows(
     ib: Any,
     *,
@@ -155,6 +185,36 @@ def _position_rows(
             "market_price": _decimal(getattr(item, "marketPrice", None), "market_price", positive=True),
             "unrealized_pnl_usd": _decimal(getattr(item, "unrealizedPNL", None), "unrealized_pnl_usd"),
             "realized_pnl_usd": _decimal(getattr(item, "realizedPNL", None), "realized_pnl_usd"),
+        })
+    return rows
+
+
+def _position_rows_from_snapshot(
+    snapshot: BrokerSnapshot,
+    *,
+    tracked_con_ids: set[int],
+) -> list[dict[str, object]] | None:
+    observed_at = _utc_datetime(snapshot.observed_at, "snapshot observed_at")
+    rows: list[dict[str, object]] = []
+    for con_id in sorted(tracked_con_ids):
+        quantity = snapshot.positions.get(con_id, 0)
+        if type(quantity) is not int:
+            raise PaperAuditError("snapshot position must be an integer")
+        if quantity == 0:
+            continue
+        detail = snapshot.position_details.get(con_id)
+        if detail is None:
+            return None
+        if detail.quantity != quantity:
+            raise PaperAuditError("snapshot position detail is inconsistent")
+        rows.append({
+            "timestamp_utc": observed_at,
+            "instrument_id": _instrument_id(con_id),
+            "quantity": quantity,
+            "average_cost": _decimal(detail.average_cost, "average_cost", positive=True),
+            "market_price": _decimal(detail.market_price, "market_price", positive=True),
+            "unrealized_pnl_usd": _decimal(detail.unrealized_pnl_usd, "unrealized_pnl_usd"),
+            "realized_pnl_usd": _decimal(detail.realized_pnl_usd, "realized_pnl_usd"),
         })
     return rows
 
@@ -245,6 +305,7 @@ def record_paper_audit(
     bindings: Mapping[str, BoundContract],
     submitted_order_ids: Mapping[str, int],
     observed_at: datetime,
+    snapshot: BrokerSnapshot | None = None,
 ) -> dict[str, int]:
     """Record fresh canonical paper quotes, positions, and Agent 1 fills.
 
@@ -257,13 +318,26 @@ def record_paper_audit(
     contracts = _tracked_contracts(bindings)
     tracked_con_ids = set(contracts)
 
-    quote_rows = _quote_rows(ib, contracts, observed_at)
-    position_rows = _position_rows(
-        ib,
-        account_id=account_id,
-        tracked_con_ids=tracked_con_ids,
-        observed_at=observed_at,
+    quote_rows = (
+        _quote_rows_from_snapshot(snapshot, tracked_con_ids=tracked_con_ids)
+        if snapshot is not None
+        else None
     )
+    if quote_rows is None:
+        quote_rows = _quote_rows(ib, contracts, observed_at)
+
+    position_rows = (
+        _position_rows_from_snapshot(snapshot, tracked_con_ids=tracked_con_ids)
+        if snapshot is not None
+        else None
+    )
+    if position_rows is None:
+        position_rows = _position_rows(
+            ib,
+            account_id=account_id,
+            tracked_con_ids=tracked_con_ids,
+            observed_at=observed_at,
+        )
     fill_rows = _fill_rows(
         ib,
         account_id=account_id,
