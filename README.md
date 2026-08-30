@@ -19,6 +19,7 @@ The canonical test command is:
 ```powershell
 python -m unittest discover -s docs/tests -v
 python -m unittest discover -s agents/agent_0/tests -v
+python -m unittest discover -s agents/agent_1/tests -v
 ```
 
 Repository organization:
@@ -48,3 +49,28 @@ python -m backtesting --start auto --end auto
 Each run writes the validated canonical report set under
 `data/results/backtests/<run-id>/`. Use `--refresh-signals` only when the
 upstream signal/risk data should be rebuilt.
+
+## Agent 1 paper trader
+
+Agent 1 reconciles the validated 2Y and 5Y strategy targets with an IBKR paper
+account. Copy `agents/agent_1/agent1.paper.example.json` to an untracked private
+path, replace the placeholder with the local `DU...` paper account, and point
+`AGENT1_PAPER_CONFIG` at that file. Start with the read-only status command:
+
+```powershell
+python -m agents.agent_1.run status
+```
+
+The complete operator command set is:
+
+```powershell
+python -m agents.agent_1.run status
+python -m agents.agent_1.run once
+python -m agents.agent_1.run run
+python -m agents.agent_1.run stop-and-flatten
+```
+
+Agent 1 fails closed when its target, contract risk, quotes, account state, or
+paper configuration is invalid or stale. Offline tests do not establish TWS or
+IB Gateway connectivity and do not replace the controlled paper-account
+acceptance exercises in the Agent 1 design.

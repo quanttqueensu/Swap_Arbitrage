@@ -53,9 +53,13 @@ class DataLayoutTests(unittest.TestCase):
         with self.assertRaises(ModuleNotFoundError):
             importlib.import_module("data_pipeline.paper_store")
 
-    def test_durable_data_has_only_the_requested_folders(self) -> None:
+    def test_data_has_only_canonical_and_generated_folders(self) -> None:
         folders = {path.name for path in DATA_DIR.iterdir() if path.is_dir()}
-        self.assertEqual(folders, {"raw_data", "futures", "rates", "market", "contract_risk"})
+        generated = {"paper", "results"}
+        self.assertEqual(
+            folders - generated,
+            {"raw_data", "futures", "rates", "market", "contract_risk"},
+        )
 
     def test_repository_support_files_use_the_approved_baskets(self) -> None:
         self.assertTrue((Path("docs") / "tests").is_dir())

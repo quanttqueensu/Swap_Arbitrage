@@ -1,2 +1,16 @@
 .worktrees/
 .superpowers/
+.env
+.venv/
+.venv.old/
+.idea/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+data/raw_data/*
+!data/raw_data/.gitkeep
+data/results/
+data/paper/
+agents/agent_0/orders/*.csv
+Swap_Arbitrage-share.zip

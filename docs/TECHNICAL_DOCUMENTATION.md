@@ -78,6 +78,37 @@ orders and orders from other API clients, run:
 Cancellation resets local upcoming orders to `planned`; it does not create a
 replacement plan.
 
+### Run the Agent 1 strategy paper supervisor
+
+Agent 1 is separate from Agent 0. It reads the latest validated 2Y/5Y target,
+reconciles it with broker positions and Agent-1-scoped working orders, applies
+the shared runtime risk decision, and submits paper-only limit-order groups.
+
+Copy `agents/agent_1/agent1.paper.example.json` to an untracked private path,
+replace its placeholder with the approved local `DU...` paper account, and set
+the environment variable to that file:
+
+```powershell
+$env:AGENT1_PAPER_CONFIG = "C:\\private\\agent1.paper.json"
+python -m agents.agent_1.run status
+```
+
+`status` does not place orders. After its target, bindings, positions, margin,
+and risk output have been reviewed, the transmitting paper commands are:
+
+```powershell
+python -m agents.agent_1.run once
+python -m agents.agent_1.run run
+python -m agents.agent_1.run stop-and-flatten
+```
+
+The supervisor refuses live routing and fails closed for stale or malformed
+targets, missing bound-contract risk, broker/account mismatches, unsafe quotes,
+reconciliation failures, and breached limits. Offline tests do not prove TWS
+or IB Gateway connectivity; controlled restart, partial-fill, timeout, scoped
+cancellation, flattening, and market-hours soak exercises remain paper-account
+acceptance steps.
+
 
 ## System reference
 
@@ -99,6 +130,7 @@ replacement plan.
 | `backtesting/historical.py` | Converts historical signal and risk data into replay events |
 | `backtesting/main.py` | Provides `python -m backtesting` and the offline self-check |
 | `agents/agent_0/` | Runs the random weekly paper-trading experiment |
+| `agents/agent_1/` | Reconciles validated strategy targets with an IBKR paper account under fail-closed execution and risk controls |
 | `docs/tests/` | Tests strategy and data behavior |
 | `docs/verification/` | Stores evidence from earlier verification runs |
 
@@ -307,17 +339,22 @@ tests cover these sign rules.
 | Strategy equation version | `p10.strategy-equations.v1` |
 | Position-sizing/risk version | `p33.position-sizing-risk.v1` |
 | Agent 0 | Local IBKR paper session, port `7497`, client ID `30` |
+| Agent 1 | Local IBKR paper session, port `7497`, distinct configured client ID and private `AGENT1_PAPER_CONFIG` |
 
 
 ## Testing and failure handling
 
-The main offline tests are in `docs/tests` and `agents/agent_0/tests`:
+The main offline tests are in `docs/tests`, `agents/agent_0/tests`, and
+`agents/agent_1/tests`:
 
 - `test_strategy_equation_examples`: calculation and sign conventions
 - `test_schema_contracts`: CSV headers, types, keys, ordering, and validation
 - `test_ibkr_paper_recorder`: paper safety, privacy, broker data, and storage
 - `test_naive_backtest`: replay timing, accounting, reversals, and reports
 - `test_characterization`: Agent 0 planning, reconciliation, margin, and routing
+- Agent 1 tests: target/config validation, contract binding, reconciliation,
+  DV01 and margin limits, duplicate-poll protection, partial-fill recovery,
+  paper audit, restart state, scoped cancellation, and CLI exposure
 
 ## Glossary
 
