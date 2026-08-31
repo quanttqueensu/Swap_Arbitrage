@@ -110,14 +110,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     parser.add_argument("--run-id", default=None)
     parser.add_argument(
-        "--legacy-target",
-        action="store_true",
-        help=(
-            "Use the validated pre-generated --target CSV instead of "
-            "auto-refreshed live signals."
-        ),
-    )
-    parser.add_argument(
         "--stop-file",
         type=Path,
         default=DEFAULT_STOP_PATH,
@@ -188,14 +180,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     delayed_execution = args.command in {"delayed-run", "delayed-once"}
-    if args.command == "delayed-status" and args.legacy_target:
-        parser.error("delayed-status requires the automatic live target path.")
-    if delayed_execution and not args.legacy_target:
-        parser.error("delayed execution requires --legacy-target.")
     config = load_config()
     evaluator = _load_evaluator()
     now = datetime.now(timezone.utc)
-    use_live_target = not args.legacy_target
+    use_live_target = not delayed_execution
     contract_risk_path = args.contract_risk or (
         DEFAULT_CONTRACT_RISK_PATH if use_live_target else _default_contract_risk_path(now)
     )

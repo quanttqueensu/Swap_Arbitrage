@@ -67,8 +67,8 @@ python -m agents.agent_1.run status
 python -m agents.agent_1.run delayed-status
 python -m agents.agent_1.run once
 python -m agents.agent_1.run run
-python -m agents.agent_1.run delayed-once --legacy-target
-python -m agents.agent_1.run delayed-run --legacy-target
+python -m agents.agent_1.run delayed-once
+python -m agents.agent_1.run delayed-run
 python -m agents.agent_1.run stop-and-flatten
 ```
 
@@ -77,19 +77,18 @@ reference/risk data from the public Eris daily files, refresh the 2YY/5YY
 historical baseline from IBKR continuous futures, and generate the live target
 before Agent 1 evaluates any order. Generated files are cached under
 `data/raw_data/cache/` and `data/live_signal/`; no market-data CSV requires
-manual maintenance. Use `--legacy-target` only to deliberately run the
-pre-generated `--target` CSV path.
+manual maintenance.
 
 `delayed-status` is a read-only diagnostic for accounts without real-time
 market-data subscriptions. It requests IBKR delayed data before collecting
-quotes, never creates an execution engine, and cannot be combined with
-`--legacy-target`. It does not make `once` or `run` eligible to trade on
-delayed quotes.
+quotes, never creates an execution engine, and does not make `once` or `run`
+eligible to trade on delayed quotes.
 
 `delayed-once` and `delayed-run` are the paper-only delayed execution path.
-They request IBKR delayed market data and require `--legacy-target`, so they
-never generate the automatic 2YY/5YY-dependent live target. The legacy target
-and its contract-risk file still must pass the normal freshness and risk checks.
+They request IBKR delayed market data and inherently use the pre-generated
+`--target` CSV, so they never generate the automatic 2YY/5YY-dependent live
+target. The target and its contract-risk file still must pass the normal
+freshness and risk checks.
 
 Agent 1 fails closed when its target, contract risk, quotes, account state, or
 paper configuration is invalid or stale. A persistent operator stop state lives

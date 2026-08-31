@@ -97,25 +97,24 @@ and risk output have been reviewed, the transmitting paper commands are:
 ```powershell
 python -m agents.agent_1.run once
 python -m agents.agent_1.run run
-python -m agents.agent_1.run delayed-once --legacy-target
-python -m agents.agent_1.run delayed-run --legacy-target
+python -m agents.agent_1.run delayed-once
+python -m agents.agent_1.run delayed-run
 python -m agents.agent_1.run stop-and-flatten
 ```
 
 For market-data diagnostics only, `python -m agents.agent_1.run delayed-status`
 requests IBKR delayed market data before the same read-only status flow. It
-does not create an execution engine, cannot use `--legacy-target`, and does
-not allow `once` or `run` to submit orders from delayed quotes.
+does not create an execution engine and does not allow `once` or `run` to
+submit orders from delayed quotes.
 
 `delayed-once` and `delayed-run` are the explicit paper-only delayed execution
-commands. Both request IBKR delayed market data and require `--legacy-target`;
-therefore they bypass automatic 2YY/5YY-dependent target generation while
-retaining all normal target freshness, contract-risk, risk, stop, and order
-controls.
+commands. Both request IBKR delayed market data and inherently use the
+pre-generated `--target` CSV; therefore they bypass automatic
+2YY/5YY-dependent target generation while retaining all normal target
+freshness, contract-risk, risk, stop, and order controls.
 
 The executable default automatically refreshes ERIS reference/risk data and
-IBKR continuous-futures history before generating each live target. Use
-`--legacy-target` only to select the validated pre-generated daily target CSV.
+IBKR continuous-futures history before generating each live target.
 
 The default persistent operator stop file is `data/paper/agent_1/STOP`.
 `stop-and-flatten` creates it before attempting an IBKR connection, and normal

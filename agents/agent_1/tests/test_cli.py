@@ -23,11 +23,11 @@ class CliTests(unittest.TestCase):
             args = parser.parse_args(arguments)
             self.assertEqual(args.command, command)
 
-    def test_auto_live_target_is_default_and_legacy_csv_is_explicit(self):
+    def test_delayed_commands_do_not_accept_a_target_mode_flag(self):
         parser = build_parser()
-        default = parser.parse_args(["run"])
-        self.assertFalse(default.legacy_target)
-        self.assertTrue(parser.parse_args(["run", "--legacy-target"]).legacy_target)
+        for command in ("delayed-once", "delayed-run"):
+            with self.subTest(command=command), self.assertRaises(SystemExit):
+                parser.parse_args([command, "--legacy-target"])
 
     def test_requires_operator_command(self):
         parser = build_parser()
@@ -64,24 +64,6 @@ class LiveRunSelectionTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(build.call_args.kwargs["held_contracts"], {})
-        loop.assert_called_once()
-
-    def test_legacy_target_skips_auto_live_provider(self):
-        broker = SimpleNamespace(sleep=lambda seconds: None)
-        config = SimpleNamespace()
-        with (
-            patch("agents.agent_1.run.load_config", return_value=config),
-            patch("agents.agent_1.run._load_evaluator", return_value=object()),
-            patch("agents.agent_1.run.connect_paper", return_value=broker),
-            patch("agents.agent_1.run.disconnect"),
-            patch("agents.agent_1.run.build_live_target_provider") as build,
-            patch("agents.agent_1.run._create_store", return_value=object()),
-            patch("agents.agent_1.run.polling_loop") as loop,
-        ):
-            result = main(["run", "--legacy-target", "--run-id", "legacy-test"])
-
-        self.assertEqual(result, 0)
-        build.assert_not_called()
         loop.assert_called_once()
 
     def test_status_reports_missing_contract_risk_without_a_traceback(self):
@@ -165,15 +147,6 @@ class LiveRunSelectionTests(unittest.TestCase):
         delayed.assert_called_once_with(broker)
         engine.assert_not_called()
 
-    def test_delayed_status_rejects_legacy_target(self):
-        with self.assertRaises(SystemExit):
-            main(["delayed-status", "--legacy-target"])
-
-    def test_delayed_execution_requires_legacy_target(self):
-        for command in ("delayed-once", "delayed-run"):
-            with self.subTest(command=command), self.assertRaises(SystemExit):
-                main([command])
-
     def test_delayed_run_uses_delayed_data_and_legacy_target(self):
         from datetime import datetime, timezone
 
@@ -198,7 +171,7 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run._render_status", return_value="status"),
             patch("agents.agent_1.run.polling_loop", side_effect=run_one_cycle) as loop,
         ):
-            result = main(["delayed-run", "--legacy-target", "--run-id", "delayed-test"])
+            result = main(["delayed-run", "--run-id", "delayed-test"])
 
         self.assertEqual(result, 0)
         delayed.assert_called_once_with(broker)
@@ -222,7 +195,7 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run._record_audit_or_cancel"),
             patch("agents.agent_1.run._render_status", return_value="status"),
         ):
-            result = main(["delayed-once", "--legacy-target", "--run-id", "delayed-once-test"])
+            result = main(["delayed-once", "--run-id", "delayed-once-test"])
 
         self.assertEqual(result, 0)
         delayed.assert_called_once_with(broker)
