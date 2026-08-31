@@ -8,10 +8,9 @@ from typing import Any, Callable, Literal
 import math
 
 from strategy.eris_pricing import PriceQuote
-from strategy.live_signal import TreasuryYieldQuote
 
 
-ContractKind = Literal["eris", "treasury_yield"]
+ContractKind = Literal["eris"]
 
 
 class MarketDataError(RuntimeError):
@@ -119,7 +118,7 @@ class IbkrLiveMarketSource:
         requests: list[ContractRequest],
         *,
         now: datetime,
-    ) -> dict[str, PriceQuote | TreasuryYieldQuote]:
+    ) -> dict[str, PriceQuote]:
         if now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
         if len({request.symbol for request in requests}) != len(requests):
@@ -138,7 +137,7 @@ class IbkrLiveMarketSource:
                 f"expected {len(resolved)} quote snapshots, got {len(tickers)}",
             )
 
-        output: dict[str, PriceQuote | TreasuryYieldQuote] = {}
+        output: dict[str, PriceQuote] = {}
         for (request, detail, contract), ticker in zip(resolved, tickers):
             output[request.symbol] = self._normalize_quote(
                 request, detail, contract, ticker, now_utc
@@ -178,37 +177,25 @@ class IbkrLiveMarketSource:
 
         candidates: list[tuple[object, Any]] = []
         expiry_threshold = as_of + timedelta(days=self.min_days_to_expiry)
-        if request.kind == "eris":
-            for detail in details:
-                contract_month = _parse_contract_date(
-                    getattr(detail, "contractMonth", "")
-                    or getattr(detail.contract, "contractMonth", "")
+        for detail in details:
+            contract_month = _parse_contract_date(
+                getattr(detail, "contractMonth", "")
+                or getattr(detail.contract, "contractMonth", "")
+            )
+            expiry = _parse_contract_date(
+                getattr(detail.contract, "lastTradeDateOrContractMonth", ""),
+                month_end=True,
+            )
+            if (
+                contract_month is not None
+                and contract_month <= as_of
+                and expiry is not None
+                and expiry > expiry_threshold
+            ):
+                candidates.append(
+                    ((-contract_month.toordinal(), expiry.toordinal()), detail)
                 )
-                expiry = _parse_contract_date(
-                    getattr(
-                        detail.contract, "lastTradeDateOrContractMonth", ""
-                    ),
-                    month_end=True,
-                )
-                if (
-                    contract_month is not None
-                    and contract_month <= as_of
-                    and expiry is not None
-                    and expiry > expiry_threshold
-                ):
-                    candidates.append(
-                        ((-contract_month.toordinal(), expiry.toordinal()), detail)
-                    )
-            candidates.sort(key=lambda item: item[0])
-        else:
-            for detail in details:
-                expiry = _parse_contract_date(
-                    getattr(detail.contract, "lastTradeDateOrContractMonth", ""),
-                    month_end=True,
-                )
-                if expiry is not None and expiry > expiry_threshold:
-                    candidates.append((expiry, detail))
-            candidates.sort(key=lambda item: item[0])
+        candidates.sort(key=lambda item: item[0])
 
         if not candidates:
             raise MarketDataError(
@@ -243,7 +230,7 @@ class IbkrLiveMarketSource:
         contract: Any,
         ticker: Any,
         now_utc: datetime,
-    ) -> PriceQuote | TreasuryYieldQuote:
+    ) -> PriceQuote:
         observed_at = _quote_time(ticker)
         age = (now_utc - observed_at).total_seconds()
         if age < 0:
@@ -274,17 +261,6 @@ class IbkrLiveMarketSource:
             raise MarketDataError(
                 "contract_qualification_failure",
                 f"missing contract id for {request.symbol}",
-            )
-
-        if request.kind == "treasury_yield":
-            mid = (bid + ask) / Decimal("2")
-            return TreasuryYieldQuote(
-                contract_id=contract_id,
-                symbol=request.symbol,
-                observed_at=observed_at,
-                bid_percent=bid,
-                ask_percent=ask,
-                mid_percent=mid,
             )
 
         min_tick = _as_decimal(

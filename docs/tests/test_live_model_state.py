@@ -8,10 +8,12 @@ import unittest
 import pandas as pd
 
 from data_pipeline.live_data_pipeline.model_state import (
+    load_daily_observation,
     load_model_state,
     load_signal_state,
     save_signal_state,
 )
+from strategy.live_signal import LIVE_SIGNAL_STRATEGY_VERSION
 
 
 class LiveModelStateTests(unittest.TestCase):
@@ -25,7 +27,7 @@ class LiveModelStateTests(unittest.TestCase):
                     {
                         "timestamp_utc": (start + timedelta(days=i)).isoformat(),
                         "maturity": "2Y",
-                        "strategy_version": "live_yield_futures_v1",
+                        "strategy_version": LIVE_SIGNAL_STRATEGY_VERSION,
                         "spread_bps": str(i),
                     }
                 )
@@ -33,7 +35,7 @@ class LiveModelStateTests(unittest.TestCase):
                 {
                     "timestamp_utc": (start + timedelta(days=100)).isoformat(),
                     "maturity": "2Y",
-                    "strategy_version": "live_yield_futures_v1",
+                    "strategy_version": LIVE_SIGNAL_STRATEGY_VERSION,
                     "spread_bps": "10000",
                 }
             )
@@ -44,7 +46,7 @@ class LiveModelStateTests(unittest.TestCase):
 
             expected = pd.Series(range(70), dtype="float64")
             self.assertEqual(model.observation_count, 70)
-            self.assertEqual(model.version, "live_yield_futures_v1")
+            self.assertEqual(model.version, LIVE_SIGNAL_STRATEGY_VERSION)
             self.assertEqual(model.mean_bps, Decimal(str(expected.mean())))
             self.assertEqual(model.std_bps, Decimal(str(expected.std())))
 
@@ -56,7 +58,7 @@ class LiveModelStateTests(unittest.TestCase):
                 {
                     "timestamp_utc": (start + timedelta(hours=i)).isoformat(),
                     "maturity": "5Y",
-                    "strategy_version": "live_yield_futures_v1",
+                    "strategy_version": LIVE_SIGNAL_STRATEGY_VERSION,
                     "spread_bps": str(i),
                 }
                 for i in range(300)
@@ -83,6 +85,26 @@ class LiveModelStateTests(unittest.TestCase):
             pd.DataFrame(rows).to_csv(path, index=False)
             with self.assertRaisesRegex(RuntimeError, "no eligible baseline"):
                 load_model_state(path, "2Y", start + timedelta(days=100))
+
+    def test_daily_observation_preserves_same_row_components(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "baseline.csv"
+            pd.DataFrame(
+                [{
+                    "timestamp_utc": "2026-08-28T21:00:00+00:00",
+                    "maturity": "2Y",
+                    "strategy_version": LIVE_SIGNAL_STRATEGY_VERSION,
+                    "eris_rate_bps": "378.5",
+                    "fred_series": "DGS2",
+                    "treasury_rate_bps": "362.0",
+                    "spread_bps": "16.5",
+                }]
+            ).to_csv(path, index=False)
+            row = load_daily_observation(
+                path, "2Y", datetime(2026, 8, 29, tzinfo=timezone.utc)
+            )
+            self.assertEqual(row.spread_bps, Decimal("16.5"))
+            self.assertEqual(row.fred_series, "DGS2")
 
     def test_signal_state_round_trip_is_atomic_and_exact(self) -> None:
         with TemporaryDirectory() as tmp:

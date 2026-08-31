@@ -109,12 +109,13 @@ submit orders from delayed quotes.
 
 `delayed-once` and `delayed-run` are the explicit paper-only delayed execution
 commands. Both request IBKR delayed market data and inherently use the
-pre-generated `--target` CSV; therefore they bypass automatic
-2YY/5YY-dependent target generation while retaining all normal target
+pre-generated `--target` CSV; therefore they bypass automatic FRED-backed
+daily target generation while retaining all normal target
 freshness, contract-risk, risk, stop, and order controls.
 
 The executable default automatically refreshes ERIS reference/risk data and
-IBKR continuous-futures history before generating each live target.
+FRED `DGS2`/`DGS5` history before generating each daily target. Each signal row
+uses an Eris settlement and Treasury CMT observation with the same date.
 
 The default persistent operator stop file is `data/paper/agent_1/STOP`.
 `stop-and-flatten` creates it before attempting an IBKR connection, and normal
@@ -162,7 +163,7 @@ controls apply in both backtests and paper trading.
 
 | Provider | Data | Project function |
 | --- | --- | --- |
-| U.S. Treasury | Daily constant-maturity yield curves | `get_treasury_data()` |
+| FRED | Daily `DGS2`/`DGS5` constant-maturity Treasury yields | `get_treasury_data()` |
 | New York Fed SOFR API | SOFR history | `get_nyfed_rate("SOFR", ...)` |
 | New York Fed EFFR API | EFFR history | `get_nyfed_rate("EFFR", ...)` |
 | Eris Markets public archive | Swap-futures settlements, tickers, and published DV01 | `get_eris_public_swap_data()` |

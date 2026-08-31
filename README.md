@@ -73,8 +73,8 @@ python -m agents.agent_1.run stop-and-flatten
 ```
 
 By default, `status`, `once`, and `run` refresh the exact ERIS contract
-reference/risk data from the public Eris daily files, refresh the 2YY/5YY
-historical baseline from IBKR continuous futures, and generate the live target
+reference/risk data from the public Eris daily files, rebuild the same-date
+2Y/5Y spread history from FRED `DGS2`/`DGS5`, and generate a daily target
 before Agent 1 evaluates any order. Generated files are cached under
 `data/raw_data/cache/` and `data/live_signal/`; no market-data CSV requires
 manual maintenance.
@@ -86,8 +86,8 @@ eligible to trade on delayed quotes.
 
 `delayed-once` and `delayed-run` are the paper-only delayed execution path.
 They request IBKR delayed market data and inherently use the pre-generated
-`--target` CSV, so they never generate the automatic 2YY/5YY-dependent live
-target. The target and its contract-risk file still must pass the normal
+`--target` CSV, so they never generate the automatic FRED-backed daily target.
+The target and its contract-risk file still must pass the normal
 freshness and risk checks.
 
 Agent 1 fails closed when its target, contract risk, quotes, account state, or

@@ -11,6 +11,7 @@ from config import (
     ROLLING_WINDOW,
     SIGNAL_DATA_FILE,
     SWAP_COLUMNS,
+    SWAP_EQUIVALENT_PAR_RATE_COLUMNS,
     TREASURY_FUTURES_PRICE_COLUMNS,
     Z_ENTRY,
     Z_EXIT,
@@ -22,7 +23,7 @@ from data_pipeline.historical_data.historical_data_builder import (
     load_csv,
 )
 
-MIN_PERIODS = max(20, int(ROLLING_WINDOW * 0.25))
+MIN_PERIODS = ROLLING_WINDOW
 
 
 def clean_maturity(maturity: str) -> str:
@@ -196,21 +197,21 @@ def add_best_maturity_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_signal_columns(raw: pd.DataFrame) -> pd.DataFrame:
     output = clean_price_frame(raw)
-    traded_price_columns = [
+    signal_columns = [
         column
         for maturity in MATURITIES
         for column in (
             SWAP_COLUMNS.get(maturity),
-            TREASURY_FUTURES_PRICE_COLUMNS.get(maturity),
+            SWAP_EQUIVALENT_PAR_RATE_COLUMNS.get(maturity),
+            {"2Y": "dgs2", "5Y": "dgs5"}.get(maturity),
         )
         if column
     ]
-    missing = [column for column in traded_price_columns if column not in output]
+    missing = [column for column in signal_columns if column not in output]
 
     if missing:
-        raise RuntimeError(f"Missing traded price columns: {missing}")
+        raise RuntimeError(f"Missing daily signal columns: {missing}")
 
-    output = output.dropna(subset=traded_price_columns).reset_index(drop=True)
     output = add_funding_spread_proxy(output)
     loaded = []
 

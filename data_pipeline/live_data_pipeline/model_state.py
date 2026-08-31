@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from strategy.live_signal import HistoricalModelState, LIVE_SIGNAL_STRATEGY_VERSION
+from strategy.live_signal import (
+    DailySpreadObservation,
+    HistoricalModelState,
+    LIVE_SIGNAL_STRATEGY_VERSION,
+)
 
 
 ROLLING_WINDOW = 252
@@ -18,6 +22,11 @@ REQUIRED_BASELINE_COLUMNS = {
     "maturity",
     "strategy_version",
     "spread_bps",
+}
+REQUIRED_OBSERVATION_COLUMNS = REQUIRED_BASELINE_COLUMNS | {
+    "eris_rate_bps",
+    "fred_series",
+    "treasury_rate_bps",
 }
 
 
@@ -67,6 +76,46 @@ def load_model_state(path: Path, maturity: str, as_of: datetime) -> HistoricalMo
         std_bps=Decimal(str(std)),
         observation_count=int(len(values)),
     )
+
+
+def load_daily_observation(
+    path: Path,
+    maturity: str,
+    as_of: datetime,
+) -> DailySpreadObservation:
+    as_of_utc = _require_aware(as_of)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    frame = pd.read_csv(path)
+    missing = REQUIRED_OBSERVATION_COLUMNS.difference(frame.columns)
+    if missing:
+        raise RuntimeError(f"baseline missing columns: {sorted(missing)}")
+
+    timestamps = pd.to_datetime(frame["timestamp_utc"], errors="coerce", utc=True)
+    valid = (
+        timestamps.notna()
+        & frame["maturity"].astype(str).eq(maturity)
+        & frame["strategy_version"].astype(str).eq(LIVE_SIGNAL_STRATEGY_VERSION)
+        & (timestamps <= pd.Timestamp(as_of_utc))
+    )
+    eligible = frame.loc[valid].copy()
+    eligible["timestamp_utc"] = timestamps[valid]
+    eligible = eligible.sort_values("timestamp_utc")
+    if eligible.empty:
+        raise RuntimeError(f"no eligible daily observation for {maturity}")
+
+    row = eligible.iloc[-1]
+    try:
+        return DailySpreadObservation(
+            maturity=maturity,
+            observed_at=row["timestamp_utc"].to_pydatetime(),
+            eris_rate_bps=Decimal(str(row["eris_rate_bps"])),
+            fred_series=str(row["fred_series"]),
+            treasury_rate_bps=Decimal(str(row["treasury_rate_bps"])),
+            spread_bps=Decimal(str(row["spread_bps"])),
+        )
+    except Exception as exc:
+        raise RuntimeError(f"invalid daily observation for {maturity}") from exc
 
 
 def load_signal_state(path: Path) -> dict[str, int]:

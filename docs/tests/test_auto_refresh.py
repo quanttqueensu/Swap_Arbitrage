@@ -12,8 +12,10 @@ from data_pipeline.live_data_pipeline.auto_refresh import (
     Agent1DataRefresher,
     build_baseline_frame,
     build_reference_frame,
+    load_fred_yield_history,
     load_latest_eris_reference_frame,
 )
+from strategy.live_signal import LIVE_SIGNAL_STRATEGY_VERSION
 
 
 class AutoRefreshTests(unittest.TestCase):
@@ -116,9 +118,26 @@ class AutoRefreshTests(unittest.TestCase):
         self.assertEqual((output["maturity"] == "2Y").sum(), 252)
         first_2y = output[output["maturity"].eq("2Y")].iloc[0]
         self.assertEqual(first_2y["spread_bps"], 68)
+        self.assertEqual(first_2y["fred_series"], "DGS2")
+        self.assertEqual(first_2y["treasury_rate_bps"], 400)
         self.assertTrue(
-            output["strategy_version"].eq("live_yield_futures_v1").all()
+            output["strategy_version"].eq(LIVE_SIGNAL_STRATEGY_VERSION).all()
         )
+
+    def test_fred_loader_parses_daily_cmt_and_drops_missing_values(self) -> None:
+        source = pd.DataFrame(
+            {
+                "observation_date": pd.date_range("2025-01-01", periods=260),
+                "DGS2": ["."] * 8 + ["4.25"] * 252,
+            }
+        )
+        output = load_fred_yield_history(
+            "DGS2",
+            datetime(2026, 8, 30, 14, tzinfo=timezone.utc),
+            downloader=lambda url: source,
+        )
+        self.assertEqual(len(output), 252)
+        self.assertEqual(output.iloc[-1]["yield_percent"], 4.25)
 
     def test_refresher_generates_every_runtime_data_file(self) -> None:
         start = datetime(2025, 1, 1)
@@ -169,7 +188,7 @@ class AutoRefreshTests(unittest.TestCase):
                 yield_history_loader=lambda symbol, now: pd.DataFrame(
                     {
                         "date": dates,
-                        "yield_percent": [4 if symbol == "2YY" else 5] * len(dates),
+                        "yield_percent": [4 if symbol == "DGS2" else 5] * len(dates),
                     }
                 ),
             )

@@ -8,24 +8,27 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import pandas as pd
 
 from config import (
     ERIS_PUBLIC_BASE_URL,
+    FRED_CSV_BASE_URL,
     POSITION_SIZE_BY_MATURITY,
     TREASURY_FUTURES_HEDGE_RATIOS,
 )
 from data_pipeline.historical_data.historical_data_builder import (
     get_eris_public_swap_data,
+    parse_fred_series,
 )
 from strategy.live_signal import LIVE_SIGNAL_STRATEGY_VERSION
 from strategy.live_target import MaturityRiskInputs
 from risk_pipeline import vol_scale_from_series
 
 
-MATURITY_YIELD_SYMBOLS = {"2Y": "2YY", "5Y": "5YY"}
+MATURITY_FRED_SERIES = {"2Y": "DGS2", "5Y": "DGS5"}
 MIN_BASELINE_ROWS = 252
 
 
@@ -83,11 +86,38 @@ def _download_csv(url: str, *, timeout_seconds: int = 30) -> pd.DataFrame:
         with urlopen(request, timeout=timeout_seconds) as response:
             text = response.read().decode("utf-8", errors="replace")
     except (HTTPError, URLError, TimeoutError) as exc:
-        raise AutoRefreshError(f"Could not download ERIS data: {url}") from exc
+        raise AutoRefreshError(f"Could not download CSV data: {url}") from exc
     try:
         return pd.read_csv(StringIO(text))
     except Exception as exc:
-        raise AutoRefreshError(f"Could not parse ERIS data: {url}") from exc
+        raise AutoRefreshError(f"Could not parse CSV data: {url}") from exc
+
+
+def load_fred_yield_history(
+    series_id: str,
+    as_of: datetime,
+    *,
+    downloader: Callable[[str], pd.DataFrame] = _download_csv,
+) -> pd.DataFrame:
+    if series_id not in MATURITY_FRED_SERIES.values():
+        raise AutoRefreshError(f"Unsupported FRED series: {series_id}")
+    if as_of.utcoffset() is None:
+        raise ValueError("as_of must be timezone-aware")
+
+    end = _previous_business_day(as_of.astimezone(timezone.utc).date())
+    start = end - timedelta(days=730)
+    url = f"{FRED_CSV_BASE_URL}?{urlencode({'id': series_id, 'cosd': start, 'coed': end})}"
+    source = downloader(url)
+    try:
+        frame = parse_fred_series(source, series_id, "yield_percent")
+    except RuntimeError as exc:
+        raise AutoRefreshError(str(exc)) from exc
+    frame = frame.drop_duplicates("date").sort_values("date")
+    if len(frame) < MIN_BASELINE_ROWS:
+        raise AutoRefreshError(
+            f"FRED returned only {len(frame)} usable observations for {series_id}"
+        )
+    return frame
 
 
 def load_latest_eris_reference_frame(
@@ -238,6 +268,9 @@ def build_baseline_frame(
                     "timestamp_utc": timestamp.map(lambda value: value.isoformat()),
                     "maturity": maturity,
                     "strategy_version": LIVE_SIGNAL_STRATEGY_VERSION,
+                    "eris_rate_bps": merged["eris_rate_bps"],
+                    "fred_series": MATURITY_FRED_SERIES[maturity],
+                    "treasury_rate_bps": merged["yield_percent"] * 100,
                     "spread_bps": merged["eris_rate_bps"] - merged["yield_percent"] * 100,
                 }
             )
@@ -304,14 +337,14 @@ class Agent1DataRefresher:
         )
         yields = {
             maturity: self.yield_history_loader(symbol, now)
-            for maturity, symbol in MATURITY_YIELD_SYMBOLS.items()
+            for maturity, symbol in MATURITY_FRED_SERIES.items()
         }
         baseline = build_baseline_frame(eris_history, yields)
         _atomic_csv(baseline, self.baseline_path)
         risk_inputs = self._risk_inputs(reference, baseline)
         counts = {
             maturity: int((baseline["maturity"] == maturity).sum())
-            for maturity in MATURITY_YIELD_SYMBOLS
+            for maturity in MATURITY_FRED_SERIES
         }
         result = RefreshResult(risk_inputs, reference_date, counts, bindings)
         self._last_date = current_date
@@ -319,49 +352,7 @@ class Agent1DataRefresher:
         return result
 
     def _load_yield_history(self, symbol: str, now: datetime) -> pd.DataFrame:
-        try:
-            from ib_insync import ContFuture
-        except ImportError as exc:
-            raise AutoRefreshError("ib_insync is required for yield history") from exc
-
-        last_error: Exception | None = None
-        for exchange in ("CBOT", "ECBOT"):
-            contract = ContFuture(symbol=symbol, exchange=exchange, currency="USD")
-            try:
-                qualified = list(self.ib.qualifyContracts(contract))
-                if len(qualified) == 1:
-                    contract = qualified[0]
-                bars = list(
-                    self.ib.reqHistoricalData(
-                        contract,
-                        # IBKR rejects an explicit end timestamp for continuous futures.
-                        endDateTime="",
-                        durationStr="2 Y",
-                        barSizeSetting="1 day",
-                        whatToShow="TRADES",
-                        useRTH=False,
-                        formatDate=2,
-                        keepUpToDate=False,
-                    )
-                )
-                frame = pd.DataFrame(
-                    {
-                        "date": [getattr(bar, "date", None) for bar in bars],
-                        "yield_percent": [getattr(bar, "close", None) for bar in bars],
-                    }
-                )
-                frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.tz_localize(None)
-                frame["yield_percent"] = pd.to_numeric(
-                    frame["yield_percent"], errors="coerce"
-                )
-                frame = frame.dropna().drop_duplicates("date").sort_values("date")
-                if len(frame) >= MIN_BASELINE_ROWS:
-                    return frame
-            except Exception as exc:
-                last_error = exc
-        raise AutoRefreshError(
-            f"IBKR did not return sufficient continuous history for {symbol}"
-        ) from last_error
+        return load_fred_yield_history(symbol, now)
 
     def _risk_inputs(
         self,

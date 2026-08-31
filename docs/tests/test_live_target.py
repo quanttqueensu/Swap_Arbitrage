@@ -1,14 +1,14 @@
 from decimal import Decimal
 import unittest
 
-from strategy.live_signal import LiveSignalResult
+from strategy.live_signal import LIVE_SIGNAL_STRATEGY_VERSION, LiveSignalResult
 from strategy.live_target import MaturityRiskInputs, build_live_target
 
 
 def signal(maturity: str, state: int, z: str | None, blocked: bool = False):
     return LiveSignalResult(
         maturity=maturity,
-        strategy_version="live_yield_futures_v1",
+        strategy_version=LIVE_SIGNAL_STRATEGY_VERSION,
         snapshot_id=f"snap-{maturity}",
         mid_spread_bps=Decimal("10") if not blocked else None,
         spread_bid_side_bps=Decimal("9") if not blocked else None,

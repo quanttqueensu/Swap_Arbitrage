@@ -48,47 +48,15 @@ MATURITIES = ["2Y", "5Y"]
 
 
 # ============================================================
-# Treasury CMT settings
+# FRED Treasury CMT settings
 # ============================================================
 
-TREASURY_XML_BASE_URL = (
-    "https://home.treasury.gov/resource-center/data-chart-center/"
-    "interest-rates/pages/xml"
-)
-
-TREASURY_XML_DATASET = "daily_treasury_yield_curve"
-
-TREASURY_COLUMN_MAP = {
-    "NEW_DATE": "date",
-    "BC_1MONTH": "dgs1mo",
-    "BC_2MONTH": "dgs2mo",
-    "BC_3MONTH": "dgs3mo",
-    "BC_4MONTH": "dgs4mo",
-    "BC_6MONTH": "dgs6mo",
-    "BC_1YEAR": "dgs1",
-    "BC_2YEAR": "dgs2",
-    "BC_3YEAR": "dgs3",
-    "BC_5YEAR": "dgs5",
-    "BC_7YEAR": "dgs7",
-    "BC_10YEAR": "dgs10",
-    "BC_20YEAR": "dgs20",
-    "BC_30YEAR": "dgs30",
-}
+FRED_CSV_BASE_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+FRED_CMT_SERIES = {"DGS2": "dgs2", "DGS5": "dgs5"}
 
 INTEREST_RATE_COLUMNS = [
-    "dgs1mo",
-    "dgs2mo",
-    "dgs3mo",
-    "dgs4mo",
-    "dgs6mo",
-    "dgs1",
     "dgs2",
-    "dgs3",
     "dgs5",
-    "dgs7",
-    "dgs10",
-    "dgs20",
-    "dgs30",
     "sofr",
     "effr",
 ]
@@ -291,7 +259,7 @@ MAX_DV01_SCALE = 1.00
 
 Z_ENTRY = 1.5
 Z_EXIT = 0.5
-ROLLING_WINDOW = 21
+ROLLING_WINDOW = 252
 
 
 # ============================================================

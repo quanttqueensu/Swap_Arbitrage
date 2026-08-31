@@ -12,6 +12,7 @@ from agents.agent_1.targets import (
     LiveSignalTargetProvider,
 )
 from agents.agent_1.targets import TargetValidationError
+from strategy.live_signal import LIVE_SIGNAL_STRATEGY_VERSION
 
 
 NOW = datetime(2026, 8, 30, 14, 0, tzinfo=timezone.utc)
@@ -55,8 +56,9 @@ class TargetProviderTests(unittest.TestCase):
             "5Y": SimpleNamespace(swap_quantity=8, treasury_quantity=-8, blocked=False, reason_codes=()),
         }
         cycle = SimpleNamespace(
+            observation_time_utc=datetime(2026, 8, 28, 21, tzinfo=timezone.utc),
             target=SimpleNamespace(
-                strategy_version="live_yield_futures_v1",
+                strategy_version=LIVE_SIGNAL_STRATEGY_VERSION,
                 maturities=maturity_targets,
                 blocked=False,
                 reason_codes=("within_limits",),
@@ -65,6 +67,7 @@ class TargetProviderTests(unittest.TestCase):
         runner = SimpleNamespace(run_once=Mock(return_value=cycle))
         risk_inputs = {"2Y": object(), "5Y": object()}
         refresher = SimpleNamespace(
+            agent_config=SimpleNamespace(max_target_age_business_days=2),
             refresh=lambda now: SimpleNamespace(risk_inputs=risk_inputs)
         )
         provider = LiveSignalTargetProvider(runner, refresher)
@@ -80,6 +83,7 @@ class TargetProviderTests(unittest.TestCase):
         self.assertEqual(target.target_5y.swap_qty, 8)
         self.assertEqual(target.target_5y.treasury_qty, -8)
         self.assertEqual(target.age_business_days, 0)
+        self.assertEqual(target.as_of.isoformat(), "2026-08-28")
 
     def test_live_provider_rejects_blocked_target(self) -> None:
         maturity_targets = {
@@ -92,8 +96,9 @@ class TargetProviderTests(unittest.TestCase):
             for maturity in ("2Y", "5Y")
         }
         cycle = SimpleNamespace(
+            observation_time_utc=datetime(2026, 8, 28, 21, tzinfo=timezone.utc),
             target=SimpleNamespace(
-                strategy_version="live_yield_futures_v1",
+                strategy_version=LIVE_SIGNAL_STRATEGY_VERSION,
                 maturities=maturity_targets,
                 blocked=True,
                 reason_codes=("2Y:blocked", "5Y:blocked"),
@@ -101,7 +106,10 @@ class TargetProviderTests(unittest.TestCase):
         )
         provider = LiveSignalTargetProvider(
             SimpleNamespace(run_once=lambda now, **kwargs: cycle),
-            SimpleNamespace(refresh=lambda now: SimpleNamespace(risk_inputs={})),
+            SimpleNamespace(
+                agent_config=SimpleNamespace(max_target_age_business_days=2),
+                refresh=lambda now: SimpleNamespace(risk_inputs={}),
+            ),
         )
         with self.assertRaisesRegex(TargetValidationError, "Live signal target is blocked"):
             provider.load_target(NOW)

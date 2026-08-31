@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from data_pipeline.live_data_pipeline.auto_refresh import Agent1DataRefresher
-from data_pipeline.live_data_pipeline.eris_reference_data import CsvErisReferenceProvider
-from data_pipeline.live_data_pipeline.live_market_source import IbkrLiveMarketSource
 from data_pipeline.live_data_pipeline.live_signal_runner import LiveSignalRunner
 from strategy.live_target import MaturityRiskInputs
 
@@ -53,20 +51,10 @@ def build_live_target_provider(
     held_contracts: dict[str, int] | None = None,
 ) -> LiveSignalTargetProvider:
     runner = LiveSignalRunner(
-        market_source=IbkrLiveMarketSource(
-            ib,
-            quote_max_age_seconds=int(getattr(agent_config, "max_quote_age_seconds")),
-            min_days_to_expiry=getattr(agent_config, "min_days_to_expiry"),
-        ),
-        reference_provider=CsvErisReferenceProvider(
-            DEFAULT_REFERENCE_PATH,
-            max_age_seconds=4 * 24 * 60 * 60,
-        ),
         model_state_path=DEFAULT_BASELINE_PATH,
         risk_inputs=_bootstrap_risk_inputs(agent_config),
         audit_path=audit_path,
         state_path=state_path,
-        quote_max_age_seconds=int(getattr(agent_config, "max_quote_age_seconds")),
         max_gross_dv01=getattr(agent_config, "max_gross_dv01"),
         max_net_dv01=getattr(agent_config, "max_net_dv01"),
     )

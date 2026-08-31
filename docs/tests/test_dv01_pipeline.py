@@ -125,7 +125,7 @@ class DerivedCsvTests(unittest.TestCase):
 
 
 class SignalCalendarTests(unittest.TestCase):
-    def test_signal_calendar_requires_marks_for_all_traded_legs(self) -> None:
+    def test_daily_signal_does_not_require_treasury_futures_marks(self) -> None:
         source = pd.DataFrame(
             {
                 "date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
@@ -133,6 +133,10 @@ class SignalCalendarTests(unittest.TestCase):
                 "eris_swap_5y_price": [101.0, 101.1, 101.2],
                 "treasury_futures_2y_price": [102.0, 102.1, 102.2],
                 "treasury_futures_5y_price": [108.0, float("nan"), 108.2],
+                "eris_swap_2y_equivalent_par_rate_bps": [410.0, 411.0, 412.0],
+                "eris_swap_5y_equivalent_par_rate_bps": [420.0, 421.0, 422.0],
+                "dgs2": [4.0, 4.0, 4.0],
+                "dgs5": [4.1, 4.1, 4.1],
             }
         )
 
@@ -140,7 +144,11 @@ class SignalCalendarTests(unittest.TestCase):
 
         self.assertEqual(
             output["date"].tolist(),
-            [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-04")],
+            [
+                pd.Timestamp("2024-01-02"),
+                pd.Timestamp("2024-01-03"),
+                pd.Timestamp("2024-01-04"),
+            ],
         )
 
     # Mutation caught: routing active positions through Treasury-futures price

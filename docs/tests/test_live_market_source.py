@@ -57,13 +57,6 @@ class FakeIB:
             "YIW": [
                 FakeDetail(FakeContract("YIW", contractMonth="202608", lastTradeDateOrContractMonth="20310831", conId=202)),
             ],
-            "2YY": [
-                FakeDetail(FakeContract("2YY", lastTradeDateOrContractMonth="20260930", conId=302)),
-                FakeDetail(FakeContract("2YY", lastTradeDateOrContractMonth="20261231", conId=303)),
-            ],
-            "5YY": [
-                FakeDetail(FakeContract("5YY", lastTradeDateOrContractMonth="20260930", conId=402)),
-            ],
         }
 
     def reqContractDetails(self, contract):
@@ -96,7 +89,7 @@ def contract_factory(**kwargs):
 
 
 class LiveMarketSourceTests(unittest.TestCase):
-    def test_resolves_expected_four_signal_symbols_and_never_orders(self) -> None:
+    def test_resolves_expected_eris_symbols_and_never_orders(self) -> None:
         ib = FakeIB()
         source = IbkrLiveMarketSource(
             ib,
@@ -106,14 +99,12 @@ class LiveMarketSourceTests(unittest.TestCase):
         requests = [
             ContractRequest("YIT", "eris"),
             ContractRequest("YIW", "eris"),
-            ContractRequest("2YY", "treasury_yield"),
-            ContractRequest("5YY", "treasury_yield"),
         ]
         quotes = source.snapshot(requests, now=NOW)
 
-        self.assertEqual(set(quotes), {"YIT", "YIW", "2YY", "5YY"})
+        self.assertEqual(set(quotes), {"YIT", "YIW"})
         requested = [value for name, value in ib.calls if name == "reqContractDetails"]
-        self.assertEqual(requested, ["YIT", "YIW", "2YY", "5YY"])
+        self.assertEqual(requested, ["YIT", "YIW"])
         called_names = [name for name, *_ in ib.calls]
         self.assertNotIn("placeOrder", called_names)
         self.assertNotIn("reqGlobalCancel", called_names)
@@ -122,8 +113,6 @@ class LiveMarketSourceTests(unittest.TestCase):
         self.assertEqual(called_names.count("reqTickers"), 1)
 
         self.assertEqual(quotes["YIT"].contract_id, "102")
-        self.assertEqual(quotes["2YY"].contract_id, "302")
-        self.assertEqual(quotes["2YY"].mid_percent, Decimal("4.0"))
 
 
     def test_contract_qualification_is_cached_within_trading_day(self) -> None:
@@ -136,16 +125,14 @@ class LiveMarketSourceTests(unittest.TestCase):
         requests = [
             ContractRequest("YIT", "eris"),
             ContractRequest("YIW", "eris"),
-            ContractRequest("2YY", "treasury_yield"),
-            ContractRequest("5YY", "treasury_yield"),
         ]
 
         source.snapshot(requests, now=NOW)
         source.snapshot(requests, now=NOW + timedelta(seconds=10))
 
         called_names = [name for name, *_ in ib.calls]
-        self.assertEqual(called_names.count("reqContractDetails"), 4)
-        self.assertEqual(called_names.count("qualifyContracts"), 4)
+        self.assertEqual(called_names.count("reqContractDetails"), 2)
+        self.assertEqual(called_names.count("qualifyContracts"), 2)
         self.assertEqual(called_names.count("reqTickers"), 2)
 
     def test_eris_vintage_from_contract_detail_is_eligible(self) -> None:
@@ -213,7 +200,7 @@ class LiveMarketSourceTests(unittest.TestCase):
             quote_max_age_seconds=30,
         )
         with self.assertRaisesRegex(MarketDataError, "crossed"):
-            source.snapshot([ContractRequest("2YY", "treasury_yield")], now=NOW)
+            source.snapshot([ContractRequest("YIT", "eris")], now=NOW)
 
     def test_csv_reference_provider_requires_exact_contract_and_fresh_row(self) -> None:
         with TemporaryDirectory() as tmp:

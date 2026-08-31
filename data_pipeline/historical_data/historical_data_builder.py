@@ -6,7 +6,6 @@ import json
 import math
 import random
 import time
-import xml.etree.ElementTree as ET
 from io import StringIO
 from numbers import Real
 from pathlib import Path
@@ -25,6 +24,8 @@ from config import (
     ERIS_PUBLIC_BASE_URL,
     ERIS_PUBLIC_START_DATE,
     ERIS_SOFR_SWAP_FUTURES,
+    FRED_CMT_SERIES,
+    FRED_CSV_BASE_URL,
     INTEREST_RATE_COLUMNS,
     MATURITIES,
     NYFED_BASE_URL,
@@ -49,7 +50,6 @@ from config import (
     SWAP_RETURN_COLUMNS,
     SWAP_TICKER_COLUMNS,
     TIMEOUT,
-    TREASURY_COLUMN_MAP,
     TREASURY_FUTURES,
     TREASURY_FUTURES_DATA_FILE,
     TREASURY_FUTURES_DV01_METHOD,
@@ -59,9 +59,6 @@ from config import (
     TREASURY_FUTURES_PRICE_COLUMNS,
     TREASURY_FUTURES_RETURN_COLUMNS,
     TREASURY_FUTURES_SOURCE_SYMBOLS,
-    TREASURY_PULL_SLEEP_SECONDS,
-    TREASURY_XML_BASE_URL,
-    TREASURY_XML_DATASET,
     USER_AGENT,
     YAHOO_CHART_BASE_URL,
 )
@@ -145,79 +142,50 @@ def fetch_text(
     raise RuntimeError(f"Failed to fetch URL after {retries} attempts: {url}\nLast error: {last_error}")
 
 
-def local_name(tag: str) -> str:
-    return tag.split("}", 1)[-1] if "}" in tag else tag
-
-
-def parse_treasury_xml(xml_text: str) -> pd.DataFrame:
-    root = ET.fromstring(xml_text)
-    rows = []
-
-    for entry in root.iter():
-        if local_name(entry.tag) != "entry":
-            continue
-
-        properties = next((child for child in entry.iter() if local_name(child.tag) == "properties"), None)
-
-        if properties is None:
-            continue
-
-        rows.append({local_name(item.tag): item.text for item in properties})
-
-    if not rows:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(rows)
-    keep_cols = [col for col in TREASURY_COLUMN_MAP if col in df.columns]
-    df = df[keep_cols].rename(columns=TREASURY_COLUMN_MAP)
-
-    return clean_price_frame(df)
-
-
-def treasury_year_url(year: int) -> str:
-    params = {"data": TREASURY_XML_DATASET, "field_tdr_date_value": year}
-    return f"{TREASURY_XML_BASE_URL}?{urlencode(params)}"
-
-
-def get_treasury_year(year: int) -> pd.DataFrame:
-    print(f"[PULL] Treasury.gov yield curve for {year}...")
-
-    xml_text = fetch_text(
-        url=treasury_year_url(year),
-        cache_file=CACHE_DIR / f"treasury_yield_curve_{year}.xml",
-        accept="application/xml,*/*",
+def parse_fred_series(
+    source: pd.DataFrame,
+    series_id: str,
+    output_col: str,
+) -> pd.DataFrame:
+    date_col = next(
+        (column for column in ("observation_date", "DATE", "date") if column in source),
+        None,
     )
-    df = parse_treasury_xml(xml_text)
+    if date_col is None or series_id not in source:
+        raise RuntimeError(f"FRED response is missing {series_id}")
+    return clean_price_frame(
+        pd.DataFrame({"date": source[date_col], output_col: source[series_id]})
+    ).dropna(subset=[output_col])
 
-    if df.empty:
-        print(f"[WARN] No Treasury rows found for {year}.")
 
-    return df
+def get_fred_cmt_series(
+    series_id: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    output_col = FRED_CMT_SERIES.get(series_id)
+    if output_col is None:
+        raise ValueError(f"Unsupported FRED CMT series: {series_id}")
+    print(f"[PULL] FRED {series_id}...")
+    url = f"{FRED_CSV_BASE_URL}?{urlencode({'id': series_id, 'cosd': start_date, 'coed': end_date})}"
+    text = fetch_text(
+        url=url,
+        cache_file=CACHE_DIR / f"fred_{series_id.lower()}_{start_date}_{end_date}.csv",
+        accept="text/csv,*/*",
+    )
+    return parse_fred_series(pd.read_csv(StringIO(text)), series_id, output_col)
 
 
 def get_treasury_data(start_date: str, end_date: str | None = None) -> pd.DataFrame:
     start_ts = pd.to_datetime(start_date)
     end_ts = pd.to_datetime(end_date) if end_date else pd.Timestamp.today().normalize()
-    frames = []
-
-    for year in range(start_ts.year, end_ts.year + 1):
-        try:
-            df_year = get_treasury_year(year)
-
-            if not df_year.empty:
-                frames.append(df_year)
-
-        except Exception as error:
-            print(f"[ERROR] Treasury pull failed for {year}: {error}")
-
-        time.sleep(TREASURY_PULL_SLEEP_SECONDS)
-
-    if not frames:
-        raise RuntimeError("No Treasury data loaded.")
-
-    df = pd.concat(frames, ignore_index=True)
-    df = clean_price_frame(df)
-    return df[(df["date"] >= start_ts) & (df["date"] <= end_ts)].reset_index(drop=True)
+    start = start_ts.strftime("%Y-%m-%d")
+    end = end_ts.strftime("%Y-%m-%d")
+    frames = [get_fred_cmt_series(series_id, start, end) for series_id in FRED_CMT_SERIES]
+    merged = frames[0]
+    for frame in frames[1:]:
+        merged = merged.merge(frame, on="date", how="outer")
+    return clean_price_frame(merged)
 
 
 def extract_json_records(payload) -> list[dict]:

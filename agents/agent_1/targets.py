@@ -169,18 +169,7 @@ class TargetProvider(Protocol):
 
 
 def _apply_refreshed_contracts(runner: Any, refreshed: Any) -> None:
-    market_source = getattr(runner, "market_source", None)
-    setter = getattr(market_source, "set_preferred_contracts", None)
-    bindings = getattr(refreshed, "bindings", {})
-    if not callable(setter) or not isinstance(bindings, dict):
-        return
-    setter(
-        {
-            binding.symbol: binding.con_id
-            for key, binding in bindings.items()
-            if str(key).endswith(":swap")
-        }
-    )
+    return None
 
 
 @dataclass(frozen=True)
@@ -209,9 +198,8 @@ class LiveSignalTargetProvider:
     def load_target(self, now: datetime) -> DailyTarget:
         try:
             refreshed = self.refresher.refresh(now)
-            _apply_refreshed_contracts(self.runner, refreshed)
-            observed_at = datetime.now(timezone.utc)
-            result = self.runner.run_once(observed_at, risk_inputs=refreshed.risk_inputs)
+            generated_at = datetime.now(timezone.utc)
+            result = self.runner.run_once(generated_at, risk_inputs=refreshed.risk_inputs)
         except TargetValidationError:
             raise
         except Exception as exc:
@@ -238,6 +226,13 @@ class LiveSignalTargetProvider:
             }
             for maturity in ("2Y", "5Y")
         }
+        observed_at = result.observation_time_utc
+        age = _business_day_age(observed_at.date(), generated_at.date())
+        max_age = getattr(self.refresher.agent_config, "max_target_age_business_days")
+        if age > max_age:
+            raise TargetValidationError(
+                f"Latest aligned daily signal is stale: age={age} business day(s), limit={max_age}."
+            )
         payload = json.dumps(
             {
                 "date": observed_at.date().isoformat(),
@@ -251,7 +246,7 @@ class LiveSignalTargetProvider:
         return DailyTarget(
             as_of=observed_at.date(),
             version=version,
-            age_business_days=0,
+            age_business_days=age,
             target_2y=MaturityTarget(
                 swap_qty=quantities["2Y"]["swap"],
                 treasury_qty=quantities["2Y"]["treasury"],
