@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from xml.etree import ElementTree
 
 import pandas as pd
 
@@ -50,6 +51,7 @@ from config import (
     SWAP_RETURN_COLUMNS,
     SWAP_TICKER_COLUMNS,
     TIMEOUT,
+    TREASURY_COLUMN_MAP,
     TREASURY_FUTURES,
     TREASURY_FUTURES_DATA_FILE,
     TREASURY_FUTURES_DV01_METHOD,
@@ -59,6 +61,8 @@ from config import (
     TREASURY_FUTURES_PRICE_COLUMNS,
     TREASURY_FUTURES_RETURN_COLUMNS,
     TREASURY_FUTURES_SOURCE_SYMBOLS,
+    TREASURY_XML_BASE_URL,
+    TREASURY_XML_DATASET,
     USER_AGENT,
     YAHOO_CHART_BASE_URL,
 )
@@ -176,16 +180,48 @@ def get_fred_cmt_series(
     return parse_fred_series(pd.read_csv(StringIO(text)), series_id, output_col)
 
 
+def parse_treasury_yield_curve_xml(xml_text: str) -> pd.DataFrame:
+    root = ElementTree.fromstring(xml_text)
+    rows = []
+
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] != "properties":
+            continue
+        values = {
+            child.tag.rsplit("}", 1)[-1]: child.text
+            for child in element
+        }
+        row = {
+            output_col: values.get(source_col)
+            for source_col, output_col in TREASURY_COLUMN_MAP.items()
+        }
+        if row["date"]:
+            rows.append(row)
+
+    if not rows:
+        raise RuntimeError("Treasury XML response contains no yield-curve rows.")
+    return clean_price_frame(pd.DataFrame(rows))
+
+
 def get_treasury_data(start_date: str, end_date: str | None = None) -> pd.DataFrame:
     start_ts = pd.to_datetime(start_date)
     end_ts = pd.to_datetime(end_date) if end_date else pd.Timestamp.today().normalize()
-    start = start_ts.strftime("%Y-%m-%d")
-    end = end_ts.strftime("%Y-%m-%d")
-    frames = [get_fred_cmt_series(series_id, start, end) for series_id in FRED_CMT_SERIES]
-    merged = frames[0]
-    for frame in frames[1:]:
-        merged = merged.merge(frame, on="date", how="outer")
-    return clean_price_frame(merged)
+    if end_ts < start_ts:
+        raise ValueError("Treasury end date must not precede start date.")
+
+    frames = []
+    for year in range(start_ts.year, end_ts.year + 1):
+        print(f"[PULL] Treasury yield curve {year}...")
+        url = f"{TREASURY_XML_BASE_URL}?{urlencode({'data': TREASURY_XML_DATASET, 'field_tdr_date_value': year})}"
+        text = fetch_text(
+            url=url,
+            cache_file=CACHE_DIR / f"treasury_yield_curve_{year}.xml",
+            accept="application/xml,text/xml,*/*",
+        )
+        frames.append(parse_treasury_yield_curve_xml(text))
+
+    output = clean_price_frame(pd.concat(frames, ignore_index=True))
+    return output[output["date"].between(start_ts, end_ts)].reset_index(drop=True)
 
 
 def extract_json_records(payload) -> list[dict]:
@@ -648,7 +684,6 @@ def strategy_swap_prices(eris: pd.DataFrame) -> pd.DataFrame:
         *[column for column in SWAP_C_USD_COLUMNS.values() if column in output],
         *[column for column in SWAP_PV01_COLUMNS.values() if column in output],
         *[column for column in SWAP_EFFECTIVE_DATE_COLUMNS.values() if column in output],
-        *[column for column in SWAP_MATURITY_DATE_COLUMNS.values() if column in output],
         *[column for column in SWAP_LAST_TRADE_DATE_COLUMNS.values() if column in output],
     ]
     return output.drop(columns=omitted_columns)

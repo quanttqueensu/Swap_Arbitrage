@@ -164,6 +164,7 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run.connect_paper", return_value=broker),
             patch("agents.agent_1.run.disconnect"),
             patch("agents.agent_1.run.request_delayed_market_data") as delayed,
+            patch("agents.agent_1.run._refresh_delayed_target") as refresh,
             patch("agents.agent_1.run._stop_requested", return_value=False),
             patch("agents.agent_1.run.build_live_target_provider") as build,
             patch("agents.agent_1.run._create_store", return_value=object()),
@@ -176,6 +177,7 @@ class LiveRunSelectionTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         delayed.assert_called_once_with(broker)
+        refresh.assert_called_once()
         build.assert_not_called()
         loop.assert_called_once()
         engine.cycle.assert_called_once_with(cycle_now, stop_requested=False)
@@ -190,6 +192,7 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run.connect_paper", return_value=broker),
             patch("agents.agent_1.run.disconnect"),
             patch("agents.agent_1.run.request_delayed_market_data") as delayed,
+            patch("agents.agent_1.run._refresh_delayed_target") as refresh,
             patch("agents.agent_1.run._stop_requested", return_value=False),
             patch("agents.agent_1.run.build_live_target_provider") as build,
             patch("agents.agent_1.run._create_store", return_value=object()),
@@ -201,8 +204,39 @@ class LiveRunSelectionTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         delayed.assert_called_once_with(broker)
+        refresh.assert_called_once()
         build.assert_not_called()
         engine.cycle.assert_called_once()
+
+    def test_delayed_target_refresh_rebuilds_only_the_default_target(self):
+        from pathlib import Path
+        from agents.agent_1.run import DEFAULT_TARGET_PATH, _refresh_delayed_target
+
+        with patch("risk_pipeline.build_risk_data") as build:
+            _refresh_delayed_target(DEFAULT_TARGET_PATH)
+            _refresh_delayed_target(Path("custom-target.csv"))
+
+        build.assert_called_once_with(
+            refresh_signals=True,
+            pull_interest_rates=True,
+            pull_eris=True,
+            save=True,
+        )
+
+    def test_delayed_target_refresh_failure_prevents_broker_connection(self):
+        with (
+            patch("agents.agent_1.run.load_config", return_value=SimpleNamespace()),
+            patch("agents.agent_1.run._load_evaluator", return_value=object()),
+            patch(
+                "agents.agent_1.run._refresh_delayed_target",
+                side_effect=RuntimeError("refresh failed"),
+            ),
+            patch("agents.agent_1.run.connect_paper") as connect,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "refresh failed"):
+                main(["delayed-once"])
+
+        connect.assert_not_called()
 
 
 

@@ -85,10 +85,10 @@ quotes, never creates an execution engine, and does not make `once` or `run`
 eligible to trade on delayed quotes.
 
 `delayed-once` and `delayed-run` are the paper-only delayed execution path.
-They request IBKR delayed market data and inherently use the pre-generated
-`--target` CSV, so they never generate the automatic FRED-backed daily target.
-The target and its contract-risk file still must pass the normal
-freshness and risk checks.
+They request IBKR delayed market data and refresh the default `risk_data.csv`
+target from current Treasury/Eris inputs before connecting to IBKR. An explicit
+`--target` path remains caller-managed. The target and its contract-risk file
+still must pass the normal freshness and risk checks.
 
 Agent 1 fails closed when its target, contract risk, quotes, account state, or
 paper configuration is invalid or stale. A persistent operator stop state lives

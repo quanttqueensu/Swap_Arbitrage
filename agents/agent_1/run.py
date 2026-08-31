@@ -60,6 +60,21 @@ def _create_store(run_id: str) -> Any:
     return PaperEventStore(PROJECT_ROOT, "agent_1", run_id)
 
 
+def _refresh_delayed_target(target_path: Path) -> None:
+    if target_path.resolve() != DEFAULT_TARGET_PATH.resolve():
+        return
+
+    from risk_pipeline import build_risk_data
+
+    print(f"[TARGET] Refreshing {DEFAULT_TARGET_PATH}")
+    build_risk_data(
+        refresh_signals=True,
+        pull_interest_rates=True,
+        pull_eris=True,
+        save=True,
+    )
+
+
 def _record_audit_or_cancel(
     *,
     ib: Any,
@@ -182,6 +197,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     delayed_execution = args.command in {"delayed-run", "delayed-once"}
     config = load_config()
     evaluator = _load_evaluator()
+
+    if delayed_execution:
+        _refresh_delayed_target(args.target)
+
     now = datetime.now(timezone.utc)
     use_live_target = not delayed_execution
     contract_risk_path = args.contract_risk or (

@@ -108,10 +108,10 @@ does not create an execution engine and does not allow `once` or `run` to
 submit orders from delayed quotes.
 
 `delayed-once` and `delayed-run` are the explicit paper-only delayed execution
-commands. Both request IBKR delayed market data and inherently use the
-pre-generated `--target` CSV; therefore they bypass automatic FRED-backed
-daily target generation while retaining all normal target
-freshness, contract-risk, risk, stop, and order controls.
+commands. Before connecting to IBKR, both refresh the default `risk_data.csv`
+target from current Treasury/Eris inputs, then request delayed market data for
+execution. An explicit `--target` path remains caller-managed. All normal
+target freshness, contract-risk, risk, stop, and order controls still apply.
 
 The executable default automatically refreshes ERIS reference/risk data and
 FRED `DGS2`/`DGS5` history before generating each daily target. Each signal row

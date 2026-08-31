@@ -12,7 +12,9 @@ from config import (
     SIGNAL_DATA_FILE,
     SWAP_COLUMNS,
     SWAP_EQUIVALENT_PAR_RATE_COLUMNS,
+    SWAP_MATURITY_DATE_COLUMNS,
     TREASURY_FUTURES_PRICE_COLUMNS,
+    YIELD_CURVE_CONSTRUCTION_SIGNAL,
     Z_ENTRY,
     Z_EXIT,
 )
@@ -22,6 +24,7 @@ from data_pipeline.historical_data.historical_data_builder import (
     clean_price_frame,
     load_csv,
 )
+from signals.yield_curve_signal import matched_treasury_yield_bps
 
 MIN_PERIODS = ROLLING_WINDOW
 
@@ -115,7 +118,12 @@ def add_funding_spread_proxy(df: pd.DataFrame) -> pd.DataFrame:
     return output
 
 
-def add_proxy_signal(df: pd.DataFrame, maturity: str) -> tuple[pd.DataFrame, bool]:
+def add_proxy_signal(
+    df: pd.DataFrame,
+    maturity: str,
+    *,
+    treasury_rate_bps: pd.Series | None = None,
+) -> tuple[pd.DataFrame, bool]:
     output = df.copy()
     maturity_key = clean_maturity(maturity)
     treasury_col = TREASURY_FUTURES_PRICE_COLUMNS.get(maturity)
@@ -135,8 +143,14 @@ def add_proxy_signal(df: pd.DataFrame, maturity: str) -> tuple[pd.DataFrame, boo
     dgs_col = {"2Y": "dgs2", "5Y": "dgs5"}.get(maturity)
     equivalent_rate_col = f"eris_swap_{maturity_key}_equivalent_par_rate_bps"
 
-    if dgs_col in output.columns and equivalent_rate_col in output.columns:
-        treasury_rate = pd.to_numeric(output[dgs_col], errors="coerce") * 100.0
+    if equivalent_rate_col in output.columns and (
+        treasury_rate_bps is not None or dgs_col in output.columns
+    ):
+        treasury_rate = (
+            pd.to_numeric(treasury_rate_bps, errors="coerce")
+            if treasury_rate_bps is not None
+            else pd.to_numeric(output[dgs_col], errors="coerce") * 100.0
+        )
         equivalent_rate = pd.to_numeric(output[equivalent_rate_col], errors="coerce")
         valid_rate_spread = np.isfinite(treasury_rate) & np.isfinite(equivalent_rate)
         output[rate_proxy_col] = treasury_rate.where(valid_rate_spread)
@@ -164,6 +178,26 @@ def add_proxy_signal(df: pd.DataFrame, maturity: str) -> tuple[pd.DataFrame, boo
     output[position_col] = build_proxy_position(source)
 
     return output, True
+
+
+def add_yield_curve_proxy_signal(
+    df: pd.DataFrame,
+    maturity: str,
+) -> tuple[pd.DataFrame, bool]:
+    proxy_col = SWAP_COLUMNS.get(maturity)
+    if not proxy_col or proxy_col not in df:
+        return df.copy(), False
+
+    maturity_date_col = SWAP_MATURITY_DATE_COLUMNS.get(maturity)
+    if not maturity_date_col:
+        raise RuntimeError(f"No Eris maturity-date column configured for {maturity}.")
+
+    treasury_rate = matched_treasury_yield_bps(df, maturity_date_col)
+    return add_proxy_signal(df, maturity, treasury_rate_bps=treasury_rate)
+
+
+def signal_builder_name() -> str:
+    return "yield_curve" if YIELD_CURVE_CONSTRUCTION_SIGNAL else "standard_cmt"
 
 
 def add_best_maturity_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -203,7 +237,11 @@ def build_signal_columns(raw: pd.DataFrame) -> pd.DataFrame:
         for column in (
             SWAP_COLUMNS.get(maturity),
             SWAP_EQUIVALENT_PAR_RATE_COLUMNS.get(maturity),
-            {"2Y": "dgs2", "5Y": "dgs5"}.get(maturity),
+            (
+                SWAP_MATURITY_DATE_COLUMNS.get(maturity)
+                if YIELD_CURVE_CONSTRUCTION_SIGNAL
+                else {"2Y": "dgs2", "5Y": "dgs5"}.get(maturity)
+            ),
         )
         if column
     ]
@@ -213,16 +251,31 @@ def build_signal_columns(raw: pd.DataFrame) -> pd.DataFrame:
         raise RuntimeError(f"Missing daily signal columns: {missing}")
 
     output = add_funding_spread_proxy(output)
+    builder = (
+        add_yield_curve_proxy_signal
+        if YIELD_CURVE_CONSTRUCTION_SIGNAL
+        else add_proxy_signal
+    )
     loaded = []
 
     for maturity in MATURITIES:
-        output, has_signal = add_proxy_signal(output, maturity)
+        output, has_signal = builder(output, maturity)
 
         if has_signal:
             loaded.append(maturity)
 
     output = add_best_maturity_columns(output)
-    print(f"[SIGNALS] proxy maturities: {', '.join(loaded) if loaded else 'none'}")
+    output = output.drop(
+        columns=[
+            column
+            for column in SWAP_MATURITY_DATE_COLUMNS.values()
+            if column in output
+        ]
+    )
+    print(
+        f"[SIGNALS] model={signal_builder_name()} proxy maturities: "
+        f"{', '.join(loaded) if loaded else 'none'}"
+    )
     return output
 
 
