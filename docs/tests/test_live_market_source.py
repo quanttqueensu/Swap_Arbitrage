@@ -32,6 +32,7 @@ class FakeContract:
 class FakeDetail:
     contract: FakeContract
     minTick: float = 0.001
+    contractMonth: str = ""
 
 
 @dataclass
@@ -146,6 +147,21 @@ class LiveMarketSourceTests(unittest.TestCase):
         self.assertEqual(called_names.count("reqContractDetails"), 4)
         self.assertEqual(called_names.count("qualifyContracts"), 4)
         self.assertEqual(called_names.count("reqTickers"), 2)
+
+    def test_eris_vintage_from_contract_detail_is_eligible(self) -> None:
+        ib = FakeIB()
+        detail = ib.details["YIT"][1]
+        detail.contractMonth = detail.contract.contractMonth
+        detail.contract.contractMonth = ""
+        source = IbkrLiveMarketSource(
+            ib,
+            contract_factory=contract_factory,
+            quote_max_age_seconds=30,
+        )
+
+        quote = source.snapshot([ContractRequest("YIT", "eris")], now=NOW)["YIT"]
+
+        self.assertEqual(quote.contract_id, "102")
 
     def test_preferred_contract_change_invalidates_contract_cache(self) -> None:
         ib = FakeIB()

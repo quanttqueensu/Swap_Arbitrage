@@ -181,7 +181,8 @@ class IbkrLiveMarketSource:
         if request.kind == "eris":
             for detail in details:
                 contract_month = _parse_contract_date(
-                    getattr(detail.contract, "contractMonth", "")
+                    getattr(detail, "contractMonth", "")
+                    or getattr(detail.contract, "contractMonth", "")
                 )
                 expiry = _parse_contract_date(
                     getattr(

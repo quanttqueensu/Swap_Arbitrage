@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Any
 
 
-SHADOW_SIGNAL_COLUMNS = [
+LIVE_SIGNAL_COLUMNS = [
     "timestamp_utc",
     "strategy_version",
     "snapshot_id",
@@ -39,8 +39,8 @@ SHADOW_SIGNAL_COLUMNS = [
     "z_score",
     "prior_state",
     "resulting_state",
-    "hypothetical_swap_quantity",
-    "hypothetical_treasury_quantity",
+    "target_swap_quantity",
+    "target_treasury_quantity",
     "blocked",
     "reason_codes",
 ]
@@ -67,13 +67,13 @@ def append_rows(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
 
     serialized = []
     for row in materialized:
-        unknown = set(row).difference(SHADOW_SIGNAL_COLUMNS)
+        unknown = set(row).difference(LIVE_SIGNAL_COLUMNS)
         if unknown:
-            raise ValueError(f"unknown shadow audit fields: {sorted(unknown)}")
+            raise ValueError(f"unknown live-signal audit fields: {sorted(unknown)}")
         serialized.append(
             {
                 column: _serialize(row.get(column))
-                for column in SHADOW_SIGNAL_COLUMNS
+                for column in LIVE_SIGNAL_COLUMNS
             }
         )
 
@@ -82,11 +82,11 @@ def append_rows(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
     if not needs_header:
         with path.open(newline="", encoding="utf-8") as handle:
             existing_header = next(csv.reader(handle), [])
-        if existing_header != SHADOW_SIGNAL_COLUMNS:
-            raise ValueError("existing shadow audit header does not match schema")
+        if existing_header != LIVE_SIGNAL_COLUMNS:
+            raise ValueError("existing live-signal audit header does not match schema")
 
     with path.open("a", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=SHADOW_SIGNAL_COLUMNS)
+        writer = csv.DictWriter(handle, fieldnames=LIVE_SIGNAL_COLUMNS)
         if needs_header:
             writer.writeheader()
         writer.writerows(serialized)

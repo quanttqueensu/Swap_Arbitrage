@@ -33,7 +33,7 @@ from .live_market_source import ContractRequest
 from .live_market_source import MarketDataError
 from .eris_reference_data import ErisReferenceError
 from .model_state import load_model_state, load_signal_state, save_signal_state
-from .shadow_store import append_rows
+from .live_signal_store import append_rows
 
 
 MATURITY_SYMBOLS = {
@@ -43,11 +43,10 @@ MATURITY_SYMBOLS = {
 
 
 @dataclass(frozen=True)
-class ShadowCycleResult:
+class LiveSignalCycleResult:
     timestamp_utc: datetime
     signals: dict[str, LiveSignalResult]
-    hypothetical_target: LiveTarget
-    executable_target_changed: bool = False
+    target: LiveTarget
 
 
 def _stable_hash(parts: list[str]) -> str:
@@ -121,7 +120,7 @@ def _blocked_signal(
     )
 
 
-class ShadowLiveSignalRunner:
+class LiveSignalRunner:
     def __init__(
         self,
         *,
@@ -172,7 +171,7 @@ class ShadowLiveSignalRunner:
         now: datetime,
         *,
         risk_inputs: dict[str, MaturityRiskInputs] | None = None,
-    ) -> ShadowCycleResult:
+    ) -> LiveSignalCycleResult:
         if now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
         now_utc = now.astimezone(timezone.utc)
@@ -295,11 +294,10 @@ class ShadowLiveSignalRunner:
             {maturity: signal.state for maturity, signal in signals.items()},
         )
 
-        return ShadowCycleResult(
+        return LiveSignalCycleResult(
             timestamp_utc=now_utc,
             signals=signals,
-            hypothetical_target=target,
-            executable_target_changed=False,
+            target=target,
         )
 
     @staticmethod
@@ -360,8 +358,8 @@ class ShadowLiveSignalRunner:
             "z_score": signal.z_score,
             "prior_state": signal.prior_state,
             "resulting_state": signal.state,
-            "hypothetical_swap_quantity": maturity_target.swap_quantity,
-            "hypothetical_treasury_quantity": maturity_target.treasury_quantity,
+            "target_swap_quantity": maturity_target.swap_quantity,
+            "target_treasury_quantity": maturity_target.treasury_quantity,
             "blocked": signal.blocked or maturity_target.blocked,
             "reason_codes": reason_codes,
         }

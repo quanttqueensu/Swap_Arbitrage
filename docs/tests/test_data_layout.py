@@ -55,7 +55,7 @@ class DataLayoutTests(unittest.TestCase):
 
     def test_data_has_only_canonical_and_generated_folders(self) -> None:
         folders = {path.name for path in DATA_DIR.iterdir() if path.is_dir()}
-        generated = {"paper", "results"}
+        generated = {"paper", "results", "live_signal"}
         self.assertEqual(
             folders - generated,
             {"raw_data", "futures", "rates", "market", "contract_risk"},

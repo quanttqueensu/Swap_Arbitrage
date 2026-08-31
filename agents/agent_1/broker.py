@@ -11,6 +11,7 @@ from .models import (
 
 
 ORDER_REF_PREFIX = "A1:"
+DELAYED_MARKET_DATA_TYPE = 3
 
 
 def is_agent1_trade(trade: Any, *, account_id: str, client_id: int) -> bool:
@@ -105,6 +106,14 @@ def preview_margin(
 
 class BrokerError(RuntimeError):
     """Raised when broker truth cannot be read safely."""
+
+
+def request_delayed_market_data(ib: Any) -> None:
+    """Request IBKR's delayed-data fallback for a diagnostic-only session."""
+    try:
+        ib.reqMarketDataType(DELAYED_MARKET_DATA_TYPE)
+    except Exception as exc:
+        raise BrokerError("Could not request IBKR delayed market data.") from exc
 
 
 @dataclass(frozen=True)

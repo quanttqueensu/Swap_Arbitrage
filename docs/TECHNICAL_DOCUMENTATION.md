@@ -84,12 +84,10 @@ Agent 1 is separate from Agent 0. It reads the latest validated 2Y/5Y target,
 reconciles it with broker positions and Agent-1-scoped working orders, applies
 the shared runtime risk decision, and submits paper-only limit-order groups.
 
-Copy `agents/agent_1/agent1.paper.example.json` to an untracked private path,
-replace its placeholder with the approved local `DU...` paper account, and set
-the environment variable to that file:
+Set `PAPER_ACCOUNT` in `agents/agent_1/config.py` to the approved local
+`DU...` paper account:
 
 ```powershell
-$env:AGENT1_PAPER_CONFIG = "C:\\private\\agent1.paper.json"
 python -m agents.agent_1.run status
 ```
 
@@ -99,13 +97,25 @@ and risk output have been reviewed, the transmitting paper commands are:
 ```powershell
 python -m agents.agent_1.run once
 python -m agents.agent_1.run run
+python -m agents.agent_1.run delayed-once --legacy-target
+python -m agents.agent_1.run delayed-run --legacy-target
 python -m agents.agent_1.run stop-and-flatten
 ```
+
+For market-data diagnostics only, `python -m agents.agent_1.run delayed-status`
+requests IBKR delayed market data before the same read-only status flow. It
+does not create an execution engine, cannot use `--legacy-target`, and does
+not allow `once` or `run` to submit orders from delayed quotes.
+
+`delayed-once` and `delayed-run` are the explicit paper-only delayed execution
+commands. Both request IBKR delayed market data and require `--legacy-target`;
+therefore they bypass automatic 2YY/5YY-dependent target generation while
+retaining all normal target freshness, contract-risk, risk, stop, and order
+controls.
 
 The executable default automatically refreshes ERIS reference/risk data and
 IBKR continuous-futures history before generating each live target. Use
 `--legacy-target` only to select the validated pre-generated daily target CSV.
-Shadow mode performs the same refresh without exposing an executable target.
 
 The default persistent operator stop file is `data/paper/agent_1/STOP`.
 `stop-and-flatten` creates it before attempting an IBKR connection, and normal
@@ -349,7 +359,7 @@ tests cover these sign rules.
 | Strategy equation version | `p10.strategy-equations.v1` |
 | Position-sizing/risk version | `p33.position-sizing-risk.v1` |
 | Agent 0 | Local IBKR paper session, port `7497`, client ID `30` |
-| Agent 1 | Local IBKR paper session, port `7497`, distinct configured client ID and private `AGENT1_PAPER_CONFIG` |
+| Agent 1 | Local IBKR paper session, port `7497`, distinct configured client ID, and `PAPER_ACCOUNT` in `agents/agent_1/config.py` |
 
 
 ## Testing and failure handling

@@ -9,6 +9,7 @@ from agents.agent_1.broker import (
     BrokerError,
     assess_quotes,
     collect_broker_snapshot,
+    request_delayed_market_data,
     validate_paper_session,
 )
 from agents.agent_1.models import BoundContract
@@ -81,6 +82,7 @@ class FakeIB:
                 order_id=3,
             ),
         ]
+        self.market_data_types = []
 
     def isConnected(self):
         return self.connected
@@ -104,6 +106,9 @@ class FakeIB:
             )
             for item in contracts
         ]
+
+    def reqMarketDataType(self, market_data_type):
+        self.market_data_types.append(market_data_type)
 
     def fills(self):
         return []
@@ -173,6 +178,11 @@ class BrokerTests(unittest.TestCase):
         self.assertFalse(assessed.data_fresh)
         self.assertFalse(assessed.bid_ask_valid)
         self.assertTrue(assessed.market_fields_valid)
+
+    def test_requests_ibkr_delayed_market_data_type(self) -> None:
+        ib = FakeIB(self.now)
+        request_delayed_market_data(ib)
+        self.assertEqual(ib.market_data_types, [3])
 
     def test_fractional_tracked_futures_position_fails_closed(self) -> None:
         ib = FakeIB(self.now)

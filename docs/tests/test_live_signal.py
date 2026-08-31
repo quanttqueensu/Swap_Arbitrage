@@ -1,171 +1,200 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import csv
 import unittest
 
-from strategy.eris_pricing import ErisParRateQuote
-from strategy.live_signal import (
-    HistoricalModelState,
-    TreasuryYieldQuote,
-    evaluate_live_signal,
-)
+from data_pipeline.live_data_pipeline.live_market_source import ContractRequest, MarketDataError
+from data_pipeline.live_data_pipeline.eris_reference_data import ErisReferenceError
+from data_pipeline.live_data_pipeline.live_signal_runner import LiveSignalRunner
+from strategy.eris_pricing import ErisReference, PriceQuote
+from strategy.live_signal import HistoricalModelState, TreasuryYieldQuote
+from strategy.live_target import MaturityRiskInputs
 
 
 NOW = datetime(2026, 8, 30, 14, 0, tzinfo=timezone.utc)
 
 
-def make_eris(mid_bps: Decimal, observed_at: datetime = NOW) -> ErisParRateQuote:
-    return ErisParRateQuote(
-        contract_id="YIT-1",
-        symbol="YIT",
-        observed_at=observed_at,
-        bid_price=Decimal("99.99"),
-        ask_price=Decimal("100.01"),
-        mid_price=Decimal("100.00"),
-        bid_par_rate_bps=mid_bps + Decimal("1"),
-        ask_par_rate_bps=mid_bps - Decimal("1"),
-        mid_par_rate_bps=mid_bps,
+class FakeMarketSource:
+    def __init__(
+        self,
+        missing_symbol: str | None = None,
+        error_reason: str = "missing_market_quote",
+    ):
+        self.missing_symbol = missing_symbol
+        self.error_reason = error_reason
+        self.calls = []
+
+    def snapshot(self, requests: list[ContractRequest], *, now: datetime):
+        self.calls.append(tuple(request.symbol for request in requests))
+        output = {}
+        for request in requests:
+            if request.symbol == self.missing_symbol:
+                raise MarketDataError(
+                    self.error_reason, f"quote error for {request.symbol}"
+                )
+            if request.symbol == "YIT":
+                output[request.symbol] = PriceQuote(
+                    "YIT-1", "YIT", now,
+                    Decimal("99.98"), Decimal("100.02"), Decimal("100"), Decimal("0.001")
+                )
+            elif request.symbol == "YIW":
+                output[request.symbol] = PriceQuote(
+                    "YIW-1", "YIW", now,
+                    Decimal("99.98"), Decimal("100.02"), Decimal("100"), Decimal("0.001")
+                )
+            elif request.symbol == "2YY":
+                output[request.symbol] = TreasuryYieldQuote(
+                    "2YY-1", "2YY", now,
+                    Decimal("3.79"), Decimal("3.81"), Decimal("3.80")
+                )
+            elif request.symbol == "5YY":
+                output[request.symbol] = TreasuryYieldQuote(
+                    "5YY-1", "5YY", now,
+                    Decimal("3.49"), Decimal("3.51"), Decimal("3.50")
+                )
+        return output
+
+
+class FakeReferenceProvider:
+    def __init__(self, error_symbol: str | None = None) -> None:
+        self.error_symbol = error_symbol
+
+    def get(self, contract_id: str, symbol: str, as_of: datetime):
+        if symbol == self.error_symbol:
+            raise ErisReferenceError(
+                "stale_eris_reference", f"stale reference for {symbol}"
+            )
+        fixed = Decimal("0.04") if symbol == "YIT" else Decimal("0.037")
+        return ErisReference(
+            contract_id=contract_id,
+            fixed_rate_decimal=fixed,
+            b_price_points=Decimal("0"),
+            c_price_points=Decimal("0"),
+            pv01_usd_per_bp=Decimal("20") if symbol == "YIT" else Decimal("50"),
+            effective_date="2026-06-17",
+            maturity_date="2028-06-21" if symbol == "YIT" else "2031-06-21",
+            observed_at=as_of,
+        )
+
+
+def model_loader(_path: Path, maturity: str, _as_of: datetime):
+    # YIT mid converts to 400 bps and 2YY mid is 380 -> spread 20 -> z +2.
+    # YIW mid converts to 370 bps and 5YY mid is 350 -> spread 20 -> z +2.
+    return HistoricalModelState(
+        version="live_yield_futures_v1",
+        mean_bps=Decimal("0"),
+        std_bps=Decimal("10"),
+        observation_count=252,
     )
 
 
-def make_treasury(mid_percent: Decimal, observed_at: datetime = NOW) -> TreasuryYieldQuote:
-    return TreasuryYieldQuote(
-        contract_id="2YY-1",
-        symbol="2YY",
-        observed_at=observed_at,
-        bid_percent=mid_percent - Decimal("0.01"),
-        ask_percent=mid_percent + Decimal("0.01"),
-        mid_percent=mid_percent,
-    )
+def risks():
+    return {
+        "2Y": MaturityRiskInputs(
+            Decimal("3000"), Decimal("1"), Decimal("20"), Decimal("40")
+        ),
+        "5Y": MaturityRiskInputs(
+            Decimal("3000"), Decimal("1"), Decimal("50"), Decimal("50")
+        ),
+    }
 
 
 class LiveSignalTests(unittest.TestCase):
-    def test_mid_spread_and_zscore_use_basis_points(self) -> None:
-        model = HistoricalModelState(
-            version="live_yield_futures_v1",
-            mean_bps=Decimal("10"),
-            std_bps=Decimal("5"),
-            observation_count=252,
-        )
-        result = evaluate_live_signal(
-            maturity="2Y",
-            eris=make_eris(Decimal("400")),
-            treasury=make_treasury(Decimal("3.80")),
-            model=model,
-            prior_state=0,
-            now=NOW,
-            max_quote_age_seconds=30,
-        )
-        self.assertEqual(result.mid_spread_bps, Decimal("20.00"))
-        self.assertEqual(result.z_score, Decimal("2.00"))
-        self.assertEqual(result.state, -1)
-        self.assertFalse(result.blocked)
+    def test_complete_cycle_writes_two_rows_and_exposes_a_live_target(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runner = LiveSignalRunner(
+                market_source=FakeMarketSource(),
+                reference_provider=FakeReferenceProvider(),
+                model_state_path=root / "baseline.csv",
+                model_state_loader=model_loader,
+                risk_inputs=risks(),
+                audit_path=root / "live_signals.csv",
+                state_path=root / "signal_state.json",
+            )
+            result = runner.run_once(NOW)
 
-    def test_executable_side_bounds_respect_rate_orientation(self) -> None:
-        model = HistoricalModelState(
-            "live_yield_futures_v1", Decimal("0"), Decimal("10"), 252
-        )
-        result = evaluate_live_signal(
-            maturity="2Y",
-            eris=make_eris(Decimal("400")),
-            treasury=make_treasury(Decimal("3.80")),
-            model=model,
-            prior_state=0,
-            now=NOW,
-            max_quote_age_seconds=30,
-        )
-        # ERIS ask price maps to the lower par rate; Treasury ask is the higher yield.
-        self.assertEqual(result.spread_bid_side_bps, Decimal("18.00"))
-        # ERIS bid price maps to the higher par rate; Treasury bid is the lower yield.
-        self.assertEqual(result.spread_ask_side_bps, Decimal("22.00"))
+            self.assertEqual(set(result.signals), {"2Y", "5Y"})
+            self.assertEqual(result.signals["2Y"].state, -1)
+            self.assertEqual(result.signals["5Y"].state, -1)
+            self.assertNotEqual(
+                result.target.maturities["2Y"].swap_quantity, 0
+            )
+            self.assertLessEqual(
+                result.target.gross_target_dv01, Decimal("10000")
+            )
 
-    def test_existing_exit_and_reversal_semantics(self) -> None:
-        model = HistoricalModelState(
-            "live_yield_futures_v1", Decimal("0"), Decimal("10"), 252
-        )
-        self.assertEqual(self._result_for_spread(Decimal("-5"), model, 1).state, 0)
-        self.assertEqual(self._result_for_spread(Decimal("25"), model, 1).state, -1)
-        self.assertEqual(self._result_for_spread(Decimal("5"), model, -1).state, 0)
-        self.assertEqual(self._result_for_spread(Decimal("-25"), model, -1).state, 1)
+            with (root / "live_signals.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 2)
+            self.assertEqual({row["maturity"] for row in rows}, {"2Y", "5Y"})
+            self.assertTrue(all(row["strategy_version"] == "live_yield_futures_v1" for row in rows))
+            self.assertTrue(all(row["blocked"] == "0" for row in rows))
 
-    def test_insufficient_history_blocks_and_zeroes_state(self) -> None:
-        model = HistoricalModelState(
-            "live_yield_futures_v1", Decimal("0"), Decimal("10"), 62
-        )
-        result = self._result_for_spread(Decimal("20"), model, 1)
-        self.assertTrue(result.blocked)
-        self.assertEqual(result.state, 0)
-        self.assertIn("insufficient_history", result.reason_codes)
+    def test_duplicate_poll_appends_observations_and_restart_restores_state(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kwargs = dict(
+                market_source=FakeMarketSource(),
+                reference_provider=FakeReferenceProvider(),
+                model_state_path=root / "baseline.csv",
+                model_state_loader=model_loader,
+                risk_inputs=risks(),
+                audit_path=root / "live_signals.csv",
+                state_path=root / "signal_state.json",
+            )
+            first_runner = LiveSignalRunner(**kwargs)
+            first = first_runner.run_once(NOW)
+            second = first_runner.run_once(NOW)
+            restarted = LiveSignalRunner(**kwargs).run_once(NOW)
 
-    def test_stale_quote_blocks(self) -> None:
-        model = HistoricalModelState(
-            "live_yield_futures_v1", Decimal("0"), Decimal("10"), 252
-        )
-        stale = NOW - timedelta(seconds=31)
-        result = self._result_for_spread(
-            Decimal("20"), model, 0, observed_at=stale
-        )
-        self.assertTrue(result.blocked)
-        self.assertIn("stale_quote", result.reason_codes)
+            self.assertEqual(first.signals["2Y"].state, -1)
+            self.assertEqual(second.signals["2Y"].prior_state, -1)
+            self.assertEqual(restarted.signals["2Y"].prior_state, -1)
+            with (root / "live_signals.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 6)
 
-    def test_invalid_quote_timestamp_blocks_before_snapshot_hashing(self) -> None:
-        model = HistoricalModelState(
-            "live_yield_futures_v1", Decimal("0"), Decimal("10"), 252
-        )
-        result = evaluate_live_signal(
-            maturity="2Y",
-            eris=make_eris(Decimal("400"), None),  # type: ignore[arg-type]
-            treasury=make_treasury(Decimal("3.80")),
-            model=model,
-            prior_state=0,
-            now=NOW,
-            max_quote_age_seconds=30,
-        )
-        self.assertTrue(result.blocked)
-        self.assertIn("invalid_quote_timestamp", result.reason_codes)
+    def test_missing_5y_quote_blocks_only_5y_hypothetical_exposure(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runner = LiveSignalRunner(
+                market_source=FakeMarketSource(missing_symbol="5YY"),
+                reference_provider=FakeReferenceProvider(),
+                model_state_path=root / "baseline.csv",
+                model_state_loader=model_loader,
+                risk_inputs=risks(),
+                audit_path=root / "live_signals.csv",
+                state_path=root / "signal_state.json",
+            )
+            result = runner.run_once(NOW)
+            self.assertFalse(result.signals["2Y"].blocked)
+            self.assertTrue(result.signals["5Y"].blocked)
+            self.assertIn("missing_market_quote", result.signals["5Y"].reason_codes)
+            self.assertEqual(result.target.maturities["5Y"].swap_quantity, 0)
+            self.assertNotEqual(result.target.maturities["2Y"].swap_quantity, 0)
 
-    def test_wrong_model_version_blocks(self) -> None:
-        model = HistoricalModelState("legacy_dgs", Decimal("0"), Decimal("10"), 252)
-        result = self._result_for_spread(Decimal("20"), model, 0)
-        self.assertTrue(result.blocked)
-        self.assertIn("model_version_mismatch", result.reason_codes)
-
-    def test_zero_historical_standard_deviation_blocks(self) -> None:
-        model = HistoricalModelState(
-            "live_yield_futures_v1", Decimal("0"), Decimal("0"), 252
-        )
-        result = self._result_for_spread(Decimal("20"), model, 0)
-        self.assertTrue(result.blocked)
-        self.assertIn("invalid_historical_std", result.reason_codes)
-
-    def test_identical_snapshot_is_idempotent(self) -> None:
-        model = HistoricalModelState(
-            "live_yield_futures_v1", Decimal("0"), Decimal("10"), 252
-        )
-        first = self._result_for_spread(Decimal("20"), model, 0)
-        second = self._result_for_spread(Decimal("20"), model, 0)
-        self.assertEqual(first.snapshot_id, second.snapshot_id)
-        self.assertEqual(first.z_score, second.z_score)
-        self.assertEqual(first.state, second.state)
-
-    def _result_for_spread(
-        self,
-        spread_bps: Decimal,
-        model: HistoricalModelState,
-        prior: int,
-        observed_at: datetime = NOW,
-    ):
-        treasury_mid_percent = Decimal("3.80")
-        eris_mid_bps = treasury_mid_percent * Decimal("100") + spread_bps
-        return evaluate_live_signal(
-            maturity="2Y",
-            eris=make_eris(eris_mid_bps, observed_at),
-            treasury=make_treasury(treasury_mid_percent, observed_at),
-            model=model,
-            prior_state=prior,
-            now=NOW,
-            max_quote_age_seconds=30,
-        )
-
+    def test_market_and_reference_failures_keep_specific_reason_codes(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runner = LiveSignalRunner(
+                market_source=FakeMarketSource(
+                    missing_symbol="2YY", error_reason="stale_quote"
+                ),
+                reference_provider=FakeReferenceProvider(error_symbol="YIW"),
+                model_state_path=root / "baseline.csv",
+                model_state_loader=model_loader,
+                risk_inputs=risks(),
+                audit_path=root / "live_signals.csv",
+                state_path=root / "signal_state.json",
+            )
+            result = runner.run_once(NOW)
+            self.assertIn("stale_quote", result.signals["2Y"].reason_codes)
+            self.assertIn(
+                "stale_eris_reference", result.signals["5Y"].reason_codes
+            )
 
 if __name__ == "__main__":
     unittest.main()

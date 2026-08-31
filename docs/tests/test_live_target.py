@@ -130,7 +130,7 @@ class LiveTargetTests(unittest.TestCase):
         self.assertEqual(two.treasury_quantity, -5)
         self.assertTrue(two.swap_contract_cap_hit)
 
-    def test_net_dv01_breach_blocks_entire_hypothetical_target(self) -> None:
+    def test_net_dv01_breach_blocks_entire_target(self) -> None:
         target = build_live_target(
             signals={"2Y": signal("2Y", 1, "2.5")},
             risk_inputs={"2Y": risk(swap_dv01="20", treasury_dv01="37")},

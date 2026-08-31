@@ -10,7 +10,15 @@ from agents.agent_1.run import build_parser, main
 class CliTests(unittest.TestCase):
     def test_exposes_exact_operator_commands(self):
         parser = build_parser()
-        for command in ("run", "once", "status", "shadow-once", "stop-and-flatten"):
+        for command in (
+            "run",
+            "once",
+            "status",
+            "delayed-status",
+            "delayed-run",
+            "delayed-once",
+            "stop-and-flatten",
+        ):
             arguments = [command]
             args = parser.parse_args(arguments)
             self.assertEqual(args.command, command)
@@ -46,7 +54,7 @@ class LiveRunSelectionTests(unittest.TestCase):
                 return_value=SimpleNamespace(bound_contracts={}),
             ),
             patch(
-                "agents.agent_1.run.build_auto_live_provider",
+                "agents.agent_1.run.build_live_target_provider",
                 return_value=provider,
             ) as build,
             patch("agents.agent_1.run._create_store", return_value=object()),
@@ -55,7 +63,7 @@ class LiveRunSelectionTests(unittest.TestCase):
             result = main(["run", "--run-id", "auto-live-test"])
 
         self.assertEqual(result, 0)
-        self.assertTrue(build.call_args.kwargs["executable"])
+        self.assertEqual(build.call_args.kwargs["held_contracts"], {})
         loop.assert_called_once()
 
     def test_legacy_target_skips_auto_live_provider(self):
@@ -66,7 +74,7 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run._load_evaluator", return_value=object()),
             patch("agents.agent_1.run.connect_paper", return_value=broker),
             patch("agents.agent_1.run.disconnect"),
-            patch("agents.agent_1.run.build_auto_live_provider") as build,
+            patch("agents.agent_1.run.build_live_target_provider") as build,
             patch("agents.agent_1.run._create_store", return_value=object()),
             patch("agents.agent_1.run.polling_loop") as loop,
         ):
@@ -75,6 +83,151 @@ class LiveRunSelectionTests(unittest.TestCase):
         self.assertEqual(result, 0)
         build.assert_not_called()
         loop.assert_called_once()
+
+    def test_status_reports_missing_contract_risk_without_a_traceback(self):
+        from io import StringIO
+        from agents.agent_1.risk import ContractRiskError
+
+        broker = SimpleNamespace()
+        config = SimpleNamespace(min_days_to_expiry=14)
+        output = StringIO()
+        with (
+            patch("agents.agent_1.run.load_config", return_value=config),
+            patch("agents.agent_1.run._load_evaluator", return_value=object()),
+            patch("agents.agent_1.run.connect_paper", return_value=broker),
+            patch("agents.agent_1.run.disconnect"),
+            patch("agents.agent_1.run.load_state", return_value=SimpleNamespace(bound_contracts={})),
+            patch("agents.agent_1.run.build_live_target_provider", return_value=object()),
+            patch(
+                "agents.agent_1.run.status_cycle",
+                side_effect=ContractRiskError("Contract-risk source does not exist"),
+            ),
+            patch("sys.stdout", output),
+        ):
+            result = main(["status"])
+
+        self.assertEqual(result, 2)
+        self.assertIn("action=hold", output.getvalue())
+        self.assertIn("contract-risk-unavailable", output.getvalue())
+
+    def test_delayed_status_reports_missing_account_risk_without_a_traceback(self):
+        from io import StringIO
+        from agents.agent_1.risk import AccountRiskError
+
+        broker = SimpleNamespace()
+        config = SimpleNamespace(min_days_to_expiry=14)
+        output = StringIO()
+        with (
+            patch("agents.agent_1.run.load_config", return_value=config),
+            patch("agents.agent_1.run._load_evaluator", return_value=object()),
+            patch("agents.agent_1.run.connect_paper", return_value=broker),
+            patch("agents.agent_1.run.disconnect"),
+            patch("agents.agent_1.run.request_delayed_market_data"),
+            patch("agents.agent_1.run.load_state", return_value=SimpleNamespace(bound_contracts={})),
+            patch("agents.agent_1.run.build_live_target_provider", return_value=object()),
+            patch(
+                "agents.agent_1.run.status_cycle",
+                side_effect=AccountRiskError("Invalid IBKR daily P&L."),
+            ),
+            patch("sys.stdout", output),
+        ):
+            result = main(["delayed-status"])
+
+        self.assertEqual(result, 2)
+        self.assertIn("action=hold", output.getvalue())
+        self.assertIn("account-risk-unavailable", output.getvalue())
+
+    def test_delayed_status_requests_delayed_data_and_never_builds_an_engine(self):
+        from io import StringIO
+        from agents.agent_1.risk import ContractRiskError
+
+        broker = SimpleNamespace()
+        config = SimpleNamespace(min_days_to_expiry=14)
+        output = StringIO()
+        with (
+            patch("agents.agent_1.run.load_config", return_value=config),
+            patch("agents.agent_1.run._load_evaluator", return_value=object()),
+            patch("agents.agent_1.run.connect_paper", return_value=broker),
+            patch("agents.agent_1.run.disconnect"),
+            patch("agents.agent_1.run.request_delayed_market_data") as delayed,
+            patch("agents.agent_1.run.load_state", return_value=SimpleNamespace(bound_contracts={})),
+            patch("agents.agent_1.run.build_live_target_provider", return_value=object()),
+            patch(
+                "agents.agent_1.run.status_cycle",
+                side_effect=ContractRiskError("Contract-risk source does not exist"),
+            ),
+            patch("agents.agent_1.run.Agent1Engine") as engine,
+            patch("sys.stdout", output),
+        ):
+            result = main(["delayed-status"])
+
+        self.assertEqual(result, 2)
+        delayed.assert_called_once_with(broker)
+        engine.assert_not_called()
+
+    def test_delayed_status_rejects_legacy_target(self):
+        with self.assertRaises(SystemExit):
+            main(["delayed-status", "--legacy-target"])
+
+    def test_delayed_execution_requires_legacy_target(self):
+        for command in ("delayed-once", "delayed-run"):
+            with self.subTest(command=command), self.assertRaises(SystemExit):
+                main([command])
+
+    def test_delayed_run_uses_delayed_data_and_legacy_target(self):
+        from datetime import datetime, timezone
+
+        broker = SimpleNamespace(sleep=lambda seconds: None)
+        config = SimpleNamespace()
+        engine = SimpleNamespace(cycle=Mock(return_value=SimpleNamespace(status=object())))
+        cycle_now = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
+
+        def run_one_cycle(**kwargs):
+            kwargs["cycle"](cycle_now)
+
+        with (
+            patch("agents.agent_1.run.load_config", return_value=config),
+            patch("agents.agent_1.run._load_evaluator", return_value=object()),
+            patch("agents.agent_1.run.connect_paper", return_value=broker),
+            patch("agents.agent_1.run.disconnect"),
+            patch("agents.agent_1.run.request_delayed_market_data") as delayed,
+            patch("agents.agent_1.run.build_live_target_provider") as build,
+            patch("agents.agent_1.run._create_store", return_value=object()),
+            patch("agents.agent_1.run.Agent1Engine", return_value=engine),
+            patch("agents.agent_1.run._record_audit_or_cancel"),
+            patch("agents.agent_1.run._render_status", return_value="status"),
+            patch("agents.agent_1.run.polling_loop", side_effect=run_one_cycle) as loop,
+        ):
+            result = main(["delayed-run", "--legacy-target", "--run-id", "delayed-test"])
+
+        self.assertEqual(result, 0)
+        delayed.assert_called_once_with(broker)
+        build.assert_not_called()
+        loop.assert_called_once()
+        engine.cycle.assert_called_once_with(cycle_now, stop_requested=False)
+
+    def test_delayed_once_uses_delayed_data_and_legacy_target(self):
+        broker = SimpleNamespace()
+        config = SimpleNamespace()
+        engine = SimpleNamespace(cycle=Mock(return_value=SimpleNamespace(status=object())))
+        with (
+            patch("agents.agent_1.run.load_config", return_value=config),
+            patch("agents.agent_1.run._load_evaluator", return_value=object()),
+            patch("agents.agent_1.run.connect_paper", return_value=broker),
+            patch("agents.agent_1.run.disconnect"),
+            patch("agents.agent_1.run.request_delayed_market_data") as delayed,
+            patch("agents.agent_1.run.build_live_target_provider") as build,
+            patch("agents.agent_1.run._create_store", return_value=object()),
+            patch("agents.agent_1.run.Agent1Engine", return_value=engine),
+            patch("agents.agent_1.run._record_audit_or_cancel"),
+            patch("agents.agent_1.run._render_status", return_value="status"),
+        ):
+            result = main(["delayed-once", "--legacy-target", "--run-id", "delayed-once-test"])
+
+        self.assertEqual(result, 0)
+        delayed.assert_called_once_with(broker)
+        build.assert_not_called()
+        engine.cycle.assert_called_once()
 
 
 
@@ -116,7 +269,7 @@ class StopStateTests(unittest.TestCase):
                     "agents.agent_1.run.load_state",
                     return_value=SimpleNamespace(bound_contracts={}),
                 ),
-                patch("agents.agent_1.run.build_auto_live_provider", return_value=object()),
+                patch("agents.agent_1.run.build_live_target_provider", return_value=object()),
                 patch("agents.agent_1.run._create_store", return_value=object()),
                 patch("agents.agent_1.run.Agent1Engine", return_value=engine),
                 patch("agents.agent_1.run._record_audit_or_cancel"),

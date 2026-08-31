@@ -6,23 +6,27 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .audit import PaperAuditError, record_paper_audit
-from .broker import cancel_agent1_orders, connect_paper, disconnect
+from .broker import (
+    cancel_agent1_orders,
+    connect_paper,
+    disconnect,
+    request_delayed_market_data,
+)
 from .config import load_config
 from .cycle import RuntimeCache, market_is_open, status_cycle
 from .engine import Agent1Engine, polling_loop
-from .shadow import (
+from .live_target import (
     DEFAULT_CONTRACT_RISK_PATH,
-    build_auto_live_provider,
-    build_shadow_provider,
-    render_shadow_result,
+    build_live_target_provider,
 )
+from .risk import AccountRiskError, ContractRiskError
 from .state import load_state
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TARGET_PATH = PROJECT_ROOT / "data" / "raw_data" / "risk_data.csv"
 DEFAULT_STATE_PATH = PROJECT_ROOT / "data" / "paper" / "agent_1" / "state.json"
-DEFAULT_SHADOW_STATE_PATH = (
+DEFAULT_LIVE_SIGNAL_STATE_PATH = (
     PROJECT_ROOT / "data" / "paper" / "agent_1" / "live_signal_state.json"
 )
 DEFAULT_STOP_PATH = PROJECT_ROOT / "data" / "paper" / "agent_1" / "STOP"
@@ -90,14 +94,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Strategy-driven IBKR paper supervisor.")
     parser.add_argument(
         "command",
-        choices=("run", "once", "status", "shadow-once", "stop-and-flatten"),
+        choices=(
+            "run",
+            "once",
+            "status",
+            "delayed-status",
+            "delayed-run",
+            "delayed-once",
+            "stop-and-flatten",
+        ),
         help="Operator command.",
     )
     parser.add_argument("--target", type=Path, default=DEFAULT_TARGET_PATH)
     parser.add_argument("--contract-risk", type=Path, default=None)
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     parser.add_argument("--run-id", default=None)
-    parser.add_argument("--shadow-config", type=Path, default=None)
     parser.add_argument(
         "--legacy-target",
         action="store_true",
@@ -153,6 +164,18 @@ def _render_status(result: Any) -> str:
     return "\n".join(lines)
 
 
+def _render_unavailable_status(reason: Exception, *, risk_code: str) -> str:
+    return "\n".join(
+        (
+            "action=hold",
+            f"target=INVALID ({reason})",
+            f"risk={risk_code}",
+            "margin_reserve_ok=False",
+            "reconciled=False",
+        )
+    )
+
+
 def _is_flat(result: Any) -> bool:
     tracked = {binding.con_id for binding in result.status.bindings.values()}
     return (
@@ -164,14 +187,17 @@ def _is_flat(result: Any) -> bool:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    delayed_execution = args.command in {"delayed-run", "delayed-once"}
+    if args.command == "delayed-status" and args.legacy_target:
+        parser.error("delayed-status requires the automatic live target path.")
+    if delayed_execution and not args.legacy_target:
+        parser.error("delayed execution requires --legacy-target.")
     config = load_config()
-    evaluator = None if args.command == "shadow-once" else _load_evaluator()
+    evaluator = _load_evaluator()
     now = datetime.now(timezone.utc)
     use_live_target = not args.legacy_target
     contract_risk_path = args.contract_risk or (
-        DEFAULT_CONTRACT_RISK_PATH
-        if use_live_target or args.command == "shadow-once"
-        else _default_contract_risk_path(now)
+        DEFAULT_CONTRACT_RISK_PATH if use_live_target else _default_contract_risk_path(now)
     )
     run_id = args.run_id or _default_run_id(now)
     decision_log_path = (
@@ -183,60 +209,48 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ib = connect_paper(config)
     try:
-        if args.command == "shadow-once":
-            shadow_dir = PROJECT_ROOT / "data" / "paper" / "agent_1" / run_id
-            if args.shadow_config is None:
-                provider = build_auto_live_provider(
-                    ib=ib,
-                    agent_config=config,
-                    audit_path=shadow_dir / "live_signals.csv",
-                    state_path=DEFAULT_SHADOW_STATE_PATH,
-                    contract_risk_path=contract_risk_path,
-                    executable=False,
-                    held_contracts=load_state(args.state).bound_contracts,
-                )
-            else:
-                provider = build_shadow_provider(
-                    ib=ib,
-                    config_path=args.shadow_config,
-                    agent_config=config,
-                    audit_path=shadow_dir / "live_signals.csv",
-                    state_path=DEFAULT_SHADOW_STATE_PATH,
-                )
-            result = provider.observe(now)
-            print(render_shadow_result(result))
-            return 0
-
+        if args.command in {"delayed-status", "delayed-run", "delayed-once"}:
+            request_delayed_market_data(ib)
         target_provider = None
         if use_live_target:
             live_dir = PROJECT_ROOT / "data" / "paper" / "agent_1" / run_id
-            target_provider = build_auto_live_provider(
+            target_provider = build_live_target_provider(
                 ib=ib,
                 agent_config=config,
                 audit_path=live_dir / "live_signals.csv",
-                state_path=DEFAULT_SHADOW_STATE_PATH,
+                state_path=DEFAULT_LIVE_SIGNAL_STATE_PATH,
                 contract_risk_path=contract_risk_path,
-                executable=True,
                 held_contracts=load_state(args.state).bound_contracts,
             )
 
         runtime_cache = RuntimeCache()
 
-        if args.command == "status":
+        if args.command in {"status", "delayed-status"}:
             state = load_state(args.state)
-            result = status_cycle(
-                ib=ib,
-                config=config,
-                target_path=args.target,
-                contract_risk_path=contract_risk_path,
-                state=state,
-                now=now,
-                evaluator=evaluator,
-                min_days_to_expiry=config.min_days_to_expiry,
-                stop_requested=_stop_requested(args.stop_file),
-                target_provider=target_provider,
-                runtime_cache=runtime_cache,
-            )
+            try:
+                result = status_cycle(
+                    ib=ib,
+                    config=config,
+                    target_path=args.target,
+                    contract_risk_path=contract_risk_path,
+                    state=state,
+                    now=now,
+                    evaluator=evaluator,
+                    min_days_to_expiry=config.min_days_to_expiry,
+                    stop_requested=_stop_requested(args.stop_file),
+                    target_provider=target_provider,
+                    runtime_cache=runtime_cache,
+                )
+            except (ContractRiskError, AccountRiskError) as exc:
+                risk_code = (
+                    "contract-risk-unavailable"
+                    if isinstance(exc, ContractRiskError)
+                    else "account-risk-unavailable"
+                )
+                print(_render_unavailable_status(exc, risk_code=risk_code))
+                return 2
+            if args.command == "delayed-status":
+                print("market_data=delayed-requested (diagnostic-only; no orders submitted)")
             print(_render_status(result))
             return 0
 
@@ -253,7 +267,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             target_provider=target_provider,
             runtime_cache=runtime_cache,
         )
-        if args.command == "once":
+        if delayed_execution:
+            print("market_data=delayed-requested (legacy target; paper execution enabled)")
+
+        if args.command in {"once", "delayed-once"}:
             result = engine.cycle(now, stop_requested=_stop_requested(args.stop_file))
             _record_audit_or_cancel(
                 ib=ib, store=store, config=config, result=result,
@@ -262,7 +279,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(_render_status(result.status))
             return 0
 
-        if args.command == "run":
+        if args.command in {"run", "delayed-run"}:
             def cycle(cycle_now: datetime) -> None:
                 result = engine.cycle(
                     cycle_now,

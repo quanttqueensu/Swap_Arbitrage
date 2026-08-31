@@ -2,14 +2,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from data_pipeline.live_data_pipeline.shadow_store import append_rows
+from data_pipeline.live_data_pipeline.live_signal_store import append_rows
 
 
-class ShadowStoreTests(unittest.TestCase):
+class LiveSignalStoreTests(unittest.TestCase):
     def test_invalid_row_is_rejected_before_creating_partial_audit(self) -> None:
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "live_signals.csv"
-            with self.assertRaisesRegex(ValueError, "unknown shadow audit fields"):
+            with self.assertRaisesRegex(ValueError, "unknown live-signal audit fields"):
                 append_rows(path, [{"unknown": "value"}])
             self.assertFalse(path.exists())
 

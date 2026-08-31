@@ -4,26 +4,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import csv
 import unittest
+from unittest.mock import Mock, patch
 
 from agents.agent_1.targets import load_daily_target
 from agents.agent_1.targets import (
     DailyCsvTargetProvider,
     LiveSignalTargetProvider,
-    ShadowLiveTargetProvider,
 )
 from agents.agent_1.targets import TargetValidationError
 
 
 NOW = datetime(2026, 8, 30, 14, 0, tzinfo=timezone.utc)
-
-
-class FakeShadowRunner:
-    def __init__(self) -> None:
-        self.calls = []
-
-    def run_once(self, now: datetime, **kwargs) -> str:
-        self.calls.append(now)
-        return "shadow-result"
 
 
 class TargetProviderTests(unittest.TestCase):
@@ -58,34 +49,32 @@ class TargetProviderTests(unittest.TestCase):
             actual = DailyCsvTargetProvider(path, 2).load_target(NOW)
             self.assertEqual(actual, expected)
 
-    def test_shadow_provider_observes_without_exposing_load_target(self) -> None:
-        runner = FakeShadowRunner()
-        provider = ShadowLiveTargetProvider(runner)
-        self.assertEqual(provider.observe(NOW), "shadow-result")
-        self.assertEqual(runner.calls, [NOW])
-        self.assertFalse(hasattr(provider, "load_target"))
-
-    def test_live_provider_refreshes_and_converts_hypothetical_target(self) -> None:
+    def test_live_provider_refreshes_and_converts_target(self) -> None:
         maturity_targets = {
             "2Y": SimpleNamespace(swap_quantity=-12, treasury_quantity=6, blocked=False, reason_codes=()),
             "5Y": SimpleNamespace(swap_quantity=8, treasury_quantity=-8, blocked=False, reason_codes=()),
         }
         cycle = SimpleNamespace(
-            hypothetical_target=SimpleNamespace(
+            target=SimpleNamespace(
                 strategy_version="live_yield_futures_v1",
                 maturities=maturity_targets,
                 blocked=False,
                 reason_codes=("within_limits",),
             )
         )
-        runner = SimpleNamespace(run_once=lambda now, **kwargs: cycle)
+        runner = SimpleNamespace(run_once=Mock(return_value=cycle))
+        risk_inputs = {"2Y": object(), "5Y": object()}
         refresher = SimpleNamespace(
-            refresh=lambda now: SimpleNamespace(risk_inputs={"2Y": object(), "5Y": object()})
+            refresh=lambda now: SimpleNamespace(risk_inputs=risk_inputs)
         )
         provider = LiveSignalTargetProvider(runner, refresher)
 
-        target = provider.load_target(NOW)
+        observed = datetime(2026, 8, 30, 14, 1, tzinfo=timezone.utc)
+        with patch("agents.agent_1.targets.datetime") as clock:
+            clock.now.return_value = observed
+            target = provider.load_target(NOW)
 
+        runner.run_once.assert_called_once_with(observed, risk_inputs=risk_inputs)
         self.assertEqual(target.target_2y.swap_qty, -12)
         self.assertEqual(target.target_2y.treasury_qty, 6)
         self.assertEqual(target.target_5y.swap_qty, 8)
@@ -103,7 +92,7 @@ class TargetProviderTests(unittest.TestCase):
             for maturity in ("2Y", "5Y")
         }
         cycle = SimpleNamespace(
-            hypothetical_target=SimpleNamespace(
+            target=SimpleNamespace(
                 strategy_version="live_yield_futures_v1",
                 maturities=maturity_targets,
                 blocked=True,

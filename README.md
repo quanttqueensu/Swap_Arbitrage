@@ -53,9 +53,8 @@ upstream signal/risk data should be rebuilt.
 ## Agent 1 paper trader
 
 Agent 1 reconciles the validated 2Y and 5Y strategy targets with an IBKR paper
-account. Copy `agents/agent_1/agent1.paper.example.json` to an untracked private
-path, replace the placeholder with the local `DU...` paper account, and point
-`AGENT1_PAPER_CONFIG` at that file. Start with the read-only status command:
+account. Set `PAPER_ACCOUNT` in `agents/agent_1/config.py` to the local
+`DU...` paper account. Start with the read-only status command:
 
 ```powershell
 python -m agents.agent_1.run status
@@ -65,9 +64,11 @@ The complete operator command set is:
 
 ```powershell
 python -m agents.agent_1.run status
+python -m agents.agent_1.run delayed-status
 python -m agents.agent_1.run once
 python -m agents.agent_1.run run
-python -m agents.agent_1.run shadow-once
+python -m agents.agent_1.run delayed-once --legacy-target
+python -m agents.agent_1.run delayed-run --legacy-target
 python -m agents.agent_1.run stop-and-flatten
 ```
 
@@ -79,6 +80,17 @@ before Agent 1 evaluates any order. Generated files are cached under
 manual maintenance. Use `--legacy-target` only to deliberately run the
 pre-generated `--target` CSV path.
 
+`delayed-status` is a read-only diagnostic for accounts without real-time
+market-data subscriptions. It requests IBKR delayed data before collecting
+quotes, never creates an execution engine, and cannot be combined with
+`--legacy-target`. It does not make `once` or `run` eligible to trade on
+delayed quotes.
+
+`delayed-once` and `delayed-run` are the paper-only delayed execution path.
+They request IBKR delayed market data and require `--legacy-target`, so they
+never generate the automatic 2YY/5YY-dependent live target. The legacy target
+and its contract-risk file still must pass the normal freshness and risk checks.
+
 Agent 1 fails closed when its target, contract risk, quotes, account state, or
 paper configuration is invalid or stale. A persistent operator stop state lives
 at `data/paper/agent_1/STOP` by default. `stop-and-flatten` creates that file
@@ -89,9 +101,3 @@ an operator has intentionally approved resuming normal paper operation. Use
 
 Offline tests do not establish TWS or IB Gateway connectivity and do not replace
 the controlled paper-account acceptance exercises in the Agent 1 design.
-
-`shadow-once` performs the automatic ERIS/IBKR refresh and live-signal
-calculation without exposing an executable target. The optional
-`--shadow-config` argument keeps the original file-backed acceptance fixture
-available for controlled tests. Follow
-[the live-signal runbook](docs/LIVE_SIGNAL_SHADOW_RUNBOOK.md).

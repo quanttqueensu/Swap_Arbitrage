@@ -7,8 +7,15 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from agents.agent_1.models import BoundContract, BrokerSnapshot, QuoteSnapshot
+from agents.agent_1.models import (
+    BoundContract,
+    BrokerSnapshot,
+    DailyTarget,
+    MaturityTarget,
+    QuoteSnapshot,
+)
 from agents.agent_1.cycle import RuntimeCache, status_cycle
 from agents.agent_1.state import AgentState
 
@@ -166,6 +173,33 @@ class CycleTests(unittest.TestCase):
         status_cycle(**kwargs)
 
         self.assertEqual(calls, [date(2026, 8, 31)])
+
+    def test_live_target_uses_post_refresh_time_for_broker_snapshot(self) -> None:
+        target = DailyTarget(
+            as_of=self.now.date(),
+            version="live",
+            age_business_days=0,
+            target_2y=MaturityTarget(2, -1),
+            target_5y=MaturityTarget(0, 0),
+        )
+        provider = SimpleNamespace(load_target=lambda now: target)
+        observed = self.now.replace(minute=1)
+        captured = {}
+
+        with patch("agents.agent_1.cycle.datetime") as clock:
+            clock.now.return_value = observed
+            status_cycle(
+                ib=FakeIB(), config=self.config, target_path=self.target_path,
+                contract_risk_path=self.contract_risk_path, state=AgentState(), now=self.now,
+                binding_resolver=lambda *args, **kwargs: self.bindings,
+                snapshot_collector=lambda *args, **kwargs: captured.update(kwargs) or self.snapshot,
+                evaluator=lambda **kwargs: SimpleNamespace(
+                    allowed=True, flatten_requested=False, reason_codes=("within_limits",),
+                ),
+                target_provider=provider,
+            )
+
+        self.assertEqual(captured["observed_at"], observed)
 
     def test_active_group_cycle_skips_normal_planning_and_margin_preview(self) -> None:
         ib = FakeIB()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -221,10 +221,6 @@ def status_cycle(
     target_provider: TargetProvider | None = None,
     runtime_cache: RuntimeCache | None = None,
 ) -> StatusCycleResult:
-    timezone_name = str(getattr(config, "timezone", "America/New_York"))
-    session_date = now.astimezone(ZoneInfo(timezone_name)).date().isoformat()
-    session_state = roll_session(state, session_date)
-
     target: DailyTarget | None
     target_error: str | None
     provider = target_provider or DailyCsvTargetProvider(
@@ -237,6 +233,14 @@ def status_cycle(
     except TargetValidationError as exc:
         target = None
         target_error = str(exc)
+
+    # A live target refresh can take long enough for subsequently received
+    # broker quotes to be newer than the cycle's original timestamp.
+    if target_provider is not None:
+        now = datetime.now(timezone.utc)
+    timezone_name = str(getattr(config, "timezone", "America/New_York"))
+    session_date = now.astimezone(ZoneInfo(timezone_name)).date().isoformat()
+    session_state = roll_session(state, session_date)
 
     as_of = target.as_of if target is not None else now.date()
     bindings = _resolve_bindings(

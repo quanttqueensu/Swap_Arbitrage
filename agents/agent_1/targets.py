@@ -4,7 +4,7 @@ import csv
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Protocol
@@ -197,19 +197,6 @@ class DailyCsvTargetProvider:
 
 
 @dataclass(frozen=True)
-class ShadowLiveTargetProvider:
-    runner: Any
-    refresher: Any | None = None
-
-    def observe(self, now: datetime) -> Any:
-        if self.refresher is None:
-            return self.runner.run_once(now)
-        refreshed = self.refresher.refresh(now)
-        _apply_refreshed_contracts(self.runner, refreshed)
-        return self.runner.run_once(now, risk_inputs=refreshed.risk_inputs)
-
-
-@dataclass(frozen=True)
 class LiveSignalTargetProvider:
     runner: Any
     refresher: Any
@@ -223,13 +210,14 @@ class LiveSignalTargetProvider:
         try:
             refreshed = self.refresher.refresh(now)
             _apply_refreshed_contracts(self.runner, refreshed)
-            result = self.runner.run_once(now, risk_inputs=refreshed.risk_inputs)
+            observed_at = datetime.now(timezone.utc)
+            result = self.runner.run_once(observed_at, risk_inputs=refreshed.risk_inputs)
         except TargetValidationError:
             raise
         except Exception as exc:
             raise TargetValidationError(f"Automatic live-data refresh failed: {exc}") from exc
 
-        target = result.hypothetical_target
+        target = result.target
         blocked = [
             maturity
             for maturity, maturity_target in target.maturities.items()
@@ -252,16 +240,16 @@ class LiveSignalTargetProvider:
         }
         payload = json.dumps(
             {
-                "date": now.date().isoformat(),
+                "date": observed_at.date().isoformat(),
                 "strategy_version": target.strategy_version,
                 "quantities": quantities,
             },
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        version = f"{now.date().isoformat()}:{hashlib.sha256(payload).hexdigest()}"
+        version = f"{observed_at.date().isoformat()}:{hashlib.sha256(payload).hexdigest()}"
         return DailyTarget(
-            as_of=now.date(),
+            as_of=observed_at.date(),
             version=version,
             age_business_days=0,
             target_2y=MaturityTarget(

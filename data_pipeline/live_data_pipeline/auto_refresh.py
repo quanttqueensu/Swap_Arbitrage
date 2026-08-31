@@ -334,7 +334,8 @@ class Agent1DataRefresher:
                 bars = list(
                     self.ib.reqHistoricalData(
                         contract,
-                        endDateTime=now.astimezone(timezone.utc),
+                        # IBKR rejects an explicit end timestamp for continuous futures.
+                        endDateTime="",
                         durationStr="2 Y",
                         barSizeSetting="1 day",
                         whatToShow="TRADES",
