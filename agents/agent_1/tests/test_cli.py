@@ -164,6 +164,7 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run.connect_paper", return_value=broker),
             patch("agents.agent_1.run.disconnect"),
             patch("agents.agent_1.run.request_delayed_market_data") as delayed,
+            patch("agents.agent_1.run._stop_requested", return_value=False),
             patch("agents.agent_1.run.build_live_target_provider") as build,
             patch("agents.agent_1.run._create_store", return_value=object()),
             patch("agents.agent_1.run.Agent1Engine", return_value=engine),
@@ -189,6 +190,7 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run.connect_paper", return_value=broker),
             patch("agents.agent_1.run.disconnect"),
             patch("agents.agent_1.run.request_delayed_market_data") as delayed,
+            patch("agents.agent_1.run._stop_requested", return_value=False),
             patch("agents.agent_1.run.build_live_target_provider") as build,
             patch("agents.agent_1.run._create_store", return_value=object()),
             patch("agents.agent_1.run.Agent1Engine", return_value=engine),
@@ -281,6 +283,27 @@ class StopStateTests(unittest.TestCase):
                     main(["stop-and-flatten", "--stop-file", str(stop_path)])
 
             self.assertTrue(stop_path.exists())
+
+    def test_stop_and_flatten_requests_delayed_quotes(self):
+        result = SimpleNamespace(status=object(), execution=object())
+        engine = SimpleNamespace(cycle=Mock(return_value=result))
+        broker = SimpleNamespace()
+        with (
+            patch("agents.agent_1.run.load_config", return_value=SimpleNamespace()),
+            patch("agents.agent_1.run._load_evaluator", return_value=object()),
+            patch("agents.agent_1.run.connect_paper", return_value=broker),
+            patch("agents.agent_1.run.disconnect"),
+            patch("agents.agent_1.run.request_delayed_market_data") as delayed,
+            patch("agents.agent_1.run.load_state", return_value=SimpleNamespace(bound_contracts={})),
+            patch("agents.agent_1.run.build_live_target_provider", return_value=object()),
+            patch("agents.agent_1.run._create_store", return_value=object()),
+            patch("agents.agent_1.run.Agent1Engine", return_value=engine),
+            patch("agents.agent_1.run._record_audit_or_cancel"),
+            patch("agents.agent_1.run._render_status", return_value="status"),
+            patch("agents.agent_1.run._is_flat", return_value=True),
+        ):
+            self.assertEqual(main(["stop-and-flatten"]), 0)
+        delayed.assert_called_once_with(broker)
 
 
 class AuditBoundaryTests(unittest.TestCase):

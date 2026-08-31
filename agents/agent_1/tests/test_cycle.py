@@ -146,6 +146,28 @@ class CycleTests(unittest.TestCase):
         self.assertEqual(result.target.target_2y.swap_qty, 2)
         self.assertEqual(len(risk_calls), 1)
 
+    def test_operator_stop_does_not_depend_on_account_pnl(self) -> None:
+        result = status_cycle(
+            ib=FakeIB(daily_pnl=float("nan")),
+            config=self.config,
+            target_path=self.target_path,
+            contract_risk_path=self.contract_risk_path,
+            state=AgentState(),
+            now=self.now,
+            binding_resolver=lambda *args, **kwargs: self.bindings,
+            snapshot_collector=lambda *args, **kwargs: self.snapshot,
+            evaluator=lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("operator stop must bypass normal risk evaluation")
+            ),
+            stop_requested=True,
+            pnl_collector=lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("operator stop must not request P&L")
+            ),
+        )
+        self.assertEqual(result.plan.action, "hold")
+        self.assertEqual(result.plan.reason_codes, ("operator_stop",))
+        self.assertEqual(result.session_pnl_usd, Decimal("0"))
+
     def test_runtime_cache_reuses_same_day_contract_bindings(self) -> None:
         ib = FakeIB()
         cache = RuntimeCache()

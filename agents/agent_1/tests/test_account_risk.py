@@ -20,6 +20,17 @@ class FakeIB:
         self.cancelled.append((account, model_code))
 
 
+class DelayedPnlIB(FakeIB):
+    def reqPnL(self, account, model_code):
+        self.request = (account, model_code)
+        self.pnl = SimpleNamespace(dailyPnL=float("nan"))
+        return self.pnl
+
+    def sleep(self, seconds):
+        self.slept = seconds
+        self.pnl.dailyPnL = "42.25"
+
+
 class AccountRiskTests(unittest.TestCase):
     def test_collects_finite_ibkr_daily_pnl_and_cancels_subscription(self):
         ib = FakeIB("125.50")
@@ -33,6 +44,10 @@ class AccountRiskTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(AccountRiskError):
                     collect_session_pnl(FakeIB(value), "DU123")
+
+    def test_waits_for_asynchronous_daily_pnl_update(self):
+        pnl = collect_session_pnl(DelayedPnlIB(None), "DU123", wait_seconds=0.5)
+        self.assertEqual(pnl, Decimal("42.25"))
 
     def test_drawdown_tracks_session_high_water_mark(self):
         first = update_drawdown(Decimal("0"), Decimal("100"))

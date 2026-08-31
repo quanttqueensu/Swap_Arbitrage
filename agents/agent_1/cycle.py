@@ -14,6 +14,7 @@ from .orders import build_ib_limit_order
 from .planner import CyclePlan, plan_cycle
 from .risk import (
     ContractRisk,
+    DrawdownState,
     calculate_portfolio_dv01,
     collect_session_pnl,
     load_contract_risks,
@@ -266,8 +267,18 @@ def status_cycle(
         bindings=bindings,
         cache=runtime_cache,
     )
-    session_pnl_usd = pnl_collector(ib, getattr(config, "account"))
-    drawdown_state = update_drawdown(session_state.session_peak_pnl_usd, session_pnl_usd)
+    if stop_requested:
+        # Flattening reduces risk and must not depend on an asynchronous P&L field.
+        session_pnl_usd = Decimal("0")
+        drawdown_state = DrawdownState(
+            peak_pnl_usd=session_state.session_peak_pnl_usd,
+            drawdown_usd=Decimal("0"),
+        )
+    else:
+        session_pnl_usd = pnl_collector(ib, getattr(config, "account"))
+        drawdown_state = update_drawdown(
+            session_state.session_peak_pnl_usd, session_pnl_usd
+        )
 
     # An existing order group owns the maturity until lifecycle resolution.
     # Normal target planning would be discarded by service.once_cycle anyway,

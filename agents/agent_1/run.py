@@ -197,7 +197,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ib = connect_paper(config)
     try:
-        if args.command in {"delayed-status", "delayed-run", "delayed-once"}:
+        if args.command in {
+            "delayed-status",
+            "delayed-run",
+            "delayed-once",
+            "stop-and-flatten",
+        }:
             request_delayed_market_data(ib)
         target_provider = None
         if use_live_target:

@@ -34,7 +34,7 @@ def collect_session_pnl(
     ib: Any,
     account_id: str,
     *,
-    wait_seconds: float = 0.25,
+    wait_seconds: float = 5.0,
 ) -> Decimal:
     if not str(account_id).upper().startswith("DU"):
         raise AccountRiskError("Session P&L requires a DU paper account.")
@@ -42,8 +42,19 @@ def collect_session_pnl(
     try:
         pnl = ib.reqPnL(account_id, "")
         subscribed = True
-        ib.sleep(wait_seconds)
-        return _finite_decimal(getattr(pnl, "dailyPnL", None), "IBKR daily P&L")
+        remaining = wait_seconds
+        while True:
+            delay = min(0.25, remaining)
+            if delay > 0:
+                ib.sleep(delay)
+                remaining -= delay
+            try:
+                return _finite_decimal(
+                    getattr(pnl, "dailyPnL", None), "IBKR daily P&L"
+                )
+            except AccountRiskError:
+                if remaining <= 0:
+                    raise
     except AccountRiskError:
         raise
     except Exception as exc:
