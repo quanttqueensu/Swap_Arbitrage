@@ -106,13 +106,15 @@ def load_daily_observation(
 
     row = eligible.iloc[-1]
     try:
+        eris_rate_bps = Decimal(str(row["eris_rate_bps"]))
+        treasury_rate_bps = Decimal(str(row["treasury_rate_bps"]))
         return DailySpreadObservation(
             maturity=maturity,
             observed_at=row["timestamp_utc"].to_pydatetime(),
-            eris_rate_bps=Decimal(str(row["eris_rate_bps"])),
+            eris_rate_bps=eris_rate_bps,
             fred_series=str(row["fred_series"]),
-            treasury_rate_bps=Decimal(str(row["treasury_rate_bps"])),
-            spread_bps=Decimal(str(row["spread_bps"])),
+            treasury_rate_bps=treasury_rate_bps,
+            spread_bps=eris_rate_bps - treasury_rate_bps,
         )
     except Exception as exc:
         raise RuntimeError(f"invalid daily observation for {maturity}") from exc

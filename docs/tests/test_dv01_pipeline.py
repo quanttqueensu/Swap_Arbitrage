@@ -15,6 +15,7 @@ from data_pipeline.historical_data.historical_data_builder import (
     build_treasury_futures_data,
     equivalent_par_sofr_swap_rate_bps,
     extract_eris_swap_row,
+    fetch_eris_settlement_text,
     parse_yahoo_chart,
     strategy_swap_prices,
     strategy_treasury_futures_prices,
@@ -43,6 +44,36 @@ def sample_selected_swaps() -> pd.DataFrame:
             "eris_swap_5y_dv01": [46.0, 46.1],
         }
     )
+
+
+class ErisCacheTests(unittest.TestCase):
+    def test_historical_missing_dates_are_not_requested_again(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            date = pd.Timestamp("2020-12-25")
+            with patch(
+                "data_pipeline.historical_data.historical_data_builder.CACHE_DIR",
+                Path(directory),
+            ), patch(
+                "data_pipeline.historical_data.historical_data_builder.eris_settlement_url_candidates",
+                return_value=[],
+            ):
+                self.assertIsNone(fetch_eris_settlement_text(date))
+
+            marker = (
+                Path(directory)
+                / "eris_sofr_settlements_v3"
+                / "Eris_Instruments_20201225_Settles.missing"
+            )
+            self.assertTrue(marker.exists())
+
+            with patch(
+                "data_pipeline.historical_data.historical_data_builder.CACHE_DIR",
+                Path(directory),
+            ), patch(
+                "data_pipeline.historical_data.historical_data_builder.eris_settlement_url_candidates",
+                side_effect=AssertionError("negative cache should skip the network"),
+            ):
+                self.assertIsNone(fetch_eris_settlement_text(date))
 
 
 def sample_treasury_prices() -> pd.DataFrame:
@@ -125,8 +156,17 @@ class DerivedCsvTests(unittest.TestCase):
 
 
 class SignalCalendarTests(unittest.TestCase):
+    @staticmethod
+    def curve_inputs(source: pd.DataFrame) -> pd.DataFrame:
+        output = source.copy()
+        output["dgs3"] = output["dgs2"]
+        output["dgs7"] = output["dgs5"]
+        output["eris_swap_2y_maturity_date"] = output["date"] + pd.to_timedelta(731, unit="D")
+        output["eris_swap_5y_maturity_date"] = output["date"] + pd.to_timedelta(1827, unit="D")
+        return output
+
     def test_daily_signal_does_not_require_treasury_futures_marks(self) -> None:
-        source = pd.DataFrame(
+        source = self.curve_inputs(pd.DataFrame(
             {
                 "date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
                 "eris_swap_2y_price": [100.0, 100.1, 100.2],
@@ -138,7 +178,7 @@ class SignalCalendarTests(unittest.TestCase):
                 "dgs2": [4.0, 4.0, 4.0],
                 "dgs5": [4.1, 4.1, 4.1],
             }
-        )
+        ))
 
         output = build_signal_columns(source)
 
@@ -154,7 +194,7 @@ class SignalCalendarTests(unittest.TestCase):
     # Mutation caught: routing active positions through Treasury-futures price
     # residuals rather than the equivalent-par-rate Treasury spread.
     def test_rate_spreads_are_the_active_proxy_signal_source(self) -> None:
-        source = pd.DataFrame(
+        source = self.curve_inputs(pd.DataFrame(
             {
                 "date": pd.date_range("2024-01-02", periods=4, freq="B"),
                 "eris_swap_2y_price": [100.0, 101.0, 102.0, 90.0],
@@ -166,7 +206,7 @@ class SignalCalendarTests(unittest.TestCase):
                 "dgs2": [4.0, 4.0, 4.0, 4.0],
                 "dgs5": [3.0, 3.0, 3.0, 3.0],
             }
-        )
+        ))
 
         with (
             patch.object(signal_pipeline, "ROLLING_WINDOW", 3),
@@ -190,7 +230,7 @@ class SignalCalendarTests(unittest.TestCase):
     # Mutation caught: substituting the former price residual when a rate input
     # is unavailable instead of resetting the rate-spread position flat.
     def test_missing_equivalent_par_rate_fails_closed_per_maturity(self) -> None:
-        source = pd.DataFrame(
+        source = self.curve_inputs(pd.DataFrame(
             {
                 "date": pd.date_range("2024-01-02", periods=4, freq="B"),
                 "eris_swap_2y_price": [100.0, 101.0, 102.0, 103.0],
@@ -202,7 +242,7 @@ class SignalCalendarTests(unittest.TestCase):
                 "dgs2": [4.0, 4.0, 4.0, 4.0],
                 "dgs5": [3.0, 3.0, 3.0, 3.0],
             }
-        )
+        ))
 
         with (
             patch.object(signal_pipeline, "ROLLING_WINDOW", 3),
@@ -224,8 +264,8 @@ class ErisEquivalentParRateTests(unittest.TestCase):
 
         self.assertIn("equivalent_par_rate_bps", text)
         self.assertIn("swap_spread_bps", text)
-        self.assertIn("DGS2/DGS5", text)
-        self.assertIn("not CTD", text)
+        self.assertIn("maturity-matched Treasury CMT curve", text)
+        self.assertIn("not a CTD", text)
         self.assertIn("coupon P&L is not added separately", text)
 
     def test_equivalent_par_rate_uses_documented_units_and_sign(self) -> None:

@@ -263,7 +263,7 @@ def status_cycle(
     recovery = reconcile_recovery_state(session_state, snapshot, bindings)
     risks = _load_risks(
         contract_risk_path,
-        as_of=as_of,
+        as_of=now.date() if target_provider is not None else as_of,
         bindings=bindings,
         cache=runtime_cache,
     )

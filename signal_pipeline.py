@@ -24,6 +24,7 @@ from data_pipeline.historical_data.historical_data_builder import (
     clean_price_frame,
     load_csv,
 )
+from data_pipeline.live_data_pipeline.market_snapshot import publish_market_snapshot
 from signals.yield_curve_signal import matched_treasury_yield_bps
 
 MIN_PERIODS = ROLLING_WINDOW
@@ -309,6 +310,13 @@ def build_signal_data(
     if save:
         output = save_derived_csv(output, SIGNAL_DATA_FILE)
         print(f"[SAVED] {SIGNAL_DATA_FILE}")
+        if pull_interest_rates:
+            try:
+                paths = publish_market_snapshot(raw, output)
+                print("[SNAPSHOT] " + ", ".join(str(path) for path in paths))
+            except Exception as exc:
+                # Monitoring output must never make the trading target unavailable.
+                print(f"[WARN] Could not publish current market graphs: {exc}")
 
     print(f"[SIGNAL DATA] rows={len(output):,} range={output['date'].min().date()} to {output['date'].max().date()}")
     return output

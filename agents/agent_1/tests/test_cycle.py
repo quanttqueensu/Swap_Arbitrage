@@ -196,9 +196,9 @@ class CycleTests(unittest.TestCase):
 
         self.assertEqual(calls, [date(2026, 8, 31)])
 
-    def test_live_target_uses_post_refresh_time_for_broker_snapshot(self) -> None:
+    def test_live_target_uses_execution_time_for_snapshot_and_contract_risk(self) -> None:
         target = DailyTarget(
-            as_of=self.now.date(),
+            as_of=date(2026, 8, 28),
             version="live",
             age_business_days=0,
             target_2y=MaturityTarget(2, -1),
@@ -210,7 +210,7 @@ class CycleTests(unittest.TestCase):
 
         with patch("agents.agent_1.cycle.datetime") as clock:
             clock.now.return_value = observed
-            status_cycle(
+            result = status_cycle(
                 ib=FakeIB(), config=self.config, target_path=self.target_path,
                 contract_risk_path=self.contract_risk_path, state=AgentState(), now=self.now,
                 binding_resolver=lambda *args, **kwargs: self.bindings,
@@ -222,6 +222,9 @@ class CycleTests(unittest.TestCase):
             )
 
         self.assertEqual(captured["observed_at"], observed)
+        self.assertTrue(
+            all(risk.observation_date == self.now.date() for risk in result.risks.values())
+        )
 
     def test_active_group_cycle_skips_normal_planning_and_margin_preview(self) -> None:
         ib = FakeIB()

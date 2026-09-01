@@ -293,11 +293,11 @@ MAX_DV01_SCALE = 1.00
 # False preserves the existing fixed 2Y/5Y Treasury CMT signal. When True,
 # signal_pipeline maturity-matches each Eris equivalent par rate against the
 # interpolated Treasury CMT curve.
-YIELD_CURVE_CONSTRUCTION_SIGNAL = False
+YIELD_CURVE_CONSTRUCTION_SIGNAL = True
 
 Z_ENTRY = 1.5
 Z_EXIT = 0.5
-ROLLING_WINDOW = 252
+ROLLING_WINDOW = 22
 
 
 # ============================================================

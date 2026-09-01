@@ -40,6 +40,80 @@ def _default_contract_risk_path(now: datetime) -> Path:
     return PROJECT_ROOT / "data" / "contract_risk" / f"contract_risk_{now.year}.csv"
 
 
+def _refresh_delayed_contract_risk(
+    now: datetime | None = None,
+    *,
+    swap_path: Path | None = None,
+    treasury_path: Path | None = None,
+    output_path: Path | None = None,
+    eris_reference: Any | None = None,
+) -> Path:
+    import pandas as pd
+
+    from config import CME_SWAP_DATA_FILE, TREASURY_FUTURES_DATA_FILE
+    from data_pipeline.historical_data.canonicalize import canonicalize_futures
+    from data_pipeline.historical_data.historical_data_builder import (
+        read_eris_settlement_file,
+    )
+    from data_pipeline.live_data_pipeline.auto_refresh import _atomic_csv
+
+    observed_at = now or datetime.now(timezone.utc)
+    if observed_at.utcoffset() is None:
+        raise ValueError("Contract-risk refresh time must include a timezone.")
+    year = observed_at.astimezone(timezone.utc).year
+    result = canonicalize_futures(
+        swap_path or CME_SWAP_DATA_FILE,
+        treasury_path or TREASURY_FUTURES_DATA_FILE,
+    )
+    rows = result.risk_by_year.get(year)
+    if not rows:
+        raise RuntimeError(f"No canonical contract-risk rows were available for {year}.")
+
+    swap_source = pd.read_csv(swap_path or CME_SWAP_DATA_FILE, usecols=["date"])
+    reference_date = pd.to_datetime(swap_source["date"], errors="coerce").max()
+    if pd.isna(reference_date):
+        raise RuntimeError("No dated Eris settlement rows were available for contract risk.")
+    reference = (
+        eris_reference
+        if eris_reference is not None
+        else read_eris_settlement_file(reference_date)
+    )
+    required = {"ExchangeSymbol (EX005)", "EffectiveYearMonth", "DV01"}
+    if reference.empty or not required.issubset(reference.columns):
+        raise RuntimeError("The current Eris settlement cache cannot build contract risk.")
+    current = reference[reference["ExchangeSymbol (EX005)"].isin(("YIT", "YIW"))].copy()
+    current["vintage"] = (
+        current["EffectiveYearMonth"].astype(str).str.replace(".0", "", regex=False)
+    )
+    current["dv01"] = pd.to_numeric(current["DV01"], errors="coerce")
+    current = current[current["vintage"].str.fullmatch(r"\d{6}") & current["dv01"].gt(0)]
+    if current.empty or current.duplicated(["ExchangeSymbol (EX005)", "vintage"]).any():
+        raise RuntimeError("The current Eris settlement cache has invalid contract risk.")
+    rows.extend(
+        {
+            "observation_date": reference_date.date().isoformat(),
+            "instrument_id": f"ERIS-{row['ExchangeSymbol (EX005)']}-{row['vintage']}",
+            "dv01_usd_per_bp": str(row["dv01"]),
+            "rate_sensitivity_sign": "-1",
+            "dv01_method": "eris_settlement_dv01",
+        }
+        for _, row in current.iterrows()
+    )
+    rows = list(
+        {
+            (row["observation_date"], row["instrument_id"]): row
+            for row in rows
+        }.values()
+    )
+    destination = output_path or _default_contract_risk_path(observed_at)
+    _atomic_csv(
+        pd.DataFrame(rows).sort_values(["observation_date", "instrument_id"]),
+        destination,
+    )
+    print(f"[RISK] Refreshed {destination}")
+    return destination
+
+
 def _load_evaluator() -> Any:
     try:
         from strategy.risk_signals import evaluate_risk
@@ -73,6 +147,7 @@ def _refresh_delayed_target(target_path: Path) -> None:
         pull_eris=True,
         save=True,
     )
+    _refresh_delayed_contract_risk()
 
 
 def _record_audit_or_cancel(

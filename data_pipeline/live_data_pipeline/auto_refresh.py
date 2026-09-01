@@ -80,13 +80,13 @@ def _atomic_csv(frame: pd.DataFrame, path: Path) -> None:
 def _download_csv(url: str, *, timeout_seconds: int = 30) -> pd.DataFrame:
     request = Request(
         url,
-        headers={"User-Agent": "Swap-Arb-Agent1/1.0", "Accept": "text/csv,*/*"},
+        headers={"User-Agent": "Swap-Arb-Agent1/1.0"},
     )
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             text = response.read().decode("utf-8", errors="replace")
     except (HTTPError, URLError, TimeoutError) as exc:
-        raise AutoRefreshError(f"Could not download CSV data: {url}") from exc
+        raise AutoRefreshError(f"Could not download CSV data: {url}: {exc}") from exc
     try:
         return pd.read_csv(StringIO(text))
     except Exception as exc:
@@ -262,16 +262,18 @@ def build_baseline_frame(
                 f"Only {len(merged)} aligned historical observations for {maturity}"
             )
         timestamp = merged["date"].dt.tz_localize("UTC") + pd.Timedelta(hours=21)
+        eris_rate_bps = merged["eris_rate_bps"].round(10)
+        treasury_rate_bps = (merged["yield_percent"] * 100).round(10)
         rows.append(
             pd.DataFrame(
                 {
                     "timestamp_utc": timestamp.map(lambda value: value.isoformat()),
                     "maturity": maturity,
                     "strategy_version": LIVE_SIGNAL_STRATEGY_VERSION,
-                    "eris_rate_bps": merged["eris_rate_bps"],
+                    "eris_rate_bps": eris_rate_bps,
                     "fred_series": MATURITY_FRED_SERIES[maturity],
-                    "treasury_rate_bps": merged["yield_percent"] * 100,
-                    "spread_bps": merged["eris_rate_bps"] - merged["yield_percent"] * 100,
+                    "treasury_rate_bps": treasury_rate_bps,
+                    "spread_bps": (eris_rate_bps - treasury_rate_bps).round(10),
                 }
             )
         )

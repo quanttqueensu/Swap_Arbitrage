@@ -90,6 +90,12 @@ target from current Treasury/Eris inputs before connecting to IBKR. An explicit
 `--target` path remains caller-managed. The target and its contract-risk file
 still must pass the normal freshness and risk checks.
 
+Each delayed target refresh also atomically replaces the current monitoring
+artifacts under `data/live_signal/`: `current_yield_curve.{json,png}` and
+`current_spreads.{json,png}`. The curve uses every available Treasury CMT node;
+the spread chart shows Eris equivalent rates minus maturity-matched interpolated
+Treasury yields, plus rolling z-scores and the configured entry/exit thresholds.
+
 Agent 1 fails closed when its target, contract risk, quotes, account state, or
 paper configuration is invalid or stale. A persistent operator stop state lives
 at `data/paper/agent_1/STOP` by default. `stop-and-flatten` creates that file

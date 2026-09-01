@@ -175,7 +175,6 @@ def get_fred_cmt_series(
     text = fetch_text(
         url=url,
         cache_file=CACHE_DIR / f"fred_{series_id.lower()}_{start_date}_{end_date}.csv",
-        accept="text/csv,*/*",
     )
     return parse_fred_series(pd.read_csv(StringIO(text)), series_id, output_col)
 
@@ -349,9 +348,12 @@ def fetch_eris_settlement_text(date: pd.Timestamp) -> str | None:
     cache_dir = CACHE_DIR / "eris_sofr_settlements_v3"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / f"Eris_Instruments_{ymd}_Settles.csv"
+    missing_file = cache_file.with_suffix(".missing")
 
     if cache_file.exists():
         return cache_file.read_text(encoding="utf-8")
+    if missing_file.exists() and date < pd.Timestamp.today().normalize() - pd.Timedelta(days=7):
+        return None
 
     last_error = None
 
@@ -363,6 +365,7 @@ def fetch_eris_settlement_text(date: pd.Timestamp) -> str | None:
                 text = response.read().decode("utf-8", errors="replace")
 
             cache_file.write_text(text, encoding="utf-8")
+            missing_file.unlink(missing_ok=True)
             return text
 
         except HTTPError as error:
@@ -376,6 +379,8 @@ def fetch_eris_settlement_text(date: pd.Timestamp) -> str | None:
 
     if last_error and not isinstance(last_error, HTTPError):
         print(f"[WARN] Eris settlement fetch failed for {ymd}: {last_error}")
+
+    missing_file.touch(exist_ok=True)
 
     return None
 
@@ -554,7 +559,10 @@ def get_eris_public_swap_data(start_date: str, end_date: str | None = None) -> p
     misses = 0
     active_contracts: dict[str, str] = {}
 
-    print(f"[PULL] Eris public SOFR swap settlements {start_ts.date()} to {end_ts.date()}...")
+    print(
+        f"[LOAD] Eris public SOFR swap settlements {start_ts.date()} to {end_ts.date()} "
+        "(saved daily cache first)..."
+    )
 
     for index, date in enumerate(dates, start=1):
         row = extract_eris_swap_row(read_eris_settlement_file(date), date, active_contracts=active_contracts)
@@ -565,7 +573,7 @@ def get_eris_public_swap_data(start_date: str, end_date: str | None = None) -> p
             misses += 1
 
         if index % 100 == 0:
-            print(f"[PULL] Eris settlements checked {index:,}/{len(dates):,} dates...")
+            print(f"[LOAD] Eris settlement cache checked {index:,}/{len(dates):,} dates...")
 
     if not rows:
         raise RuntimeError("No Eris public SOFR swap futures data loaded.")

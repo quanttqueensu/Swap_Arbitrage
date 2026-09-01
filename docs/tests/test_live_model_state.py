@@ -106,6 +106,25 @@ class LiveModelStateTests(unittest.TestCase):
             self.assertEqual(row.spread_bps, Decimal("16.5"))
             self.assertEqual(row.fred_series, "DGS2")
 
+    def test_daily_observation_recomputes_serialized_float_spread(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "baseline.csv"
+            pd.DataFrame(
+                [{
+                    "timestamp_utc": "2026-08-27T21:00:00+00:00",
+                    "maturity": "2Y",
+                    "strategy_version": LIVE_SIGNAL_STRATEGY_VERSION,
+                    "eris_rate_bps": "415.6703375828",
+                    "fred_series": "DGS2",
+                    "treasury_rate_bps": "420.0",
+                    "spread_bps": "-4.329662417199984",
+                }]
+            ).to_csv(path, index=False)
+            row = load_daily_observation(
+                path, "2Y", datetime(2026, 8, 28, tzinfo=timezone.utc)
+            )
+            self.assertEqual(row.spread_bps, Decimal("-4.3296624172"))
+
     def test_signal_state_round_trip_is_atomic_and_exact(self) -> None:
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "signal_state.json"

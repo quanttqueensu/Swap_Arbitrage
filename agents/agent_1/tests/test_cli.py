@@ -166,7 +166,8 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run.request_delayed_market_data") as delayed,
             patch("agents.agent_1.run._refresh_delayed_target") as refresh,
             patch("agents.agent_1.run._stop_requested", return_value=False),
-            patch("agents.agent_1.run.build_live_target_provider") as build,
+            patch("agents.agent_1.run.load_state", return_value=SimpleNamespace(bound_contracts={})),
+            patch("agents.agent_1.run.build_live_target_provider", return_value=object()) as build,
             patch("agents.agent_1.run._create_store", return_value=object()),
             patch("agents.agent_1.run.Agent1Engine", return_value=engine),
             patch("agents.agent_1.run._record_audit_or_cancel"),
@@ -194,7 +195,8 @@ class LiveRunSelectionTests(unittest.TestCase):
             patch("agents.agent_1.run.request_delayed_market_data") as delayed,
             patch("agents.agent_1.run._refresh_delayed_target") as refresh,
             patch("agents.agent_1.run._stop_requested", return_value=False),
-            patch("agents.agent_1.run.build_live_target_provider") as build,
+            patch("agents.agent_1.run.load_state", return_value=SimpleNamespace(bound_contracts={})),
+            patch("agents.agent_1.run.build_live_target_provider", return_value=object()) as build,
             patch("agents.agent_1.run._create_store", return_value=object()),
             patch("agents.agent_1.run.Agent1Engine", return_value=engine),
             patch("agents.agent_1.run._record_audit_or_cancel"),
@@ -212,7 +214,10 @@ class LiveRunSelectionTests(unittest.TestCase):
         from pathlib import Path
         from agents.agent_1.run import DEFAULT_TARGET_PATH, _refresh_delayed_target
 
-        with patch("risk_pipeline.build_risk_data") as build:
+        with (
+            patch("risk_pipeline.build_risk_data") as build,
+            patch("agents.agent_1.run._refresh_delayed_contract_risk") as refresh_risk,
+        ):
             _refresh_delayed_target(DEFAULT_TARGET_PATH)
             _refresh_delayed_target(Path("custom-target.csv"))
 
@@ -222,6 +227,51 @@ class LiveRunSelectionTests(unittest.TestCase):
             pull_eris=True,
             save=True,
         )
+        refresh_risk.assert_called_once_with()
+
+    def test_delayed_contract_risk_refresh_includes_new_contract_vintages(self):
+        import csv
+        from datetime import datetime, timezone
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        import pandas as pd
+
+        from agents.agent_1.run import _refresh_delayed_contract_risk
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            swap = root / "cme_swap_data.csv"
+            treasury = root / "treasury_futures_data.csv"
+            output = root / "contract_risk_2026.csv"
+            for path, rows in (
+                (swap, [["2026-08-31", "YITZ26", "99.5", "18.8"]]),
+                (treasury, [["2026-08-31", "ZT=F", "102.7", "37.6"]]),
+            ):
+                with path.open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(["date", "ticker", "price", "dv01"])
+                    writer.writerows(rows)
+
+            _refresh_delayed_contract_risk(
+                datetime(2026, 9, 1, tzinfo=timezone.utc),
+                swap_path=swap,
+                treasury_path=treasury,
+                output_path=output,
+                eris_reference=pd.DataFrame(
+                    {
+                        "ExchangeSymbol (EX005)": ["YIT", "YIW"],
+                        "EffectiveYearMonth": [202606, 202606],
+                        "DV01": [17.0, 42.0],
+                    }
+                ),
+            )
+
+            text = output.read_text(encoding="utf-8")
+            self.assertIn("ERIS-YIT-202606", text)
+            self.assertIn("ERIS-YIW-202606", text)
+            self.assertIn("ERIS-YIT-202612", text)
+            self.assertIn("YAHOO-CONTINUOUS-ZT", text)
 
     def test_delayed_target_refresh_failure_prevents_broker_connection(self):
         with (

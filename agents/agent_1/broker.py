@@ -109,7 +109,7 @@ class BrokerError(RuntimeError):
 
 
 def request_delayed_market_data(ib: Any) -> None:
-    """Request IBKR's delayed-data fallback for a diagnostic-only session."""
+    """Request IBKR's delayed-data fallback for this paper session."""
     try:
         ib.reqMarketDataType(DELAYED_MARKET_DATA_TYPE)
     except Exception as exc:

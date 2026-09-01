@@ -163,7 +163,7 @@ controls apply in both backtests and paper trading.
 
 | Provider | Data | Project function |
 | --- | --- | --- |
-| FRED | Daily `DGS2`/`DGS5` constant-maturity Treasury yields | `get_treasury_data()` |
+| U.S. Treasury | Daily constant-maturity par-yield curve | `get_treasury_data()` |
 | New York Fed SOFR API | SOFR history | `get_nyfed_rate("SOFR", ...)` |
 | New York Fed EFFR API | EFFR history | `get_nyfed_rate("EFFR", ...)` |
 | Eris Markets public archive | Swap-futures settlements, tickers, and published DV01 | `get_eris_public_swap_data()` |
@@ -194,8 +194,10 @@ These feed `eris_swap_2y_fixed_coupon_pct` and
 `eris_swap_5y_fixed_coupon_pct`; the corresponding `_b_usd`, `_c_usd`,
 `_pv01_usd_per_bp`, `_effective_date`, `_maturity_date`, and `_last_trade_date`
 fields; and `eris_swap_2y_equivalent_par_rate_bps` and
-`eris_swap_5y_equivalent_par_rate_bps`. On the same date, DGS2/DGS5 provide
-the Treasury-rate inputs.
+`eris_swap_5y_equivalent_par_rate_bps`. On the same date, the maturity-matched
+Treasury CMT curve provides a linearly interpolated par yield at each Eris
+contract's remaining years to maturity. The signal never extrapolates beyond
+the available curve.
 
 With price in exchange points, B and C in USD, PV01 in USD per bp, and coupon
 in percent, the conversion is:
@@ -205,16 +207,16 @@ A_usd = (FinalSettlementPrice - 100 - B + C) * 1000
 equivalent_par_rate_pct = Coupon (%) - (A_usd / PV01) / 100
 eris_swap_2y_equivalent_par_rate_bps = equivalent_par_rate_pct * 100
 eris_swap_5y_equivalent_par_rate_bps = equivalent_par_rate_pct * 100
-treasury_rate_proxy_bps_2y = DGS2 * 100
-treasury_rate_proxy_bps_5y = DGS5 * 100
+treasury_rate_proxy_bps_2y = interpolated_CMT(eris_2y_maturity_date) * 100
+treasury_rate_proxy_bps_5y = interpolated_CMT(eris_5y_maturity_date) * 100
 swap_spread_bps_2y = eris_swap_2y_equivalent_par_rate_bps - treasury_rate_proxy_bps_2y
 swap_spread_bps_5y = eris_swap_5y_equivalent_par_rate_bps - treasury_rate_proxy_bps_5y
 ```
 
 The rolling z-score of each `swap_spread_bps_*` drives entry and exit; price
-residuals remain diagnostics. DGS2/DGS5 are Treasury constant-maturity rate
-proxies, not CTD-implied yields and not forward-start/IMM-aligned Treasury
-rates.
+residuals remain diagnostics. The maturity-matched Treasury CMT curve is a par
+yield proxy, not a CTD-implied yield or a forward-start/IMM-aligned Treasury
+rate.
 
 Intentionally deferred:
 
@@ -355,6 +357,7 @@ tests cover these sign rules.
 | NumPy | 2.3.5 |
 | pandas | 3.0.1 |
 | `ib_insync` | 0.9.86 |
+| Matplotlib | 3.11.1 |
 | Canonical schema version | 1.0.0 |
 | Strategy equation version | `p10.strategy-equations.v1` |
 | Position-sizing/risk version | `p33.position-sizing-risk.v1` |
